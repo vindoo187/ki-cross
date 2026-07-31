@@ -1,0 +1,22 @@
+name: ki-cross
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_password
+      POSTGRES_DB: ki_cross
+    ports:
+      - "5432:5432"
+    volumes:
+      - ki-cross-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_user -d ki_cross"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ki-cross-db-data:
