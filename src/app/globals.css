@@ -1,0 +1,28 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+body {
+  margin: 0;
+  background: #f5f6f8;
+  color: #1a1a1a;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th,
+td {
+  border: 1px solid #d9dbe0;
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 14px;
+}
+th {
+  background: #eceef2;
+}
+code {
+  background: #eceef2;
+  padding: 1px 4px;
+  border-radius: 3px;
+}

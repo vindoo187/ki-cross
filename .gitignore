@@ -1,0 +1,27 @@
+node_modules
+.next
+dist
+.env
+.env.local
+*.log
+.DS_Store
+src/generated
+coverage
+*.tsbuildinfo
+
+# Funktionslose Altlasten, die aufgrund einer Sandbox-Dateisystemrestriktion
+# ("Operation not permitted") nicht gelöscht werden konnten (siehe
+# docs/ABSCHLUSSBERICHT_PHASE2.md Abschnitt 12). Kein Anwendungscode
+# referenziert sie; sie werden hier lediglich vom Commit ausgeschlossen.
+_tmp_20_be2baffc037932ce7dd80d17bf22a85a
+_tmp_20_e69110ec3545a176303bbf82f9937574
+src/newdir/
+scripts/_test_ext.mjs
+scripts/_test_ext2.mjs
+scripts/_test_trigger.mjs
+
+# Zwischenartefakt von scripts/schema_to_sql.py (regenerierbar, veraltet
+# gegenueber der massgeblichen, manuell um Phase-2B-Constraints ergaenzten
+# Migration). Massgeblich ist ausschliesslich
+# prisma/migrations/20260731000000_init/migration.sql.
+prisma/migration_generated.sql

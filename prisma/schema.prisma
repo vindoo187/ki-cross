@@ -1,0 +1,1385 @@
+// Prisma-Schema: zentrales Datenmodell "KI-Verkaufsassistent" (Phase 2).
+//
+// Geltende Modellierungsregeln (siehe docs/DATA_MODEL.md und docs/DECISION_LOG.md):
+// 1. Historisch relevante Datensaetze werden durch spaetere Stammdatenaenderungen
+//    NICHT veraendert: Tarif-/Produkt-/Kosten-/Provisions-/Kampagnen-/Fragebogen-/
+//    Regelversionen sind eigene, unveraenderliche Versions-Zeilen mit validFrom/validTo.
+// 2. Geldbetraege werden NIE als Float gespeichert, sondern als Int (kleinste
+//    Waehrungseinheit, z. B. Cent) plus explizitem ISO-4217 Waehrungscode.
+//    Begruendung siehe docs/DECISION_LOG.md (Entscheidung "Geldbetraege").
+// 3. Alle Zeitstempel werden in UTC gespeichert (Timestamptz). Darstellung in
+//    Europe/Berlin erfolgt ausschliesslich in der Praesentationsschicht.
+// 4. IDs sind UUIDv4 (nicht erratbar, keine fortlaufenden Integer-IDs).
+// 5. Fuer den Kernbereich Tenant -> Company -> Store -> Employee -> Session -> Deal
+//    werden zusammengesetzte, mandantengebundene Fremdschluessel verwendet
+//    (fields: [tenantId, xId], references: [tenantId, id]), damit ein Datensatz
+//    NIE auf ein Parent-Objekt eines anderen Mandanten verweisen kann. Fuer
+//    weiter entfernte/optionale Relationen genuegt laut Entscheidung eine
+//    einfache tenantId-Spalte plus serverseitige Tenant-Scoping-Pruefung
+//    (siehe src/server/tenant) und Isolationstests. Diese Abwaegung ist in
+//    docs/DECISION_LOG.md dokumentiert.
+// 6. Auf historischen, finanziellen und Audit-Daten werden KEINE Cascade Deletes
+//    verwendet (onDelete: Restrict).
+// 7. Unstrukturiertes JSON wird nur dort verwendet, wo Flexibilitaet fachlich
+//    notwendig ist, nie als Ersatz fuer zentrale relationale Geschaeftsobjekte.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum VersionStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  ARCHIVED
+}
+
+enum EmploymentStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+enum RoleScopeType {
+  TENANT
+  COMPANY
+  STORE
+}
+
+enum ProductType {
+  MOBILE_NEW_CONTRACT
+  MOBILE_RENEWAL
+  MOBILE_SIM_ONLY
+  MOBILE_WITH_DEVICE
+  DSL
+  FIBER
+  PARTNER_CARD
+  FAMILY
+  YOUNG
+  STREAMING
+  DEVICE_PROTECTION
+  ACCESSORY
+  OTHER
+}
+
+enum CommissionType {
+  FLAT
+  PERCENTAGE
+  TIERED
+}
+
+enum ConsultationStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+enum ConsultationType {
+  NEW_CONTRACT
+  RENEWAL
+}
+
+enum AnswerType {
+  SINGLE_CHOICE
+  MULTI_CHOICE
+  NUMBER
+  BOOLEAN
+  FREE_TEXT
+}
+
+enum NeedType {
+  PARTNER_CARD
+  FAMILY
+  YOUNG
+  DSL
+  FIBER
+  STREAMING
+  ACCESSORY
+  DEVICE_PROTECTION
+  OTHER
+}
+
+enum NeedSource {
+  RULE_BASED
+  EMPLOYEE_MARKED
+}
+
+enum OpportunityStatus {
+  OPEN
+  OFFERED
+  ACCEPTED
+  DECLINED
+  DEFERRED
+}
+
+enum RecommendationOutcomeType {
+  ACCEPTED
+  REJECTED
+  DEFERRED
+}
+
+enum FollowUpReason {
+  RENEWAL_LOOKAHEAD
+  CUSTOMER_REQUEST
+  DEFERRED_OPPORTUNITY
+  OTHER
+}
+
+enum FollowUpStatus {
+  OPEN
+  DONE
+  CANCELLED
+}
+
+enum VisibilityOperator {
+  EQUALS
+  NOT_EQUALS
+  GREATER_THAN
+  LESS_THAN
+  IN
+  IS_ANSWERED
+}
+
+enum LegalBasis {
+  CONSENT
+  CONTRACT
+  LEGITIMATE_INTEREST
+}
+
+enum DeletionStatus {
+  ACTIVE
+  DELETION_REQUESTED
+  DELETED
+}
+
+enum DeletionRequestStatus {
+  PENDING
+  PROCESSED
+  REJECTED
+}
+
+enum RetentionDataCategory {
+  SESSION_NO_DEAL
+  SESSION_WITH_DEAL
+  AGGREGATED_KPI
+  AUDIT_LOG
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  ACTIVATE
+  DEACTIVATE
+  ROLLBACK
+  DELETION_REQUESTED
+}
+
+enum AnalyticsEventType {
+  CONSULTATION_STARTED
+  CONSULTATION_TOPIC_OPENED
+  QUESTION_ANSWERED
+  NEED_DETECTED
+  OPPORTUNITY_OFFERED
+  OPPORTUNITY_DECLINED
+  RECOMMENDATION_GENERATED
+  RECOMMENDATION_ACCEPTED
+  RECOMMENDATION_REJECTED
+  CONSULTATION_COMPLETED
+  CONSULTATION_ABANDONED
+  DEAL_CLOSED
+  FOLLOW_UP_CREATED
+}
+
+enum MeasurementSource {
+  BASELINE_MANUAL
+  SYSTEM_ASSISTED
+}
+
+// ---------------------------------------------------------------------------
+// Organisation und Zugriff
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  name        String
+  isSynthetic Boolean  @default(false) @map("is_synthetic")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  companies              Company[]
+  users                  User[]
+  roles                  Role[]
+  roleAssignments        RoleAssignment[]
+  productCategories      ProductCategory[]
+  products               Product[]
+  commissionModels       CommissionModel[]
+  campaigns              Campaign[]
+  questionnaires         Questionnaire[]
+  ruleSets               RuleSet[]
+  configurableThresholds ConfigurableThreshold[]
+  customerReferences     CustomerReference[]
+  contactPurposes        ContactPurpose[]
+  retentionPolicies      RetentionPolicy[]
+  auditLogs              AuditLog[]
+  configurationChanges   ConfigurationChange[]
+  analyticsEvents        AnalyticsEvent[]
+  baselineMeasurements   BaselineMeasurement[]
+  rejectionReasons       RejectionReason[]
+
+  @@map("tenants")
+}
+
+model Company {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  key       String
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  stores Store[]
+  roleAssignments RoleAssignment[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("companies")
+}
+
+model Store {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  companyId String   @map("company_id") @db.Uuid
+  key       String
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  company Company @relation(fields: [tenantId, companyId], references: [tenantId, id], onDelete: Restrict)
+
+  employees            Employee[]
+  roleAssignments      RoleAssignment[]
+  consultationSessions ConsultationSession[]
+  deals                Deal[]
+  analyticsEvents      AnalyticsEvent[]
+  baselineMeasurements BaselineMeasurement[]
+  customerReferences   CustomerReference[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("stores")
+}
+
+model User {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  email       String
+  isSynthetic Boolean  @default(false) @map("is_synthetic")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  employee Employee?
+
+  roleAssignments        RoleAssignment[]
+  auditLogsAsActor       AuditLog[]
+  configurationChanges   ConfigurationChange[]
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@map("users")
+}
+
+model Employee {
+  id               String           @id @default(uuid()) @db.Uuid
+  tenantId         String           @map("tenant_id") @db.Uuid
+  storeId          String           @map("store_id") @db.Uuid
+  userId           String?          @map("user_id") @db.Uuid
+  displayName      String           @map("display_name")
+  employmentStatus EmploymentStatus @default(ACTIVE) @map("employment_status")
+  deactivatedAt    DateTime?        @map("deactivated_at") @db.Timestamptz(6)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  store Store @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: Restrict)
+  user  User? @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: SetNull)
+
+  consultationSessions            ConsultationSession[]
+  deals                           Deal[]
+  recommendationOutcomesDecidedBy RecommendationOutcome[]
+  analyticsEvents                 AnalyticsEvent[]
+  baselineMeasurements            BaselineMeasurement[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+  @@index([storeId])
+  @@map("employees")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  description String
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model Role {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  key             String
+  name            String
+  isSystemDefined Boolean  @default(true) @map("is_system_defined")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  rolePermissions RolePermission[]
+  roleAssignments RoleAssignment[]
+
+  @@unique([tenantId, key])
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// Scope-Integrität (scopeType vs. companyId/storeId-Nullbarkeit, sowie
+// "storeId muss zu companyId gehören") kann Prisma-schema-seitig nicht
+// ausgedrückt werden (kein CHECK-Constraint-Support, kein Cross-Table-Lookup
+// in einer FK). Beides wird daher als rohes SQL direkt in
+// prisma/migrations/20260731000000_init/migration.sql ergänzt:
+// - CHECK constraint: TENANT -> companyId/storeId beide NULL,
+//   COMPANY -> companyId gesetzt/storeId NULL, STORE -> beide gesetzt.
+// - Trigger: falls storeId gesetzt ist, muss eine Zeile in stores existieren
+//   mit demselben tenantId + id = storeId + companyId = RoleAssignment.companyId.
+model RoleAssignment {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @map("tenant_id") @db.Uuid
+  userId    String        @map("user_id") @db.Uuid
+  roleId    String        @map("role_id") @db.Uuid
+  scopeType RoleScopeType @map("scope_type")
+  companyId String?       @map("company_id") @db.Uuid
+  storeId   String?       @map("store_id") @db.Uuid
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  revokedAt DateTime?     @map("revoked_at") @db.Timestamptz(6)
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  user    User     @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Restrict)
+  role    Role     @relation(fields: [tenantId, roleId], references: [tenantId, id], onDelete: Restrict)
+  company Company? @relation(fields: [tenantId, companyId], references: [tenantId, id], onDelete: Restrict)
+  store   Store?   @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("role_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// Produktkatalog (versioniert, siehe Modellierungsregel 1)
+// ---------------------------------------------------------------------------
+
+model Provider {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  name        String
+  isSynthetic Boolean  @default(false) @map("is_synthetic")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  products Product[]
+
+  @@map("providers")
+}
+
+model ProductCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  key       String
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  products Product[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("product_categories")
+}
+
+model Product {
+  id          String      @id @default(uuid()) @db.Uuid
+  tenantId    String      @map("tenant_id") @db.Uuid
+  providerId  String      @map("provider_id") @db.Uuid
+  categoryId  String      @map("category_id") @db.Uuid
+  productType ProductType @map("product_type")
+  name        String
+  isSynthetic Boolean     @default(false) @map("is_synthetic")
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  provider Provider        @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  category ProductCategory @relation(fields: [tenantId, categoryId], references: [tenantId, id], onDelete: Restrict)
+
+  versions         ProductVersion[]
+  commissionModels CommissionModel[]
+  costVersions     ProductCostVersion[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([providerId])
+  @@map("products")
+}
+
+// Alle versionierten Modelle in dieser Datei (ProductVersion,
+// CommissionModelVersion, ProductCostVersion, CampaignVersion,
+// QuestionnaireVersion, RuleSetVersion, ConfigurableThreshold,
+// RetentionPolicy) dürfen für dieselbe Elternentität keine zwei Zeitraeume
+// (validFrom/validTo) haben, die sich überlappen, solange status in
+// (ACTIVE, EXPIRED) ist (bzw. ausnahmslos bei ConfigurableThreshold/
+// RetentionPolicy, die kein status-Feld haben). Prisma kennt keine
+// PostgreSQL EXCLUDE-Constraints, daher wird das per rohem SQL
+// (Extension btree_gist + `EXCLUDE USING gist`) direkt in
+// prisma/migrations/20260731000000_init/migration.sql ergänzt, siehe
+// dortigen Abschnitt "Exclusion Constraints".
+model ProductVersion {
+  id                String        @id @default(uuid()) @db.Uuid
+  tenantId          String        @map("tenant_id") @db.Uuid
+  productId         String        @map("product_id") @db.Uuid
+  versionNumber     Int           @map("version_number")
+  status            VersionStatus @default(DRAFT)
+  validFrom         DateTime      @map("valid_from") @db.Timestamptz(6)
+  validTo           DateTime?     @map("valid_to") @db.Timestamptz(6)
+  currency          String        @db.Char(3)
+  monthlyPriceMinor Int?          @map("monthly_price_minor")
+  oneTimePriceMinor Int?          @map("one_time_price_minor")
+  contractMonths    Int?          @map("contract_months")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  tariffAttributes    TariffAttribute[]
+  recommendationItems RecommendationItem[]
+  dealItems           DealItem[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, productId, versionNumber])
+  @@index([tenantId])
+  @@index([productId, validFrom, validTo])
+  @@map("product_versions")
+}
+
+model TariffAttribute {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  productVersionId String   @map("product_version_id") @db.Uuid
+  attributeKey     String   @map("attribute_key")
+  attributeValue   String   @map("attribute_value")
+  valueType        String   @map("value_type")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  productVersion ProductVersion @relation(fields: [tenantId, productVersionId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([productVersionId, attributeKey])
+  @@index([tenantId])
+  @@map("tariff_attributes")
+}
+
+model CommissionModel {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  productId String   @map("product_id") @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  versions CommissionModelVersion[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@map("commission_models")
+}
+
+model CommissionModelVersion {
+  id                              String         @id @default(uuid()) @db.Uuid
+  tenantId                        String         @map("tenant_id") @db.Uuid
+  commissionModelId               String         @map("commission_model_id") @db.Uuid
+  versionNumber                   Int            @map("version_number")
+  status                          VersionStatus  @default(DRAFT)
+  validFrom                       DateTime       @map("valid_from") @db.Timestamptz(6)
+  validTo                         DateTime?      @map("valid_to") @db.Timestamptz(6)
+  commissionType                  CommissionType @map("commission_type")
+  currency                        String         @db.Char(3)
+  commissionAmountMinor           Int?           @map("commission_amount_minor")
+  commissionPercentageBasisPoints Int?           @map("commission_percentage_basis_points")
+  recurringCommissionAmountMinor  Int?           @map("recurring_commission_amount_minor")
+  createdAt                       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  commissionModel CommissionModel @relation(fields: [tenantId, commissionModelId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, commissionModelId, versionNumber])
+  @@index([tenantId])
+  @@index([commissionModelId, validFrom, validTo])
+  @@map("commission_model_versions")
+}
+
+model ProductCostVersion {
+  id                        String        @id @default(uuid()) @db.Uuid
+  tenantId                  String        @map("tenant_id") @db.Uuid
+  productId                 String        @map("product_id") @db.Uuid
+  versionNumber             Int           @map("version_number")
+  status                    VersionStatus @default(DRAFT)
+  validFrom                 DateTime      @map("valid_from") @db.Timestamptz(6)
+  validTo                   DateTime?     @map("valid_to") @db.Timestamptz(6)
+  currency                  String        @db.Char(3)
+  hardwarePurchaseCostMinor Int?          @map("hardware_purchase_cost_minor")
+  subsidyCostMinor          Int?          @map("subsidy_cost_minor")
+  otherDirectCostMinor      Int?          @map("other_direct_cost_minor")
+  createdAt                 DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, productId, versionNumber])
+  @@index([tenantId])
+  @@index([productId, validFrom, validTo])
+  @@map("product_cost_versions")
+}
+
+model Campaign {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  key       String
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  versions CampaignVersion[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("campaigns")
+}
+
+model CampaignVersion {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  campaignId    String        @map("campaign_id") @db.Uuid
+  versionNumber Int           @map("version_number")
+  status        VersionStatus @default(DRAFT)
+  validFrom     DateTime      @map("valid_from") @db.Timestamptz(6)
+  validTo       DateTime?     @map("valid_to") @db.Timestamptz(6)
+  description   String
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  campaign Campaign @relation(fields: [tenantId, campaignId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, campaignId, versionNumber])
+  @@index([tenantId])
+  @@index([campaignId, validFrom, validTo])
+  @@map("campaign_versions")
+}
+
+// ---------------------------------------------------------------------------
+// Beratung
+// ---------------------------------------------------------------------------
+
+model ConsultationSession {
+  id                    String             @id @default(uuid()) @db.Uuid
+  tenantId              String             @map("tenant_id") @db.Uuid
+  storeId               String             @map("store_id") @db.Uuid
+  employeeId            String             @map("employee_id") @db.Uuid
+  customerReferenceId   String?            @map("customer_reference_id") @db.Uuid
+  consultationType      ConsultationType   @map("consultation_type")
+  status                ConsultationStatus @default(IN_PROGRESS)
+  startedAt             DateTime           @map("started_at") @db.Timestamptz(6)
+  endedAt               DateTime?          @map("ended_at") @db.Timestamptz(6)
+  pauseSeconds          Int                @default(0) @map("pause_seconds")
+  dataCompletenessScore Float?             @map("data_completeness_score")
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  store             Store              @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: Restrict)
+  employee          Employee           @relation(fields: [tenantId, employeeId], references: [tenantId, id], onDelete: Restrict)
+  customerReference CustomerReference? @relation(fields: [tenantId, customerReferenceId], references: [tenantId, id], onDelete: SetNull)
+
+  topics          ConsultationTopic[]
+  answers         CustomerAnswer[]
+  detectedNeeds   DetectedNeed[]
+  opportunities   SalesOpportunity[]
+  recommendations Recommendation[]
+  followUps       FollowUp[]
+  deals           Deal[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([storeId, startedAt])
+  @@index([employeeId, startedAt])
+  @@map("consultation_sessions")
+}
+
+model ConsultationTopic {
+  id                    String    @id @default(uuid()) @db.Uuid
+  tenantId              String    @map("tenant_id") @db.Uuid
+  consultationSessionId String    @map("consultation_session_id") @db.Uuid
+  topicKey              NeedType  @map("topic_key")
+  openedAt              DateTime  @map("opened_at") @db.Timestamptz(6)
+  closedAt              DateTime? @map("closed_at") @db.Timestamptz(6)
+
+  session ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([consultationSessionId])
+  @@map("consultation_topics")
+}
+
+model CustomerAnswer {
+  id                    String     @id @default(uuid()) @db.Uuid
+  tenantId              String     @map("tenant_id") @db.Uuid
+  consultationSessionId String     @map("consultation_session_id") @db.Uuid
+  questionVersionId     String?    @map("question_version_id") @db.Uuid
+  answerType            AnswerType @map("answer_type")
+  numberValue           Float?     @map("number_value")
+  booleanValue          Boolean?   @map("boolean_value")
+  choiceValues          String[]   @default([]) @map("choice_values")
+  freeTextValue         String?    @map("free_text_value")
+  answeredAt            DateTime   @map("answered_at") @db.Timestamptz(6)
+  createdAt             DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session         ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
+  questionVersion QuestionVersion?    @relation(fields: [tenantId, questionVersionId], references: [tenantId, id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([consultationSessionId])
+  @@map("customer_answers")
+}
+
+model DetectedNeed {
+  id                    String     @id @default(uuid()) @db.Uuid
+  tenantId              String     @map("tenant_id") @db.Uuid
+  consultationSessionId String     @map("consultation_session_id") @db.Uuid
+  needType              NeedType   @map("need_type")
+  source                NeedSource @default(RULE_BASED)
+  detectedAt            DateTime   @map("detected_at") @db.Timestamptz(6)
+  notes                 String?
+
+  session       ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
+  opportunities SalesOpportunity[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([consultationSessionId])
+  @@map("detected_needs")
+}
+
+model SalesOpportunity {
+  id                    String            @id @default(uuid()) @db.Uuid
+  tenantId              String            @map("tenant_id") @db.Uuid
+  consultationSessionId String            @map("consultation_session_id") @db.Uuid
+  detectedNeedId        String?           @map("detected_need_id") @db.Uuid
+  categoryId            String?           @map("category_id") @db.Uuid
+  status                OpportunityStatus @default(OPEN)
+  offeredAt             DateTime?         @map("offered_at") @db.Timestamptz(6)
+  resolvedAt            DateTime?         @map("resolved_at") @db.Timestamptz(6)
+  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session      ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
+  detectedNeed DetectedNeed?       @relation(fields: [tenantId, detectedNeedId], references: [tenantId, id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([consultationSessionId])
+  @@map("sales_opportunities")
+}
+
+model Recommendation {
+  id                    String   @id @default(uuid()) @db.Uuid
+  tenantId              String   @map("tenant_id") @db.Uuid
+  consultationSessionId String   @map("consultation_session_id") @db.Uuid
+  ruleSetVersionId      String   @map("rule_set_version_id") @db.Uuid
+  generatedAt           DateTime @map("generated_at") @db.Timestamptz(6)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session        ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
+  ruleSetVersion RuleSetVersion      @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  items RecommendationItem[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([consultationSessionId])
+  @@map("recommendations")
+}
+
+model RecommendationItem {
+  id                    String   @id @default(uuid()) @db.Uuid
+  tenantId              String   @map("tenant_id") @db.Uuid
+  recommendationId      String   @map("recommendation_id") @db.Uuid
+  productVersionId       String  @map("product_version_id") @db.Uuid
+  eligibilityPassed      Boolean @map("eligibility_passed")
+  exclusionReasonCodes   String[] @default([]) @map("exclusion_reason_codes")
+  businessPriorityScore  Float   @map("business_priority_score")
+  priorityRank           Int     @map("priority_rank")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  recommendation Recommendation @relation(fields: [tenantId, recommendationId], references: [tenantId, id], onDelete: Restrict)
+  productVersion ProductVersion @relation(fields: [tenantId, productVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  rationale RecommendationRationale[]
+  outcome   RecommendationOutcome?
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([recommendationId])
+  @@map("recommendation_items")
+}
+
+model RecommendationRationale {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  recommendationItemId String   @map("recommendation_item_id") @db.Uuid
+  factorKey            String   @map("factor_key")
+  factorValue          String   @map("factor_value")
+  weight               Float?
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  recommendationItem RecommendationItem @relation(fields: [tenantId, recommendationItemId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([recommendationItemId])
+  @@map("recommendation_rationales")
+}
+
+model RejectionReason {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  key       String
+  label     String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  outcomes RecommendationOutcome[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("rejection_reasons")
+}
+
+model RecommendationOutcome {
+  id                   String                    @id @default(uuid()) @db.Uuid
+  tenantId             String                    @map("tenant_id") @db.Uuid
+  recommendationItemId String                    @unique @map("recommendation_item_id") @db.Uuid
+  outcome              RecommendationOutcomeType
+  rejectionReasonId    String?                   @map("rejection_reason_id") @db.Uuid
+  decidedByEmployeeId  String                    @map("decided_by_employee_id") @db.Uuid
+  decidedAt            DateTime                  @map("decided_at") @db.Timestamptz(6)
+  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  recommendationItem RecommendationItem @relation(fields: [tenantId, recommendationItemId], references: [tenantId, id], onDelete: Restrict)
+  rejectionReason    RejectionReason?   @relation(fields: [tenantId, rejectionReasonId], references: [tenantId, id], onDelete: SetNull)
+  decidedByEmployee  Employee           @relation(fields: [tenantId, decidedByEmployeeId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@map("recommendation_outcomes")
+}
+
+model FollowUp {
+  id                    String         @id @default(uuid()) @db.Uuid
+  tenantId              String         @map("tenant_id") @db.Uuid
+  consultationSessionId String         @map("consultation_session_id") @db.Uuid
+  customerReferenceId   String?        @map("customer_reference_id") @db.Uuid
+  reason                FollowUpReason
+  status                FollowUpStatus @default(OPEN)
+  dueDate               DateTime       @map("due_date") @db.Timestamptz(6)
+  thresholdUsedDays     Int?           @map("threshold_used_days")
+  createdAt             DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session           ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
+  customerReference CustomerReference?  @relation(fields: [tenantId, customerReferenceId], references: [tenantId, id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([dueDate])
+  @@map("follow_ups")
+}
+
+model Deal {
+  id                    String   @id @default(uuid()) @db.Uuid
+  tenantId              String   @map("tenant_id") @db.Uuid
+  consultationSessionId String   @map("consultation_session_id") @db.Uuid
+  storeId               String   @map("store_id") @db.Uuid
+  employeeId            String   @map("employee_id") @db.Uuid
+  customerReferenceId   String?  @map("customer_reference_id") @db.Uuid
+  currency              String   @db.Char(3)
+  closedAt              DateTime @map("closed_at") @db.Timestamptz(6)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session           ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
+  store             Store               @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: Restrict)
+  employee          Employee            @relation(fields: [tenantId, employeeId], references: [tenantId, id], onDelete: Restrict)
+  customerReference CustomerReference?  @relation(fields: [tenantId, customerReferenceId], references: [tenantId, id], onDelete: SetNull)
+
+  items             DealItem[]
+  financialSnapshot DealFinancialSnapshot?
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([storeId, closedAt])
+  @@map("deals")
+}
+
+model DealItem {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  dealId           String   @map("deal_id") @db.Uuid
+  productVersionId String   @map("product_version_id") @db.Uuid
+  quantity         Int      @default(1)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  deal           Deal           @relation(fields: [tenantId, dealId], references: [tenantId, id], onDelete: Restrict)
+  productVersion ProductVersion @relation(fields: [tenantId, productVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([dealId])
+  @@map("deal_items")
+}
+
+// Append-only: absence of updatedAt alone does not stop an UPDATE/DELETE at
+// DB or Prisma-client level. Real enforcement (BEFORE UPDATE OR DELETE
+// trigger raising an exception) is added as raw SQL in
+// prisma/migrations/20260731000000_init/migration.sql for this table and
+// for AuditLog, ConfigurationChange, and AnalyticsEvent — the four
+// append-only tables in this schema.
+model DealFinancialSnapshot {
+  id                               String   @id @default(uuid()) @db.Uuid
+  tenantId                         String   @map("tenant_id") @db.Uuid
+  dealId                           String   @unique @map("deal_id") @db.Uuid
+  currency                         String   @db.Char(3)
+  monthlyRecurringRevenueMinor     Int      @map("monthly_recurring_revenue_minor")
+  totalContractValueMinor          Int      @map("total_contract_value_minor")
+  oneTimeRevenueMinor              Int      @map("one_time_revenue_minor")
+  commissionAmountMinor            Int      @map("commission_amount_minor")
+  expectedRecurringCommissionMinor Int      @map("expected_recurring_commission_minor")
+  hardwarePurchaseCostMinor        Int      @map("hardware_purchase_cost_minor")
+  subsidyCostMinor                 Int      @map("subsidy_cost_minor")
+  discountCostMinor                Int      @map("discount_cost_minor")
+  otherDirectCostMinor             Int      @map("other_direct_cost_minor")
+  contributionMarginMinor          Int      @map("contribution_margin_minor")
+  contributionMarginFormulaVersion String   @map("contribution_margin_formula_version")
+  capturedAt                       DateTime @map("captured_at") @db.Timestamptz(6)
+  createdAt                        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  deal Deal @relation(fields: [tenantId, dealId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@map("deal_financial_snapshots")
+}
+
+// =============================================================================
+// FRAGEN UND REGELN
+// Questionnaire/Question/RuleSet are stable "logical" entities; their mutable
+// content lives in *Version rows (validFrom/validTo/status). Historical
+// references (CustomerAnswer, Recommendation) point to specific Version rows,
+// never to the "live" logical entity, so later edits cannot retroactively
+// change what a past consultation saw. ConfigurableThreshold makes the
+// renewal-lookahead window (and similar business thresholds) data, not code.
+// =============================================================================
+
+model Questionnaire {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  key       String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  versions QuestionnaireVersion[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("questionnaires")
+}
+
+model QuestionnaireVersion {
+  id              String        @id @default(uuid()) @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  questionnaireId String        @map("questionnaire_id") @db.Uuid
+  label           String
+  validFrom       DateTime      @map("valid_from") @db.Timestamptz(6)
+  validTo         DateTime?     @map("valid_to") @db.Timestamptz(6)
+  status          VersionStatus @default(DRAFT)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  questionnaire Questionnaire @relation(fields: [tenantId, questionnaireId], references: [tenantId, id], onDelete: Restrict)
+  questions     Question[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, questionnaireId, status])
+  @@map("questionnaire_versions")
+}
+
+model Question {
+  id                     String   @id @default(uuid()) @db.Uuid
+  tenantId               String   @map("tenant_id") @db.Uuid
+  questionnaireVersionId String   @map("questionnaire_version_id") @db.Uuid
+  key                    String
+  needType               NeedType @map("need_type")
+  sortOrder              Int      @map("sort_order")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  questionnaireVersion QuestionnaireVersion @relation(fields: [tenantId, questionnaireVersionId], references: [tenantId, id], onDelete: Restrict)
+  versions             QuestionVersion[]
+  visibilityConditions VisibilityCondition[] @relation("QuestionVisibilityTarget")
+
+  @@unique([tenantId, id])
+  @@index([tenantId, questionnaireVersionId])
+  @@map("questions")
+}
+
+model QuestionVersion {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  questionId   String        @map("question_id") @db.Uuid
+  label        String
+  answerType   AnswerType    @map("answer_type")
+  isRequired   Boolean       @default(false) @map("is_required")
+  validFrom    DateTime      @map("valid_from") @db.Timestamptz(6)
+  validTo      DateTime?     @map("valid_to") @db.Timestamptz(6)
+  status       VersionStatus @default(DRAFT)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  question             Question              @relation(fields: [tenantId, questionId], references: [tenantId, id], onDelete: Restrict)
+  answerOptions        AnswerOption[]
+  visibilityConditions VisibilityCondition[] @relation("QuestionVersionVisibilitySource")
+  customerAnswers      CustomerAnswer[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, questionId, status])
+  @@map("question_versions")
+}
+
+model AnswerOption {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  questionVersionId String   @map("question_version_id") @db.Uuid
+  key               String
+  label             String
+  sortOrder         Int      @map("sort_order")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  questionVersion QuestionVersion @relation(fields: [tenantId, questionVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, questionVersionId])
+  @@map("answer_options")
+}
+
+// A visibility condition makes one QuestionVersion's display depend on a
+// prior answer to a *different* Question (targetQuestionId): "show this
+// question only if question X's answer satisfies operator/value".
+model VisibilityCondition {
+  id                String            @id @default(uuid()) @db.Uuid
+  tenantId          String            @map("tenant_id") @db.Uuid
+  questionVersionId String            @map("question_version_id") @db.Uuid
+  targetQuestionId  String            @map("target_question_id") @db.Uuid
+  operator          VisibilityOperator
+  comparisonValue   String            @map("comparison_value")
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  questionVersion QuestionVersion @relation("QuestionVersionVisibilitySource", fields: [tenantId, questionVersionId], references: [tenantId, id], onDelete: Restrict)
+  targetQuestion  Question        @relation("QuestionVisibilityTarget", fields: [tenantId, targetQuestionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, questionVersionId])
+  @@map("visibility_conditions")
+}
+
+model RuleSet {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  key       String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  versions RuleSetVersion[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("rule_sets")
+}
+
+model RuleSetVersion {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @map("tenant_id") @db.Uuid
+  ruleSetId String        @map("rule_set_id") @db.Uuid
+  label     String
+  validFrom DateTime      @map("valid_from") @db.Timestamptz(6)
+  validTo   DateTime?     @map("valid_to") @db.Timestamptz(6)
+  status    VersionStatus @default(DRAFT)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  ruleSet             RuleSet              @relation(fields: [tenantId, ruleSetId], references: [tenantId, id], onDelete: Restrict)
+  eligibilityRules    EligibilityRule[]
+  exclusionRules      ExclusionRule[]
+  prioritizationRules PrioritizationRule[]
+  recommendations     Recommendation[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, ruleSetId, status])
+  @@map("rule_set_versions")
+}
+
+// Eligibility rules gate WHETHER a product may be recommended at all
+// (RecommendationItem.eligibilityPassed). Kept separate from prioritization
+// so "not eligible" and "eligible but low priority" are never conflated.
+model EligibilityRule {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  ruleSetVersionId String   @map("rule_set_version_id") @db.Uuid
+  key              String
+  description      String
+  expression       String
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  ruleSetVersion RuleSetVersion @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, ruleSetVersionId])
+  @@map("eligibility_rules")
+}
+
+// Exclusion rules record a specific reason code why a product was removed
+// from consideration (feeds RecommendationItem.exclusionReasonCodes).
+model ExclusionRule {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  ruleSetVersionId String   @map("rule_set_version_id") @db.Uuid
+  key              String
+  reasonCode       String   @map("reason_code")
+  description      String
+  expression       String
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  ruleSetVersion RuleSetVersion @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, ruleSetVersionId])
+  @@map("exclusion_rules")
+}
+
+// Prioritization rules only run on already-eligible items, producing the
+// businessPriorityScore used for ranking (never affects eligibility).
+model PrioritizationRule {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  ruleSetVersionId String   @map("rule_set_version_id") @db.Uuid
+  key              String
+  description      String
+  weight           Int
+  expression       String
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  ruleSetVersion RuleSetVersion @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, ruleSetVersionId])
+  @@map("prioritization_rules")
+}
+
+// Generic, versioned business threshold store. Seeded with
+// key="renewal_lookahead_days", value="180" so the renewal-lookahead window
+// is configuration, not a hardcoded constant. New rows (not updates) capture
+// changes over time via validFrom, mirroring the historicization pattern.
+model ConfigurableThreshold {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  key       String
+  value     String
+  validFrom DateTime  @map("valid_from") @db.Timestamptz(6)
+  validTo   DateTime? @map("valid_to") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key, validFrom])
+  @@index([tenantId, key])
+  @@map("configurable_thresholds")
+}
+
+// =============================================================================
+// DATENSCHUTZ
+// No real customer names/contact data are captured during normal
+// consultations. CustomerReference is a pseudonymous handle only; real
+// contact data (CustomerContactData) is strictly optional, tied to an
+// explicit purpose + legal basis + consent + retention window, and always
+// deletable via DeletionRequest without touching the (already anonymous)
+// consultation/deal history it may be softly linked from (onDelete: SetNull
+// on those links, never Cascade).
+// =============================================================================
+
+// A pseudonymous handle a Store/Employee can attach to a ConsultationSession
+// or Deal to link repeat visits, WITHOUT itself carrying identifying data.
+model CustomerReference {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  storeId     String   @map("store_id") @db.Uuid
+  displayCode String   @map("display_code")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  store  Store  @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: Restrict)
+
+  contactData          CustomerContactData[]
+  consultationSessions ConsultationSession[]
+  deals                Deal[]
+  followUps            FollowUp[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, storeId])
+  @@map("customer_references")
+}
+
+// Optional real contact data, only ever created with an explicit purpose +
+// consent. Never referenced by analytics/KPI queries directly — those go
+// through CustomerReference (pseudonymous) only.
+model CustomerContactData {
+  id                  String    @id @default(uuid()) @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  customerReferenceId String    @map("customer_reference_id") @db.Uuid
+  purposeId           String    @map("purpose_id") @db.Uuid
+  contactName         String?   @map("contact_name")
+  contactPhone        String?   @map("contact_phone")
+  contactEmail        String?   @map("contact_email")
+  legalBasis          LegalBasis @map("legal_basis")
+  retentionUntil      DateTime  @map("retention_until") @db.Timestamptz(6)
+  deletionStatus      DeletionStatus @default(ACTIVE) @map("deletion_status")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customerReference CustomerReference @relation(fields: [tenantId, customerReferenceId], references: [tenantId, id], onDelete: Restrict)
+  purpose           ContactPurpose    @relation(fields: [tenantId, purposeId], references: [tenantId, id], onDelete: Restrict)
+  consentRecords    ConsentRecord[]
+  deletionRequests  DeletionRequest[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, customerReferenceId])
+  @@index([tenantId, retentionUntil])
+  @@map("customer_contact_data")
+}
+
+// Catalog of allowed purposes for collecting contact data (e.g.
+// "follow_up", "callback", "deal_preparation"). Tenant-scoped so each
+// tenant's legal/compliance team controls its own purpose list.
+model ContactPurpose {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  key         String
+  label       String
+  description String
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  contactData  CustomerContactData[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("contact_purposes")
+}
+
+model ConsentRecord {
+  id                     String     @id @default(uuid()) @db.Uuid
+  tenantId               String     @map("tenant_id") @db.Uuid
+  customerContactDataId  String     @map("customer_contact_data_id") @db.Uuid
+  legalBasis             LegalBasis @map("legal_basis")
+  consentGivenAt         DateTime?  @map("consent_given_at") @db.Timestamptz(6)
+  consentWithdrawnAt     DateTime?  @map("consent_withdrawn_at") @db.Timestamptz(6)
+  consentText            String     @map("consent_text")
+  createdAt              DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customerContactData CustomerContactData @relation(fields: [tenantId, customerContactDataId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, customerContactDataId])
+  @@map("consent_records")
+}
+
+// Tenant-configurable retention duration per data category (mirrors the
+// "configurable, not hardcoded" rule applied elsewhere to thresholds).
+model RetentionPolicy {
+  id            String              @id @default(uuid()) @db.Uuid
+  tenantId      String              @map("tenant_id") @db.Uuid
+  dataCategory  RetentionDataCategory @map("data_category")
+  retentionDays Int                 @map("retention_days")
+  validFrom     DateTime            @map("valid_from") @db.Timestamptz(6)
+  validTo       DateTime?           @map("valid_to") @db.Timestamptz(6)
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, dataCategory, validFrom])
+  @@map("retention_policies")
+}
+
+model DeletionRequest {
+  id                    String                @id @default(uuid()) @db.Uuid
+  tenantId              String                @map("tenant_id") @db.Uuid
+  customerContactDataId String                @map("customer_contact_data_id") @db.Uuid
+  requestedAt           DateTime              @default(now()) @map("requested_at") @db.Timestamptz(6)
+  status                DeletionRequestStatus @default(PENDING)
+  completedAt           DateTime?             @map("completed_at") @db.Timestamptz(6)
+  notes                 String?
+
+  customerContactData CustomerContactData @relation(fields: [tenantId, customerContactDataId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, customerContactDataId])
+  @@index([tenantId, status])
+  @@map("deletion_requests")
+}
+
+// =============================================================================
+// ANALYTICS UND NACHVOLLZIEHBARKEIT
+// AnalyticsEvent is the append-only event stream driving KPIs/dashboards
+// (indexed on type+time per modeling rule 14). BaselineMeasurement stores
+// pre-rollout reference numbers so "before vs after" comparisons are
+// possible later. AuditLog and ConfigurationChange are strictly append-only
+// (no updatedAt, no update path modeled) to guarantee a tamper-evident trail.
+// =============================================================================
+
+model AnalyticsEvent {
+  id         String             @id @default(uuid()) @db.Uuid
+  tenantId   String             @map("tenant_id") @db.Uuid
+  storeId    String?            @map("store_id") @db.Uuid
+  employeeId String?            @map("employee_id") @db.Uuid
+  eventType  AnalyticsEventType @map("event_type")
+  payload    Json?
+  occurredAt DateTime           @map("occurred_at") @db.Timestamptz(6)
+  createdAt  DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  store    Store?    @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: SetNull)
+  employee Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, id], onDelete: SetNull)
+
+  @@index([tenantId, eventType, occurredAt])
+  @@index([tenantId, storeId, occurredAt])
+  @@map("analytics_events")
+}
+
+// Pre-rollout reference numbers per store/metric, captured once, used as the
+// "before" side of before/after comparisons once the system is live.
+model BaselineMeasurement {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  storeId     String   @map("store_id") @db.Uuid
+  employeeId  String?  @map("employee_id") @db.Uuid
+  metricKey   String   @map("metric_key")
+  metricValue Decimal  @map("metric_value") @db.Decimal(18, 4)
+  periodStart DateTime @map("period_start") @db.Timestamptz(6)
+  periodEnd   DateTime @map("period_end") @db.Timestamptz(6)
+
+  // Herkunft/Erhebungsart der Messung (z. B. "MANUAL", "POS_EXPORT",
+  // "OBSERVATION") — bewusst als String statt Enum modelliert, da der
+  // Auftraggeber die endgültige Werteliste noch festlegen muss.
+  measurementSource String  @map("measurement_source")
+  measurementMethod String  @map("measurement_method")
+
+  // Optionale, feingranulare Beobachtungsdaten je Beratungssession, aus
+  // denen sich metricValue ableiten kann (nicht bei jeder metricKey nötig).
+  startedAt               DateTime? @map("started_at") @db.Timestamptz(6)
+  endedAt                 DateTime? @map("ended_at") @db.Timestamptz(6)
+  activeDurationSeconds   Int?      @map("active_duration_seconds")
+  inactiveDurationSeconds Int?      @map("inactive_duration_seconds")
+  consultationOutcome     String?   @map("consultation_outcome")
+  dealCompleted           Boolean?  @map("deal_completed")
+  productsSoldCount       Int?      @map("products_sold_count")
+  detectedCrossSellCount  Int?      @map("detected_cross_sell_count")
+  offeredCrossSellCount   Int?      @map("offered_cross_sell_count")
+  acceptedCrossSellCount  Int?      @map("accepted_cross_sell_count")
+  // 0..1: Anteil der für diese Zeile tatsächlich vorhandenen (nicht
+  // geschätzten/fehlenden) Einzelwerte.
+  dataCompletenessScore   Decimal?  @map("data_completeness_score") @db.Decimal(5, 4)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  store    Store     @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: Restrict)
+  // Pseudonymisierte Mitarbeiterreferenz: optional, da Baseline-Messungen
+  // auch aggregiert/ohne Mitarbeiterbezug erhoben werden können.
+  employee Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, id], onDelete: SetNull)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, storeId, metricKey])
+  @@index([tenantId, employeeId])
+  @@map("baseline_measurements")
+}
+
+// Append-only audit trail: no updatedAt field, no update path is modeled for
+// this table anywhere in the application layer.
+model AuditLog {
+  id           String     @id @default(uuid()) @db.Uuid
+  tenantId     String     @map("tenant_id") @db.Uuid
+  actorUserId  String?    @map("actor_user_id") @db.Uuid
+  action       AuditAction
+  entityType   String     @map("entity_type")
+  entityId     String     @map("entity_id") @db.Uuid
+  metadata     Json?
+  occurredAt   DateTime   @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  actorUser User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: SetNull)
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, occurredAt])
+  @@index([tenantId, actorUserId])
+  @@map("audit_logs")
+}
+
+// Append-only record of who changed which configuration value (e.g. a
+// ConfigurableThreshold or RetentionPolicy) and when — separate from
+// AuditLog so config-history queries don't have to filter a generic table.
+model ConfigurationChange {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  actorUserId  String?  @map("actor_user_id") @db.Uuid
+  configKey    String   @map("config_key")
+  oldValue     String?  @map("old_value")
+  newValue     String   @map("new_value")
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  actorUser User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: SetNull)
+
+  @@index([tenantId, configKey, occurredAt])
+  @@index([tenantId, actorUserId])
+  @@map("configuration_changes")
+}

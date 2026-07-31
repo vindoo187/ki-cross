@@ -1,0 +1,6 @@
+node_modules
+.next
+dist
+prisma/migrations
+pnpm-lock.yaml
+src/generated

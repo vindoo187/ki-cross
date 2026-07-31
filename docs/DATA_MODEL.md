@@ -1,0 +1,146 @@
+# Zentrales Datenmodell
+
+Dieses Dokument beschreibt das tatsächlich implementierte Datenmodell
+(siehe [`prisma/schema.prisma`](../prisma/schema.prisma) als verbindliche
+Quelle; die Migration in
+`prisma/migrations/20260731000000_init/migration.sql` ist gegen
+`@electric-sql/pglite` verifiziert – siehe `docs/IMPLEMENTATION_STATUS.md`
+und `docs/ABSCHLUSSBERICHT_PHASE2.md`). Feldlisten hier sind weiterhin
+vereinfacht/exemplarisch (die vollständige, autoritative Spaltenliste steht
+in `schema.prisma`), aber die Entitäten, Beziehungen und Modellnamen
+entsprechen dem echten Schema, nicht mehr nur einem Phase-1-Konzept.
+
+**Abgrenzung:** Einzelne in Phase 1 skizzierte Konzepte (`Goal`,
+`KpiSnapshot`, sowie die eigentliche Fragen-/Empfehlungslogik) sind
+bewusst **noch nicht** Teil des in Phase 2/2B implementierten Schemas –
+ihr Bau ist ausdrücklich für eine spätere Phase vorgesehen und wurde in
+Phase 2B nicht begonnen (siehe Stop-Vorgabe des Projektleiters). Wo das
+hier der Fall ist, ist es explizit vermerkt.
+
+## Mandanten- und Organisationsstruktur
+
+```
+Tenant (Mandant)
+ └─ Company (Unternehmen)          -- z. B. das eigene Handelsunternehmen; später ggf. mehrere pro Mandant
+     └─ Store (Filiale)            -- 5 Filialen in den Demo-/Testdaten
+         └─ Employee (Mitarbeiter)
+```
+
+- `tenant_id` ist Pflichtattribut auf jeder mandantenscoped Tabelle (Row-Level-Scoping), zusätzlich über zusammengesetzte Fremdschlüssel `(tenant_id, x_id) → (tenant_id, id)` durchgesetzt (siehe `DECISION_LOG.md`).
+- Es gibt bewusst **keine eigene `Region`-Ebene** zwischen `Company` und `Store`: `Store` referenziert `Company` direkt. Eine Gruppierung von Filialen (falls künftig benötigt) müsste als eigenständige, additive Erweiterung nachgezogen werden.
+- `Employee` hat genau eine "Heimatfiliale" (`store_id`), kann aber (**Annahme**) rollenabhängig für mehrere Filialen berechtigt sein (z. B. Springer) – dies wird über `RoleAssignment` abgebildet, nicht über mehrere `Employee`-Datensätze.
+
+## Rollen & Berechtigungen
+
+Siehe [ROLES_AND_PERMISSIONS.md](ROLES_AND_PERMISSIONS.md) für das vollständige Modell. Kernentitäten im implementierten Schema: `Role`, `Permission`, `RolePermission`, `RoleAssignment` (scoped auf Tenant, optional Company/Store je nach `scope_type`; Konsistenz zwischen `scope_type` und gesetzten `company_id`/`store_id` wird per DB-CHECK-Constraint erzwungen, siehe `DECISION_LOG.md`/`migration.sql`).
+
+## Produkt- und Tarifdaten (versioniert)
+
+```
+Provider (Platzhalter, z. B. "Provider A", "Provider B" – synthetische Testdaten, keine echten Anbieternamen)
+ └─ ProductCategory (Mobilfunkvertrag, Verlängerung, DSL/Glasfaser, Gerät,
+                      Partnerkarte/Family, Streaming/Zusatzoption, Zubehör)
+     └─ Product (z. B. konkreter Tarif oder Gerätemodell)
+         └─ ProductVersion            -- zeitlich gültig: valid_from, valid_to
+             ├─ price (Grundpreis, Rabatt-Bedingungen)
+             ├─ attributes (Datenvolumen, Laufzeit, Konditionen …)
+             └─ CommissionModelVersion -- Provision je ProductVersion, ebenfalls zeitversioniert
+```
+
+**Hinweis zu Anbieternamen:** Es werden ausschließlich Platzhalter-/Testnamen verwendet (z. B. `"Provider A"`), niemals reale Netzbetreiber- oder Markennamen – konsistent mit der Vorgabe, keine echten Geschäftsdaten oder erfundenen Herstellerbezüge im Projekt zu verwenden.
+
+**Zentrale Regel:** `ProductVersion` und `CommissionModelVersion` sind **unveränderlich** (append-only). Eine Preis- oder Provisionsänderung erzeugt eine neue Version mit neuem `valid_from`; die alte Version bleibt für historische Auswertungen erhalten (`valid_to` wird gesetzt). Damit verfälschen rückwirkende Änderungen keine vergangenen KPI-Berechnungen (Vorgabe aus dem Auftrag).
+
+Jede `Recommendation` und jeder `Deal` referenziert die **konkrete Versions-ID**, nicht nur das Produkt – so bleibt nachvollziehbar, zu welchem Preis/welcher Provision zu welchem Zeitpunkt beraten wurde.
+
+**Annahme:** Tarifdaten werden zunächst manuell/importiert gepflegt (CSV/Admin-UI), keine automatisierte Provider-API-Anbindung in dieser Phase (siehe Qualitätsanforderungen im Auftrag: keine erfundenen Anbieter-APIs).
+
+## Fragebogen- und Regelwerk (versioniert)
+
+```
+QuestionnaireVersion
+ └─ Question
+     ├─ answer_type (single-choice, multi-choice, numeric, free-text …)
+     ├─ AnswerOption[]
+     └─ FollowUpRule[]         -- welche Folgefrage bei welcher Antwort erscheint/entfällt
+
+RuleSetVersion
+ └─ EligibilityRule            -- objektive Eignung (z. B. "Datenvolumen ≥ Bedarf")
+ └─ ExclusionRule              -- harter Ausschluss (z. B. Vertragsbindung aktiv)
+ └─ PrioritizationRule         -- geschäftliche Gewichtung (Marge, Kampagnenziel)
+```
+
+Details zur Funktionsweise: [QUESTION_ENGINE.md](QUESTION_ENGINE.md) und [RECOMMENDATION_ENGINE.md](RECOMMENDATION_ENGINE.md).
+
+**Warum getrennt von `Question`:** Fragen (was wird erfasst) und Regeln (was daraus folgt) sind unabhängig versioniert, damit ein Admin eine Formulierung ändern kann, ohne die Eignungslogik neu zu versionieren, und umgekehrt.
+
+## Beratungssitzung (Kernprozess)
+
+```
+ConsultationSession
+ ├─ tenant_id, store_id, employee_id
+ ├─ questionnaire_version_id, ruleset_version_id   -- Snapshot bei Sessionstart
+ ├─ session_type (Neuvertrag / Verlängerung)
+ ├─ started_at, ended_at, status (aktiv/abgeschlossen/abgebrochen)
+ └─ CustomerAnswer[]
+     ├─ question_id, value, answered_at
+     └─ (kein direkter Klarname-Zwang – siehe Datensparsamkeit in PRIVACY_AND_SECURITY.md)
+
+Recommendation
+ ├─ session_id
+ ├─ product_version_id, commission_model_version_id
+ ├─ eligibility_score, priority_score, rationale (strukturiert, nicht nur Freitext)
+ └─ RecommendationOutcome (angenommen / abgelehnt / geändert / ignoriert)
+     └─ rejection_reason (aus fester Liste + optional Freitext)
+
+Deal (Abschluss)
+ ├─ session_id, product_version_id[]
+ ├─ closed_at, total_monthly_value, margin_estimate
+ └─ status (abgeschlossen / storniert)
+```
+
+**Wichtig:** `Recommendation` ist von `RecommendationOutcome` getrennt, weil eine Empfehlung mehrfach den Status wechseln kann (z. B. erst ignoriert, dann nach Rückfrage doch angenommen) und weil Ablehnungsgründe eigenständig auswertbar sein müssen (Vorgabe: "Gründe für abgelehnte Empfehlungen").
+
+## Kunde – bewusst minimal
+
+**Annahme (zu bestätigen, siehe OPEN_DECISIONS.md):** Es wird **kein separates Kundenstammdaten-Objekt mit Klarnamen** im Beratungssystem geführt. Die Sitzung erfasst nur die für die Beratung nötigen strukturierten Antworten (Bedarf, nicht Identität). Ein Name/Kontaktdatensatz wird nur erfasst, wenn er für den Abschluss zwingend nötig ist, und dann als separate, klar zweckgebundene Entität behandelt – im implementierten Schema `CustomerReference` (pseudonym, für Deal-Zuordnung) plus die davon getrennten `CustomerContactData`/`ContactPurpose`/`ConsentRecord`-Modelle für tatsächliche Kontaktdaten mit eigenem Zweckbindungs- und Löschkonzept (`RetentionPolicy`, `DeletionRequest`) – getrennt von den Analyse-/Antwortdaten (siehe Trennungsprinzip in [PRIVACY_AND_SECURITY.md](PRIVACY_AND_SECURITY.md)).
+
+## Ziele, Kampagnen, KPIs
+
+```
+Campaign (Kampagne)       -- zeitlich begrenzt (CampaignVersion), priorisiert bestimmte Produkte/Cross-Selling-Schwerpunkte
+AnalyticsEvent            -- append-only Ereignisprotokoll, Basis aller KPI-Berechnungen
+BaselineMeasurement       -- Referenzwerte vor Rollout, fuer Vorher/Nachher-Vergleiche (siehe ANALYTICS_AND_KPIS.md)
+```
+
+**Noch nicht implementiert (späterer Ausbau, kein Bestandteil von Phase 2/2B):** `Goal` (Ziel-Objekt) und `KpiSnapshot` (periodisch aggregierte KPI-Snapshots) sind Phase-1-Konzepte aus [ANALYTICS_AND_KPIS.md](ANALYTICS_AND_KPIS.md), aber (noch) keine Modelle in `schema.prisma`. KPIs werden aktuell konzeptionell direkt aus `AnalyticsEvent`/`ConsultationSession`/`Deal` berechnet, ohne vorab persistierte Snapshots.
+
+## Audit
+
+```
+AuditLog
+ ├─ tenant_id, actor_user_id (optional)
+ ├─ entity_type, entity_id, action (CREATE/UPDATE/ACTIVATE/DEACTIVATE/ROLLBACK/DELETION_REQUESTED)
+ ├─ metadata (strukturiertes JSON, ohne Kontaktdaten/Freitext – technisch per Zod erzwungen, siehe DECISION_LOG.md)
+ └─ occurred_at
+
+ConfigurationChange   -- separates Append-only-Protokoll speziell für Konfigurationswerte
+                         (z. B. ConfigurableThreshold, RetentionPolicy), getrennt von AuditLog
+```
+
+Jede Änderung an `Question`, `RuleSet`, `Campaign`, `ProductVersion`, `CommissionModelVersion`, Rollen/Berechtigungen wird auditiert und ist zurückrollbar (fachliche Anforderung: "Änderungen nachvollziehen und zurückrollen"). `AuditLog` und `ConfigurationChange` sind append-only (DB-seitig per Trigger erzwungen, keine `UPDATE`/`DELETE` möglich).
+
+## Entity-Relationship-Übersicht (vereinfacht)
+
+```
+Tenant 1─n Company 1─n Store 1─n Employee
+Tenant 1─n Provider 1─n ProductCategory 1─n Product 1─n ProductVersion 1─n CommissionModelVersion
+Tenant 1─n QuestionnaireVersion 1─n Question 1─n AnswerOption
+Tenant 1─n RuleSetVersion 1─n (EligibilityRule|ExclusionRule|PrioritizationRule)
+Store 1─n Employee 1─n ConsultationSession
+ConsultationSession 1─n CustomerAnswer
+ConsultationSession 1─n Recommendation 1─1 RecommendationOutcome
+ConsultationSession 0─1 Deal
+Tenant 1─n Campaign, AnalyticsEvent, BaselineMeasurement
+alle Entitäten → AuditLog (bei Änderung)
+```
