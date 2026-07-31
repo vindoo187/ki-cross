@@ -18,7 +18,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runWithTenantContext } from "@/server/tenant/context";
 import { TenantMismatchError, withTenantScope } from "@/server/tenant/scoped-client";
@@ -115,8 +115,19 @@ describe.skipIf(!hasDatabaseUrl)("Tenant-Isolation (Integrationstest, echte Post
     await runWithTenantContext(
       { tenantId: tenantAId, userId: randomUUID(), roles: [] },
       async () => {
+        // `tenantId` wird von `withTenantScope()` zur Laufzeit aus dem aktiven
+        // TenantContext injiziert (siehe assertOrInjectTenantId in
+        // scoped-client.ts) - das ist exakt das Verhalten, das dieser Test
+        // verifiziert. Der generierte Prisma-Typ kennt diese Laufzeit-Ergaenzung
+        // durch das Extension jedoch nicht und verlangt `tenantId` statisch;
+        // der Cast auf den konkreten Unchecked-Input-Typ dokumentiert bewusst
+        // diese Diskrepanz zwischen Laufzeitverhalten und Prisma-Typ, statt sie
+        // per `any` zu verschleiern (siehe eslint no-explicit-any).
         const company = await db.company.create({
-          data: { key: `auto-${suffix}`, name: "Auto Company" },
+          data: {
+            key: `auto-${suffix}`,
+            name: "Auto Company",
+          } as Prisma.CompanyUncheckedCreateInput,
         });
         expect(company.tenantId).toBe(tenantAId);
         await rawClient.company.delete({ where: { id: company.id } });
