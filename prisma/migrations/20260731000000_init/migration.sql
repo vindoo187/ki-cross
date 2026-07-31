@@ -766,7 +766,7 @@ CREATE INDEX "recommendation_rationales_recommendation_item_id_idx" ON "recommen
 CREATE UNIQUE INDEX "rejection_reasons_tenant_id_id_key" ON "rejection_reasons" ("tenant_id", "id");
 CREATE UNIQUE INDEX "rejection_reasons_tenant_id_key_key" ON "rejection_reasons" ("tenant_id", "key");
 CREATE INDEX "rejection_reasons_tenant_id_idx" ON "rejection_reasons" ("tenant_id");
-CREATE UNIQUE INDEX "recommendation_outcomes_recommendation_item_id_key" ON "recommendation_outcomes" ("recommendation_item_id");
+CREATE UNIQUE INDEX "recommendation_outcomes_tenant_id_recommendation_item_id_key" ON "recommendation_outcomes" ("tenant_id", "recommendation_item_id");
 CREATE INDEX "recommendation_outcomes_tenant_id_idx" ON "recommendation_outcomes" ("tenant_id");
 CREATE INDEX "follow_ups_tenant_id_idx" ON "follow_ups" ("tenant_id");
 CREATE INDEX "follow_ups_due_date_idx" ON "follow_ups" ("due_date");
@@ -775,7 +775,7 @@ CREATE INDEX "deals_tenant_id_idx" ON "deals" ("tenant_id");
 CREATE INDEX "deals_store_id_closed_at_idx" ON "deals" ("store_id", "closed_at");
 CREATE INDEX "deal_items_tenant_id_idx" ON "deal_items" ("tenant_id");
 CREATE INDEX "deal_items_deal_id_idx" ON "deal_items" ("deal_id");
-CREATE UNIQUE INDEX "deal_financial_snapshots_deal_id_key" ON "deal_financial_snapshots" ("deal_id");
+CREATE UNIQUE INDEX "deal_financial_snapshots_tenant_id_deal_id_key" ON "deal_financial_snapshots" ("tenant_id", "deal_id");
 CREATE INDEX "deal_financial_snapshots_tenant_id_idx" ON "deal_financial_snapshots" ("tenant_id");
 CREATE UNIQUE INDEX "answer_options_tenant_id_id_key" ON "answer_options" ("tenant_id", "id");
 CREATE INDEX "answer_options_tenant_id_question_version_id_idx" ON "answer_options" ("tenant_id", "question_version_id");
