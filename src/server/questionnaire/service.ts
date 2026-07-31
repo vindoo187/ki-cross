@@ -116,16 +116,27 @@ interface QuestionNodeWithLabel extends QuestionNode {
 }
 
 /**
- * Gemeinsamer Typ fuer alle DB-Zugriffsfunktionen dieser Datei: entweder der
- * mandantengescopte Top-Level-Client (`db`) oder der Transaktions-Client
- * innerhalb eines `db.$transaction(async (tx) => ...)`-Callbacks (dessen
- * genauer Typ bewusst NICHT annotiert, sondern aus `db.$transaction` selbst
- * inferiert wird - siehe Modul-Kopfkommentar zum Restrisiko der
- * Client-Extension-Weiterreichung). Beide stellen dieselben Modell-Delegates
- * bereit (`.question`, `.customerAnswer`, ...), die diese Datei ausschliesslich
- * verwendet.
+ * Gemeinsamer Typ fuer alle DB-Zugriffsfunktionen dieser Datei.
+ *
+ * WICHTIG (mit ChatGPT/Projektleiter abgestimmt, siehe CI-Fehler-Analyse
+ * nach CI #5): NICHT als Union `ScopedPrismaClient | Prisma.TransactionClient`
+ * definieren - eine Union zweier strukturell unterschiedlicher Prisma-
+ * Client-Typen laesst sich von TypeScript nicht zuverlaessig auf die
+ * ueberladenen Modell-Delegate-Methoden (`findMany`, `create`, ...) abbilden
+ * ("not callable" / "Excessive stack depth comparing types" in CI, wo echte
+ * Prisma-Typen vorliegen - siehe SANDBOX-VERIFIKATIONSLUECKE oben).
+ *
+ * Stattdessen wird NUR der Transaktions-Client-Typ direkt aus der
+ * Tenant-Scoping-Extension selbst abgeleitet (der Typ des `tx`-Parameters in
+ * `db.$transaction(async (tx) => ...)`). Der volle `ScopedPrismaClient` (also
+ * `db` selbst) ist strukturell ein Subtyp/kompatibel zuweisbar zu diesem Typ,
+ * da er dieselben Modell-Delegates besitzt und lediglich zusaetzliche
+ * Methoden wie `$transaction` anbietet - daher kann `db` weiterhin ueberall
+ * dort uebergeben werden, wo `QueryClient` erwartet wird, ohne separate
+ * Union oder Casts.
  */
-type QueryClient = ScopedPrismaClient | Prisma.TransactionClient;
+type ScopedTransactionClient = Parameters<Parameters<ScopedPrismaClient["$transaction"]>[0]>[0];
+type QueryClient = ScopedTransactionClient;
 
 /** Prisma-Payload-Form einer Frage inkl. der (zeit-/status-gefilterten) QuestionVersion(en) mit AnswerOptions und VisibilityConditions. */
 type QuestionRow = Prisma.QuestionGetPayload<{
