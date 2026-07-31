@@ -189,13 +189,13 @@ fertige Mitarbeiteroberfläche. Fachliche Details siehe
 
 ### Tatsächlich in dieser Sitzung ausgeführte Prüfungen
 
-| Prüfung                                | Werkzeug                            | Ergebnis                                                                                     |
-| --------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| Unit-Tests (gesamtes Projekt)          | `npm run test:unit`                 | 150/150 Tests grün, 11 Testdateien, davon 51 neu für die Fragen-Engine (`tests/unit/questionnaire/`) |
-| Migration gegen leere DB               | `npm run verify:migration` (pglite) | erfolgreich: 55 Tabellen (inkl. der 6 neuen Fragen-Engine-Tabellen), 84 Fremdschlüssel, keine Fehler |
-| ESLint                                  | `npm run lint` (`--max-warnings=0`) | 0 Fehler, 0 Warnungen                                                                            |
-| Prettier                                | `npm run format`                    | gesamtes Projekt sauber formatiert (inkl. neu erstellter/geänderter Dokumentation)               |
-| TypeScript-Typprüfung                  | `npm run typecheck`                 | ausschließlich die bekannten, durch fehlenden `prisma generate` verursachten Fehler (siehe oben); keine neuen Typfehler durch Phase 3A |
+| Prüfung                       | Werkzeug                            | Ergebnis                                                                                                                               |
+| ----------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit-Tests (gesamtes Projekt) | `npm run test:unit`                 | 150/150 Tests grün, 11 Testdateien, davon 51 neu für die Fragen-Engine (`tests/unit/questionnaire/`)                                   |
+| Migration gegen leere DB      | `npm run verify:migration` (pglite) | erfolgreich: 55 Tabellen (inkl. der 6 neuen Fragen-Engine-Tabellen), 84 Fremdschlüssel, keine Fehler                                   |
+| ESLint                        | `npm run lint` (`--max-warnings=0`) | 0 Fehler, 0 Warnungen                                                                                                                  |
+| Prettier                      | `npm run format`                    | gesamtes Projekt sauber formatiert (inkl. neu erstellter/geänderter Dokumentation)                                                     |
+| TypeScript-Typprüfung         | `npm run typecheck`                 | ausschließlich die bekannten, durch fehlenden `prisma generate` verursachten Fehler (siehe oben); keine neuen Typfehler durch Phase 3A |
 
 Die 55 Tabellen der Migration sind unverändert gegenüber Phase 2B, weil die
 Fragen-Engine-Tabellen in dieselbe (bisher einzige) `init`-Migration
