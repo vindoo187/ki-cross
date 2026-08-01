@@ -262,23 +262,15 @@ describe.skipIf(!hasDatabaseUrl)("Fragen-Engine (Integrationstest, echte Postgre
   });
 
   afterAll(async () => {
-    // analyticsEvent und auditLog werden hier bewusst NICHT geloescht: beide Tabellen
-    // sind per DB-Trigger append-only (Phase 3A Task 30), DELETE ist dort verboten.
-    // Die tenant-gescopten Testzeilen (mit zufaelligem Suffix pro Testlauf) zu behalten
-    // ist unkritisch und entspricht dem Append-only-Design.
-    await rawClient.customerAnswer.deleteMany({ where: { tenantId: tenantAId } });
-    await rawClient.consultationSession.deleteMany({ where: { tenantId: tenantAId } });
-    await rawClient.visibilityCondition.deleteMany({ where: { tenantId: tenantAId } });
-    await rawClient.answerOption.deleteMany({ where: { tenantId: tenantAId } });
-    await rawClient.questionVersion.deleteMany({ where: { tenantId: tenantAId } });
-    await rawClient.question.deleteMany({ where: { tenantId: tenantAId } });
-    await rawClient.questionnaireVersion.deleteMany({ where: { tenantId: tenantAId } });
-    await rawClient.questionnaire.deleteMany({ where: { tenantId: tenantAId } });
-    await rawClient.employee.deleteMany({ where: { tenantId: { in: [tenantAId, tenantBId] } } });
-    await rawClient.user.deleteMany({ where: { tenantId: { in: [tenantAId, tenantBId] } } });
-    await rawClient.store.deleteMany({ where: { tenantId: { in: [tenantAId, tenantBId] } } });
-    await rawClient.company.deleteMany({ where: { tenantId: { in: [tenantAId, tenantBId] } } });
-    await rawClient.tenant.deleteMany({ where: { id: { in: [tenantAId, tenantBId] } } });
+    // Bewusst kein deleteMany mehr hier: analyticsEvent/auditLog sind append-only
+    // (Phase 3A Task 30, DELETE per DB-Trigger verboten). Seit AnalyticsEvent.employee
+    // auf onDelete: Restrict umgestellt ist (siehe Migration
+    // 20260801095926_analytics_events_employee_restrict), wuerde auch employee.deleteMany
+    // fuer Tenants mit vorhandenen AnalyticsEvents fehlschlagen - und transitiv
+    // store/company/tenant. CI nutzt einen ephemeren Postgres-Service-Container pro Lauf
+    // (siehe .github/workflows/ci.yml), der nach dem Job verworfen wird; Testisolation ist
+    // durch den randomUUID-Suffix pro Testlauf sichergestellt. Aufraeumen ist daher weder
+    // noetig noch (fuer die append-only/immutable Tabellen) ueberhaupt moeglich.
     await rawClient.$disconnect();
   });
 

@@ -1327,7 +1327,7 @@ model AnalyticsEvent {
 
   tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   store    Store?    @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: SetNull)
-  employee Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, id], onDelete: SetNull)
+  employee Employee? @relation(fields: [tenantId, employeeId], references: [tenantId, id], onDelete: Restrict)
 
   @@index([tenantId, eventType, occurredAt])
   @@index([tenantId, storeId, occurredAt])
