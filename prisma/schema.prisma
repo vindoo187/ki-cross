@@ -1405,8 +1405,12 @@ model RecommendationCrossSellingSignal {
   createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   recommendation          Recommendation   @relation(fields: [tenantId, recommendationId], references: [tenantId, id], onDelete: Restrict)
-  triggerRule              CrossSellingRule @relation(fields: [tenantId, triggerRuleId], references: [tenantId, id], onDelete: Restrict)
-  triggerRuleSetVersion    RuleSetVersion   @relation("RecommendationCrossSellingSignalTriggerRuleSetVersion", fields: [tenantId, triggerRuleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  // Explizite map()-Namen fuer triggerRule/triggerRuleSetVersion: Prisma's
+  // auto-generierter FK-Name kuerzt beide auf denselben 63-Zeichen-Praefix
+  // ("..._tenant_id_trigger_rul..._fkey"), was zu P1012 (Namenskollision)
+  // fuehrt. Siehe RISK_REGISTER.md Phase-3B-Abschnitt.
+  triggerRule              CrossSellingRule @relation(fields: [tenantId, triggerRuleId], references: [tenantId, id], onDelete: Restrict, map: "rec_css_trigger_rule_fkey")
+  triggerRuleSetVersion    RuleSetVersion   @relation("RecommendationCrossSellingSignalTriggerRuleSetVersion", fields: [tenantId, triggerRuleSetVersionId], references: [tenantId, id], onDelete: Restrict, map: "rec_css_trigger_rule_set_version_fkey")
   sourceAnswer              CustomerAnswer? @relation(fields: [tenantId, sourceAnswerId], references: [tenantId, id], onDelete: Restrict)
   suggestedProductVersion  ProductVersion?  @relation("RecommendationCrossSellingSignalSuggestedProduct", fields: [tenantId, suggestedProductVersionId], references: [tenantId, id], onDelete: Restrict)
 

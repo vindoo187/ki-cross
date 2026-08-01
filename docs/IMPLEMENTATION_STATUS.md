@@ -340,6 +340,41 @@ Beide sind im Code vorbereitet und in `.github/workflows/ci.yml`
 verankert; der erste CI-Lauf nach dem Push dieser Phase gilt als
 abschließende Bestätigung, nicht diese Sitzung allein.
 
+### CI #14 (Commit `106b2da`): Prisma-Schema-Validierungsfehler (behoben)
+
+Der erste CI-Lauf für Phase 3B schlug fehl (`build-and-test`, Schritt
+"Prisma Client generieren", Exit-Code 1). Ursache: `prisma generate`
+führt intern eine Schema-Validierung durch (`get-dmmf wasm`), die in
+dieser Sandbox mangels Netzwerkzugriff auf `binaries.prisma.sh` **nicht**
+lokal nachvollzogen werden konnte (siehe neues Risiko in
+[RISK_REGISTER.md](RISK_REGISTER.md), Phase-3B-Abschnitt) – der Fehler
+war daher in dieser Sitzung vor dem Push nicht sichtbar.
+
+Fehler `P1012`: die beiden impliziten (unbenannten) `@relation`-FKs
+`triggerRule` und `triggerRuleSetVersion` auf
+`RecommendationCrossSellingSignal` erzeugten bei Prisma's interner
+Autoname-Berechnung (`{Tabelle}_{Felder}_fkey`, bei Überschreitung von 63
+Zeichen gekürzt) denselben gekürzten Namen
+(`recommendation_cross_selling_signals_tenant_id_trigger_rul_fkey`) –
+eine Namenskollision, die Prisma als Validierungsfehler ablehnt. Das
+bereits angewandte `migration.sql` selbst war unabhängig davon gültig
+(dort waren die Constraint-Namen durch eine andere Kürzungslogik bereits
+zufällig eindeutig), sodass `npm run verify:migration`/`verify:seed` in
+dieser Sitzung fälschlich grün liefen – die Prisma-Schema-Validierung ist
+ein separater Prüfschritt, den diese beiden PGlite-Skripte nicht abdecken.
+
+Behoben durch explizite, kurze `map()`-Namen für beide Relationen
+(`rec_css_trigger_rule_fkey`, `rec_css_trigger_rule_set_version_fkey`) in
+`schema.prisma`, sowie Anpassung der beiden entsprechenden
+Constraint-Namen in `migration.sql` (Commit vor dem produktiven Einsatz
+dieser Migration, daher direkt editierbar statt neuer Migration).
+Manuell verifiziert: beide neuen Namen sind eindeutig und ≤ 63 Zeichen;
+`npm run verify:migration` (101 Fremdschlüssel, alle Phase-3B-Smoke-Tests)
+und `npm run verify:seed` erneut erfolgreich mit den neuen
+Constraint-Namen durchlaufen. Die eigentliche Prisma-Validierung
+(`prisma generate`/`validate`) bleibt aus dem oben genannten Sandbox-Grund
+ungetestet und wird erst mit dem nächsten CI-Lauf bestätigt.
+
 ### Bekannte, bewusst offen gelassene Testlücke
 
 Der `RecommendationConsistencyError`-Zweig (P2002-Konflikt beim

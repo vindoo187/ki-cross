@@ -269,8 +269,12 @@ ALTER TABLE "cross_selling_rule_conditions" ADD CONSTRAINT "cross_selling_rule_c
 ALTER TABLE "cross_selling_rule_conditions" ADD CONSTRAINT "cross_selling_rule_conditions_tenant_id_question_id_fkey" FOREIGN KEY ("tenant_id", "question_id") REFERENCES "questions" ("tenant_id", "id") ON DELETE RESTRICT;
 
 ALTER TABLE "recommendation_cross_selling_signals" ADD CONSTRAINT "recommendation_cross_selling_signals_tenant_id_recommendation_i" FOREIGN KEY ("tenant_id", "recommendation_id") REFERENCES "recommendations" ("tenant_id", "id") ON DELETE RESTRICT;
-ALTER TABLE "recommendation_cross_selling_signals" ADD CONSTRAINT "recommendation_cross_selling_signals_tenant_id_trigger_rule_id_" FOREIGN KEY ("tenant_id", "trigger_rule_id") REFERENCES "cross_selling_rules" ("tenant_id", "id") ON DELETE RESTRICT;
-ALTER TABLE "recommendation_cross_selling_signals" ADD CONSTRAINT "recommendation_cross_selling_signals_tenant_id_trigger_rule_set" FOREIGN KEY ("tenant_id", "trigger_rule_set_version_id") REFERENCES "rule_set_versions" ("tenant_id", "id") ON DELETE RESTRICT;
+-- Explizite Constraint-Namen (statt Prisma-Autoname): der auto-generierte
+-- Name fuer beide FKs kuerzt auf denselben 63-Zeichen-Praefix und kollidiert
+-- (P1012). Namen hier muessen mit den map()-Angaben in schema.prisma
+-- uebereinstimmen (Modell RecommendationCrossSellingSignal).
+ALTER TABLE "recommendation_cross_selling_signals" ADD CONSTRAINT "rec_css_trigger_rule_fkey" FOREIGN KEY ("tenant_id", "trigger_rule_id") REFERENCES "cross_selling_rules" ("tenant_id", "id") ON DELETE RESTRICT;
+ALTER TABLE "recommendation_cross_selling_signals" ADD CONSTRAINT "rec_css_trigger_rule_set_version_fkey" FOREIGN KEY ("tenant_id", "trigger_rule_set_version_id") REFERENCES "rule_set_versions" ("tenant_id", "id") ON DELETE RESTRICT;
 ALTER TABLE "recommendation_cross_selling_signals" ADD CONSTRAINT "recommendation_cross_selling_signals_tenant_id_source_answer_id" FOREIGN KEY ("tenant_id", "source_answer_id") REFERENCES "customer_answers" ("tenant_id", "id") ON DELETE RESTRICT;
 ALTER TABLE "recommendation_cross_selling_signals" ADD CONSTRAINT "recommendation_cross_selling_signals_tenant_id_suggested_produc" FOREIGN KEY ("tenant_id", "suggested_product_version_id") REFERENCES "product_versions" ("tenant_id", "id") ON DELETE RESTRICT;
 
