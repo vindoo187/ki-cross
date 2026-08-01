@@ -230,6 +230,34 @@ await expectRejected("append-only: UPDATE auf recommendation_cross_selling_signa
   ]),
 );
 
+const rationaleId = uuid();
+await db.query(
+  `INSERT INTO recommendation_rationales (id, tenant_id, recommendation_item_id, factor_key, factor_value, commission_model_version_id, commission_value_minor)
+   VALUES ($1,$2,$3,'commission_pinning','FLAT',$4,3000)`,
+  [rationaleId, tenantId, recommendationItemId, commissionModelVersionId],
+);
+await expectRejected("append-only: UPDATE auf recommendation_rationales", () =>
+  db.query(`UPDATE recommendation_rationales SET factor_value = 'PERCENTAGE' WHERE id = $1`, [
+    rationaleId,
+  ]),
+);
+await expectRejected("append-only: DELETE auf recommendation_rationales", () =>
+  db.query(`DELETE FROM recommendation_rationales WHERE id = $1`, [rationaleId]),
+);
+
+const outcomeId = uuid();
+await db.query(
+  `INSERT INTO recommendation_outcomes (id, tenant_id, recommendation_item_id, outcome, decided_by_employee_id, decided_at)
+   VALUES ($1,$2,$3,'ACCEPTED',$4,'2026-07-15T09:10:00Z')`,
+  [outcomeId, tenantId, recommendationItemId, employeeId],
+);
+await expectRejected("append-only: UPDATE auf recommendation_outcomes", () =>
+  db.query(`UPDATE recommendation_outcomes SET outcome = 'REJECTED' WHERE id = $1`, [outcomeId]),
+);
+await expectRejected("append-only: DELETE auf recommendation_outcomes", () =>
+  db.query(`DELETE FROM recommendation_outcomes WHERE id = $1`, [outcomeId]),
+);
+
 // sales_opportunities bleibt bewusst mutabel (kein append-only-Trigger).
 await db.query(`UPDATE sales_opportunities SET status = 'OFFERED' WHERE trigger_signal_id = $1`, [
   signalId,

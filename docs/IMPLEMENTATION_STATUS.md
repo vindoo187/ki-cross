@@ -375,6 +375,44 @@ Constraint-Namen durchlaufen. Die eigentliche Prisma-Validierung
 (`prisma generate`/`validate`) bleibt aus dem oben genannten Sandbox-Grund
 ungetestet und wird erst mit dem nächsten CI-Lauf bestätigt.
 
+### CI #15 (Commit `89d0f98`): TypeScript-Testfehler (behoben)
+
+Nach der CI-#14-Korrektur (s.o.) und Push von Commit `89d0f98` lief CI
+weiter als zuvor – Prisma Client generieren/validieren war jetzt
+erfolgreich, was den CI-#14-Fix bestätigt –, schlug aber in einem
+späteren Schritt (TypeScript-Kompilierung der Testdateien) mit folgendem
+Fehler fehl:
+
+```
+error TS2353: Object literal may only specify known properties, and 'name'
+does not exist in type 'QuestionnaireUncheckedCreateInput' ...
+tests/integration/recommendation-engine.test.ts:105
+```
+
+Ursache: Die Test-Hilfsfunktion `createQuestionnaire()` in
+`tests/integration/recommendation-engine.test.ts` übergab an
+`rawClient.questionnaire.create()` ein Feld `name`, das im
+`Questionnaire`-Modell nicht existiert (`schema.prisma` definiert dort nur
+`id`, `tenantId`, `key`, `createdAt`). Dieser Fehler war – aus demselben
+Sandbox-Grund wie CI #14 – in dieser Sitzung vor dem Push nicht sichtbar:
+ohne erfolgreichen `prisma generate`-Lauf existieren lokal keine
+generierten Client-Typen, gegen die `tsc --noEmit` die Objektform von
+`.create()`-Aufrufen prüfen könnte; lokal erscheint nur die generische
+"Cannot find module '@prisma/client'"-Fehlerkaskade, nicht der spezifische
+Feld-Fehler.
+
+Behoben durch Entfernen des fehlerhaften `name`-Felds aus dem
+`data`-Objekt (Commit `3805af6`). Zur Absicherung wurden alle übrigen
+`name:`-Feldverwendungen in derselben Testdatei (Provider,
+ProductCategory, Product, CommissionModel) gegen die jeweiligen
+`schema.prisma`-Modelle geprüft – dort ist `name` jeweils ein legitimes
+Feld, keine weiteren Fehler gefunden.
+
+CI-Lauf #16 (Commit `3805af6`) war erfolgreich (grüner Durchlauf, ca. 1m
+36s) und gilt als abschließende Bestätigung, dass Phase 3B vollständig
+gegen einen echten, generierten `@prisma/client` sowie eine echte
+Postgres-Service-Instanz besteht.
+
 ### Bekannte, bewusst offen gelassene Testlücke
 
 Der `RecommendationConsistencyError`-Zweig (P2002-Konflikt beim
