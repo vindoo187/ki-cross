@@ -6,30 +6,34 @@ müssen (Vorgabe aus der NO-GO-Rückmeldung zu einer früheren Fassung des
 Phase-3A-Berichts, hier von Anfang an eingehalten).
 
 Repository: `https://github.com/vindoo187/ki-cross`, Branch `main`.
-**Zwei zu unterscheidende Commit-/CI-Stände:**
 
-- **Implementierungs-Commit `3805af6`** — der gesamte Code-, Migrations-
-  und Testinhalt dieser Phase (Schema, Service-Schicht, Tests, Skripte).
-  Historie: `106b2da` (Implementierung) → CI-Lauf #13 fehlgeschlagen
-  (Prisma-Schema-Validierungsfehler P1012) → `89d0f98` (Fix CI #13/#14) →
-  CI-Lauf #15 fehlgeschlagen (TypeScript-Kompilierungsfehler in einer
-  Testdatei) → `3805af6` (Fix CI #15) → **CI-Lauf #16: Success**. Beide
-  Fehler und ihre Behebung sind in Abschnitt 13 vollständig dokumentiert.
-  Dieser Commit ist die inhaltliche/technische Grundlage dieses gesamten
-  Berichts (alle Code-Fakten, Testzahlen, Dateilisten in Abschnitt 12
-  beziehen sich auf diesen Stand).
-- **Korrigierter Berichts-Commit `593f938`** — ausschließlich eine
-  redaktionelle Korrektur von _`docs/ABSCHLUSSBERICHT_PHASE3B.md`_ selbst
-  (Behebung der vorherigen ChatGPT-NO-GO-Punkte: Append-only-Tabellenzahl,
-  Testzahlen-Trennung, Upgrade-Test-Beleg), **ohne Code-/Migrations-
-  /Teständerung**. Bestätigt durch **CI-Lauf #17: Success** (derselbe
-  CI-Workflow läuft bei jedem Push, auch bei reinen Doku-Commits, und
-  bestätigt damit erneut den unveränderten, weiterhin grünen Code-Stand
-  auf `main`).
+**Zu unterscheiden: Implementierungs-Commit vs. Berichts-Commits.** Weil
+dieser Bericht selbst eine versionierte Datei im Repository ist
+(`docs/ABSCHLUSSBERICHT_PHASE3B.md`), ändert jede redaktionelle Korrektur
+an ihm den `HEAD` von `main` erneut — ein einzelner, fest im Fließtext
+genannter „aktueller HEAD" würde direkt mit dem nächsten Push wieder
+veralten. Deshalb wird hier stattdessen der vollständige, nachvollziehbare
+Verlauf aller relevanten Commits seit Beginn dieser Phase tabellarisch
+geführt; der tatsächlich aktuelle `HEAD` ist immer der zeitlich letzte
+Eintrag dieser Tabelle:
 
-`HEAD` von `main` ist aktuell `593f938`; der darin enthaltene Code-/
-Skriptstand ist identisch zu `3805af6` (nur die Berichtsdatei wurde
-geändert).
+| Commit    | Inhalt                                                                                                                                                                   | CI-Lauf | CI-Ergebnis                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-----: | ---------------------------------------------------------------------------------------------------- |
+| `106b2da` | Implementierung Phase 3B (Schema, Service-Schicht, Tests, Skripte)                                                                                                       |   #14   | Fehlgeschlagen (FK-Constraint-Namenskollision)                                                       |
+| `89d0f98` | Fix CI #14                                                                                                                                                               |   #15   | Fehlgeschlagen (unbekanntes Feld `name` in `Questionnaire.create()`)                                 |
+| `3805af6` | Fix CI #15 — **Implementierungs-Commit**, letzter Commit mit Code-/Migrations-/Testinhalt dieser Phase                                                                   |   #16   | **Success**                                                                                          |
+| `593f938` | Berichtskorrektur 1 (frühere ChatGPT-NO-GO-Punkte behoben: Append-only-Tabellenzahl, Testzahlen-Trennung, Upgrade-Test-Beleg) — reine Doku-Änderung, kein Code betroffen |   #17   | **Success**                                                                                          |
+| `d34dbd0` | Berichtskorrektur 2 (Implementierungs-/Berichts-Commit-Unterscheidung in Abschnitt 11/12/15 ergänzt) — reine Doku-Änderung                                               |   #18   | Fehlgeschlagen (Prettier-Formatierungsfehler in der Berichtsdatei selbst, keine inhaltliche Ursache) |
+| `8e3552f` | Fix CI #18 (Prettier-Formatierung), inhaltlich identisch zu `d34dbd0`                                                                                                    |   #19   | **Success**                                                                                          |
+
+Alle Commits ab `593f938` sind reine Berichtskorrekturen ohne
+Code-/Migrations-/Teständerung; der CI-Workflow läuft dennoch bei jedem
+Push (auch bei Doku-only-Commits) vollständig durch und bestätigt damit
+jeweils erneut den unveränderten, weiterhin grünen Code-Stand. Für die
+inhaltliche/technische Substanz dieses Berichts (Code-Fakten, Testzahlen,
+Dateilisten in Abschnitt 12) ist ausschließlich der **Implementierungs-
+Commit `3805af6`** maßgeblich — dieser ändert sich durch nachfolgende
+Berichtskorrekturen nicht.
 
 ## 1. Technische Versionen
 
@@ -434,7 +438,9 @@ per Code-Review behauptet):
 | `npx tsc --noEmit`                                                              |            1             | 38 Fehler, ausnahmslos auf die bekannte Sandbox-Einschränkung zurückführbar (11 Wurzelursache-Fehler "Cannot find module '@prisma/client'", Rest daraus kaskadierende `implicit any`/`unknown`-Folgefehler) — keine neuen Logikfehler (siehe Abschnitt 13)                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | CI-Lauf #16 (Commit `3805af6`), Schritt „Integrationstests (echte Postgres-DB)" |       0 (Success)        | `npm run test:integration` → vitest: **Test Files 3 passed (3)**, **Tests 35 passed (35)** — `tests/integration/tenant-isolation.test.ts` (6 Tests, 409ms), `tests/integration/questionnaire-engine.test.ts` (17 Tests, 1040ms), `tests/integration/recommendation-engine.test.ts` (12 Tests, 998ms, **neu in Phase 3B**); Gesamtdauer 1,64s                                                                                                                                                                                                                                                                                                                                                                                 |
 | CI-Lauf #16 (Commit `3805af6`), Gesamtjob `build-and-test`                      | Success (GitHub Actions) | 1m 27s, vollständiger Durchlauf inkl. `prisma generate`, `prisma migrate deploy` gegen echte Postgres-Service-Instanz, Lint/Format/Typecheck/Unit-Tests/Integrationstests (s. o.)/`npm run build` — abschließende Bestätigung, dass diese Phase auch außerhalb der Sandbox vollständig besteht                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| CI-Lauf #17 (Commit `593f938`), Gesamtjob `build-and-test`                      | Success (GitHub Actions) | 1m 31s. Dieser Commit enthält **ausschließlich** eine redaktionelle Korrektur von `docs/ABSCHLUSSBERICHT_PHASE3B.md` selbst (keine Code-/Migrations-/Teständerung). CI-Lauf #17 bestätigt damit erneut denselben, unveränderten grünen Code-Stand (identisch zu CI-Lauf #16) — dient als unabhängiger Beleg, dass der aktuelle `HEAD` von `main` weiterhin vollständig besteht                                                                                                                                                                                                                                                                                                                                               |
+| CI-Lauf #17 (Commit `593f938`), Gesamtjob `build-and-test`                      | Success (GitHub Actions) | 1m 31s. Reine Berichtskorrektur (siehe Einleitungstabelle), keine Code-/Migrations-/Teständerung. Bestätigt erneut denselben, unveränderten grünen Code-Stand (identisch zu CI-Lauf #16)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| CI-Lauf #18 (Commit `d34dbd0`), Gesamtjob `build-and-test`                      | Failure (GitHub Actions) | 59s. Fehlgeschlagen am Schritt „Formatierung prüfen (Prettier)": Formatierungsabweichung ausschließlich in `docs/ABSCHLUSSBERICHT_PHASE3B.md` selbst (keine inhaltliche/Logik-Ursache, kein Code betroffen). Transparent dokumentiert statt verschwiegen, siehe Einleitungstabelle                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| CI-Lauf #19 (Commit `8e3552f`), Gesamtjob `build-and-test`                      | Success (GitHub Actions) | 1m 44s. Behebt ausschließlich die Prettier-Formatierung aus CI-Lauf #18 (inhaltlich identisch zu `d34dbd0`), keine Code-/Migrations-/Teständerung. Aktueller `HEAD` von `main` zum Zeitpunkt dieses Berichtsstands                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ## 12. Vollständige Liste erstellter und geänderter Dateien
 
@@ -617,17 +623,19 @@ behoben und durch einen erneuten grünen CI-Lauf bestätigt — keiner davon
 deutete auf einen Fachlogikfehler hin, beide waren Instanzen derselben
 bereits bekannten Sandbox-Einschränkung (kein lokaler `prisma generate`).
 
-**b) Bestätigung des korrigierten Berichtsstands — CI-Lauf #17, Commit
-`593f938`:** Der vorliegende Bericht wurde nach vorheriger Rückmeldung
-redaktionell korrigiert (Append-only-Tabellenzahl, Testzahlen-Trennung,
-Upgrade-Test-Beleg, sowie die in dieser Fassung ergänzte Unterscheidung
-Implementierungs-/Berichts-Commit). Dieser Korrektur-Commit `593f938`
-enthält ausschließlich Änderungen an `docs/ABSCHLUSSBERICHT_PHASE3B.md`
-und keinerlei Code-/Migrations-/Teständerung. CI-Lauf #17 bestätigt, dass
-derselbe grüne Code-Stand (identisch zu `3805af6`) auch nach diesem
-Doku-Commit unverändert vollständig besteht. `593f938` ist der aktuelle
-`HEAD` von `main` und damit der Commit, den dieser Bericht in seiner
-jetzigen Fassung beschreibt.
+**b) Bestätigung des korrigierten Berichtsstands:** Der vorliegende Bericht
+wurde nach vorheriger Rückmeldung mehrfach redaktionell korrigiert
+(Append-only-Tabellenzahl, Testzahlen-Trennung, Upgrade-Test-Beleg,
+Implementierungs-/Berichts-Commit-Unterscheidung, Prettier-Formatierung).
+Alle diese Korrektur-Commits sind vollständig in der Tabelle in der
+Einleitung dokumentiert und enthalten ausschließlich Änderungen an
+`docs/ABSCHLUSSBERICHT_PHASE3B.md` — keinerlei Code-/Migrations-/
+Teständerung. Jeder zugehörige CI-Lauf mit Ergebnis „Success" bestätigt
+erneut denselben grünen Code-Stand (identisch zu `3805af6`); der einzige
+Fehlschlag (CI-Lauf #18) betraf ausschließlich Formatierung und ist
+transparent dokumentiert und behoben (CI-Lauf #19). Maßgeblich ist stets
+der zeitlich letzte Eintrag der Einleitungstabelle mit Ergebnis „Success"
+als aktueller `HEAD` von `main`.
 
 Endgültige Freigabe obliegt wie in den Vorphasen dem Projektleiter
 (ChatGPT) und dem Auftraggeber.
