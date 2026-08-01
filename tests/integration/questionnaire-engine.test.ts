@@ -262,10 +262,10 @@ describe.skipIf(!hasDatabaseUrl)("Fragen-Engine (Integrationstest, echte Postgre
   });
 
   afterAll(async () => {
-    await rawClient.analyticsEvent.deleteMany({
-      where: { tenantId: { in: [tenantAId, tenantBId] } },
-    });
-    await rawClient.auditLog.deleteMany({ where: { tenantId: { in: [tenantAId, tenantBId] } } });
+    // analyticsEvent und auditLog werden hier bewusst NICHT geloescht: beide Tabellen
+    // sind per DB-Trigger append-only (Phase 3A Task 30), DELETE ist dort verboten.
+    // Die tenant-gescopten Testzeilen (mit zufaelligem Suffix pro Testlauf) zu behalten
+    // ist unkritisch und entspricht dem Append-only-Design.
     await rawClient.customerAnswer.deleteMany({ where: { tenantId: tenantAId } });
     await rawClient.consultationSession.deleteMany({ where: { tenantId: tenantAId } });
     await rawClient.visibilityCondition.deleteMany({ where: { tenantId: tenantAId } });
@@ -496,7 +496,9 @@ describe.skipIf(!hasDatabaseUrl)("Fragen-Engine (Integrationstest, echte Postgre
   // --- 28: strukturell falscher Operator/ungueltige Referenz wird bei der Versionsvalidierung abgelehnt ---
   it("28: validateQuestionnaireVersion lehnt eine Bedingung mit unzulaessigem Operator fuer den Zieltyp ab", async () => {
     // V1 selbst ist strukturell gueltig.
-    await expect(validateQuestionnaireVersion(questionnaireVersionId)).resolves.toBeUndefined();
+    await expect(
+      asTenantA(() => validateQuestionnaireVersion(questionnaireVersionId)),
+    ).resolves.toBeUndefined();
 
     // Eigene, isolierte Fragebogenversion mit einer strukturell ungueltigen Bedingung
     // (GREATER_THAN auf eine SINGLE_CHOICE-Zielfrage ist nicht zulaessig).
@@ -570,7 +572,7 @@ describe.skipIf(!hasDatabaseUrl)("Fragen-Engine (Integrationstest, echte Postgre
       },
     });
 
-    await expect(validateQuestionnaireVersion(invalidVersion.id)).rejects.toThrow(
+    await expect(asTenantA(() => validateQuestionnaireVersion(invalidVersion.id))).rejects.toThrow(
       QuestionnaireVersionInvalidError,
     );
 
