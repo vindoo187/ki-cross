@@ -68,6 +68,7 @@ import type { ConsultationSession } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { db } from "../db/client";
 import type { ScopedPrismaClient } from "../tenant/scoped-client";
+import { getTenantId } from "../tenant/context";
 import { compareDecimalStrings } from "./decimal";
 import {
   AnswerAlreadyExistsError,
@@ -416,6 +417,7 @@ function pathVisibilityChanged(
 }
 
 function buildCustomerAnswerCreateData(
+  tenantId: string,
   consultationSessionId: string,
   questionVersionId: string,
   answerType: AnswerType,
@@ -424,6 +426,7 @@ function buildCustomerAnswerCreateData(
   answeredAt: Date,
 ) {
   return {
+    tenantId,
     consultationSessionId,
     questionVersionId,
     answerType,
@@ -528,6 +531,7 @@ export async function startQuestionnaire(
   input: StartQuestionnaireInput,
 ): Promise<QuestionnaireState> {
   const atTime = input.at ?? new Date();
+  const tenantId = getTenantId();
 
   return db.$transaction(async (tx) => {
     const questionnaire = await tx.questionnaire.findFirst({
@@ -552,6 +556,7 @@ export async function startQuestionnaire(
 
     const session = await tx.consultationSession.create({
       data: {
+        tenantId,
         storeId: input.storeId,
         employeeId: input.employeeId,
         customerReferenceId: input.customerReferenceId ?? null,
@@ -564,6 +569,7 @@ export async function startQuestionnaire(
 
     await tx.analyticsEvent.create({
       data: {
+        tenantId,
         storeId: input.storeId,
         employeeId: input.employeeId,
         eventType: "QUESTIONNAIRE_STARTED",
@@ -594,6 +600,7 @@ export async function loadQuestionnaireState(
 export async function saveAnswer(input: SaveAnswerInput): Promise<AnswerWriteResult> {
   const session = await requireSession(input.consultationSessionId);
   assertSessionModifiable(session);
+  const tenantId = getTenantId();
 
   const atTime: Date = session.startedAt;
   const nodes = await loadQuestionNodesAtTime(db, session.questionnaireVersionId, atTime);
@@ -621,6 +628,7 @@ export async function saveAnswer(input: SaveAnswerInput): Promise<AnswerWriteRes
     try {
       await tx.customerAnswer.create({
         data: buildCustomerAnswerCreateData(
+          tenantId,
           session.id,
           node.activeVersion.id,
           node.activeVersion.answerType,
@@ -643,6 +651,7 @@ export async function saveAnswer(input: SaveAnswerInput): Promise<AnswerWriteRes
 
     await tx.analyticsEvent.create({
       data: {
+        tenantId,
         storeId: session.storeId,
         employeeId: session.employeeId,
         eventType: "QUESTION_ANSWERED",
@@ -658,6 +667,7 @@ export async function saveAnswer(input: SaveAnswerInput): Promise<AnswerWriteRes
     if (pathVisibilityChanged(pathBefore, pathAfter)) {
       await tx.analyticsEvent.create({
         data: {
+          tenantId,
           storeId: session.storeId,
           employeeId: session.employeeId,
           eventType: "PATH_RECALCULATED",
@@ -680,6 +690,7 @@ export async function saveAnswer(input: SaveAnswerInput): Promise<AnswerWriteRes
 export async function changeAnswer(input: ChangeAnswerInput): Promise<AnswerWriteResult> {
   const session = await requireSession(input.consultationSessionId);
   assertSessionModifiable(session);
+  const tenantId = getTenantId();
 
   const atTime: Date = session.startedAt;
   const nodes = await loadQuestionNodesAtTime(db, session.questionnaireVersionId, atTime);
@@ -717,6 +728,7 @@ export async function changeAnswer(input: ChangeAnswerInput): Promise<AnswerWrit
     if (willHaveValue) {
       await tx.customerAnswer.create({
         data: buildCustomerAnswerCreateData(
+          tenantId,
           session.id,
           node.activeVersion.id,
           node.activeVersion.answerType,
@@ -734,6 +746,7 @@ export async function changeAnswer(input: ChangeAnswerInput): Promise<AnswerWrit
 
     await tx.analyticsEvent.create({
       data: {
+        tenantId,
         storeId: session.storeId,
         employeeId: session.employeeId,
         eventType: "ANSWER_CHANGED",
@@ -749,6 +762,7 @@ export async function changeAnswer(input: ChangeAnswerInput): Promise<AnswerWrit
     if (pathVisibilityChanged(pathBefore, pathAfter)) {
       await tx.analyticsEvent.create({
         data: {
+          tenantId,
           storeId: session.storeId,
           employeeId: session.employeeId,
           eventType: "PATH_RECALCULATED",
@@ -803,6 +817,7 @@ export async function completeQuestionnaire(
 ): Promise<CompleteQuestionnaireResult> {
   const session = await requireSession(consultationSessionId);
   assertSessionModifiable(session);
+  const tenantId = getTenantId();
 
   const atTime: Date = session.startedAt;
   const nodes = await loadQuestionNodesAtTime(db, session.questionnaireVersionId, atTime);
@@ -830,6 +845,7 @@ export async function completeQuestionnaire(
 
     await tx.analyticsEvent.create({
       data: {
+        tenantId,
         storeId: session.storeId,
         employeeId: session.employeeId,
         eventType: "QUESTIONNAIRE_COMPLETED",
@@ -845,6 +861,7 @@ export async function completeQuestionnaire(
 
     await tx.auditLog.create({
       data: {
+        tenantId,
         action: "UPDATE",
         entityType: "ConsultationSession",
         entityId: session.id,
