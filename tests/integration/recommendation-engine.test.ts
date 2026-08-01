@@ -102,7 +102,7 @@ describe.skipIf(!hasDatabaseUrl)("Empfehlungs-Engine (Integrationstest, echte Po
     isRequired: boolean,
   ) {
     const questionnaire = await rawClient.questionnaire.create({
-      data: { tenantId, key: `${key}-${suffix}`, name: `Fragebogen ${key}` },
+      data: { tenantId, key: `${key}-${suffix}` },
     });
     const version = await rawClient.questionnaireVersion.create({
       data: {
