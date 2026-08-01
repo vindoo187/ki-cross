@@ -86,10 +86,61 @@ Frageformulierung oder -grenzen reproduzierbar (siehe
 beim Beratungsstart").
 
 Die in Phase 1 skizzierte `RuleSetVersion` (`EligibilityRule`/
-`ExclusionRule`/`PrioritizationRule`) ist **nicht** Teil der Fragen-Engine
-und noch nicht implementiert; sie gehört zur späteren Empfehlungs-Engine
-(siehe [RECOMMENDATION_ENGINE.md](RECOMMENDATION_ENGINE.md) und den
-Ausschluss-Abschnitt in [QUESTION_ENGINE.md](QUESTION_ENGINE.md)).
+`ExclusionRule`/`PrioritizationRule`) war **nicht** Teil der Fragen-Engine
+(Phase 3A); sie ist seit Phase 3B implementiert und gehört zur
+Empfehlungs-Engine (siehe unten, [RECOMMENDATION_ENGINE.md](RECOMMENDATION_ENGINE.md)
+und den Ausschluss-Abschnitt in [QUESTION_ENGINE.md](QUESTION_ENGINE.md)).
+
+## Regelwerk und Empfehlungen (seit Phase 3B implementiert)
+
+```
+RuleSetVersion (tenant, validFrom/validTo, status DRAFT/ACTIVE/EXPIRED/ARCHIVED)
+ -- höchstens eine ACTIVE Version je Tenant zu jedem Zeitpunkt
+ -- (PostgreSQL EXCLUDE USING gist Constraint)
+ ├─ EligibilityRule (isRequired, fitWeight) ── RuleCondition[]
+ ├─ ExclusionRule (reasonCode, eindeutig je RuleSetVersion) ── RuleCondition[]
+ ├─ PrioritizationRule (weight, commissionRequired) ── RuleCondition[]
+ └─ CrossSellingRule (needType, priority) ── RuleCondition[]
+
+RuleCondition (identische Struktur für alle vier Regeltypen)
+ ├─ groupIndex, sourceType (ANSWER | PRODUCT_ATTRIBUTE | SESSION_ATTRIBUTE)
+ ├─ questionId (bei ANSWER) | attributeKey (bei PRODUCT_/SESSION_ATTRIBUTE)
+ └─ operator (VisibilityOperator, wiederverwendet aus der Fragen-Engine), comparisonValue
+
+Recommendation (append-only, ein Lauf je Fingerprint-Treffer)
+ ├─ consultationSessionId, ruleSetVersionId, algorithmVersion
+ ├─ evaluationFingerprint (SHA-256, Idempotenzschlüssel)
+ ├─ inputDataCompletenessScore (Snapshot zum Auswertungszeitpunkt)
+ ├─ RecommendationItem[] (append-only)
+ │   ├─ productVersionId, eligibilityPassed, exclusionReasonCodes[]
+ │   ├─ customerFitScore, businessPriorityScore, priorityRank
+ │   └─ RecommendationRationale[] (append-only)
+ │       ├─ factorKey, factorValue (strukturiertes JSON)
+ │       └─ commissionModelVersionId?, commissionValueMinor?
+ │           -- Provisions-Pinning liegt ausschließlich hier, nicht auf
+ │           -- RecommendationItem (siehe DECISION_LOG.md, Phase 3B)
+ └─ RecommendationCrossSellingSignal[] (append-only)
+     └─ needType, reasonCode, justificationParams, priority
+
+SalesOpportunity (mutable, bewusst NICHT append-only)
+ -- kann aus einem RecommendationCrossSellingSignal (source=RULE_BASED,
+ -- triggerSignalId gesetzt) oder manuell durch Mitarbeitende
+ -- (source=EMPLOYEE_MARKED, triggerSignalId=null) entstehen
+```
+
+**Attribute-Registry:** `PRODUCT_ATTRIBUTE`/`SESSION_ATTRIBUTE`-Werte
+(z. B. `dataVolumeGb`, `hasEuRoaming`, `pricePlanTier`,
+`contractCommitmentMonths`, `consultationType`) werden über eine
+geschlossene, im Code gepflegte Registry typisiert und geparst — keine
+Laufzeit-Konfiguration neuer Attributschlüssel ohne Code-Änderung
+(bewusste Einschränkung, siehe [DECISION_LOG.md](DECISION_LOG.md)).
+
+**Append-only-Umfang (Phase 3B):** Genau fünf Tabellen tragen den
+`forbid_update_delete()`-DB-Trigger: `recommendations`,
+`recommendation_items`, `recommendation_rationales`,
+`recommendation_outcomes`, `recommendation_cross_selling_signals`.
+`sales_opportunities` ist bewusst ausgenommen und bleibt veränderlich, da
+sie den laufenden Vertriebs-Workflow abbildet.
 
 ## Beratungssitzung (Kernprozess)
 
@@ -109,10 +160,9 @@ ConsultationSession
      └─ answered_at
      -- (kein direkter Klarname-Zwang – siehe Datensparsamkeit in PRIVACY_AND_SECURITY.md)
 
-Recommendation
- ├─ session_id
- ├─ product_version_id, commission_model_version_id
- ├─ eligibility_score, priority_score, rationale (strukturiert, nicht nur Freitext)
+Recommendation (je Auswertungslauf; vollständiges, seit Phase 3B
+implementiertes Schema mit RecommendationItem/RecommendationRationale
+siehe Abschnitt "Regelwerk und Empfehlungen" oben)
  └─ RecommendationOutcome (angenommen / abgelehnt / geändert / ignoriert)
      └─ rejection_reason (aus fester Liste + optional Freitext)
 
@@ -159,10 +209,12 @@ Jede Änderung an `Question`, `RuleSet`, `Campaign`, `ProductVersion`, `Commissi
 Tenant 1─n Company 1─n Store 1─n Employee
 Tenant 1─n Provider 1─n ProductCategory 1─n Product 1─n ProductVersion 1─n CommissionModelVersion
 Tenant 1─n QuestionnaireVersion 1─n Question 1─n AnswerOption
-Tenant 1─n RuleSetVersion 1─n (EligibilityRule|ExclusionRule|PrioritizationRule)
+Tenant 1─n RuleSetVersion 1─n (EligibilityRule|ExclusionRule|PrioritizationRule|CrossSellingRule)
 Store 1─n Employee 1─n ConsultationSession
 ConsultationSession 1─n CustomerAnswer
 ConsultationSession 1─n Recommendation 1─1 RecommendationOutcome
+Recommendation 1─n RecommendationItem 1─n RecommendationRationale
+Recommendation 1─n RecommendationCrossSellingSignal 0─1 SalesOpportunity (mutable)
 ConsultationSession 0─1 Deal
 Tenant 1─n Campaign, AnalyticsEvent, BaselineMeasurement
 alle Entitäten → AuditLog (bei Änderung)

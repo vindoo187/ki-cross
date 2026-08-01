@@ -363,3 +363,125 @@ Empfehlungslogik auf) würde die Abnahme dieser Phase erschweren und die
 spätere Empfehlungs-Engine an Annahmen binden, die noch nicht mit dem
 Projektleiter abgestimmt sind. Verifiziert in
 `tests/integration/questionnaire-engine.test.ts`, Fall 25.
+
+## Phase 3B: Idempotenz-Fingerprint verwendet `answerId`, nicht `questionId`
+
+**Entscheidung:** `computeEvaluationFingerprint()`
+(`src/server/recommendation/fingerprint.ts`) kanonisiert `answers` je
+`CustomerAnswer.id` (`answerId`), nicht je `QuestionVersion`/`Question`-ID.
+Antwortwerte werden dabei strikt gemäß `QuestionVersion.answerType` über
+`canonicalizeAnswerValue()` normalisiert (BOOLEAN → `true`/`false`,
+INTEGER/DECIMAL → normalisierter String, SINGLE_CHOICE → erster Wert,
+MULTIPLE_CHOICE → sortiertes Array, DATE → Rohwert, SHORT_TEXT → wirft
+einen Fehler, da Freitext laut Phase 3A für Bedingungen/Fingerprints
+verboten ist) statt über die Attribute-Registry.
+
+**Warum:** Der Fingerprint muss exakt die Datensätze widerspiegeln, die
+tatsächlich in die Auswertung eingeflossen sind. `answerId` identifiziert
+eine konkrete, unveränderliche `CustomerAnswer`-Zeile (append-only seit
+Phase 3A); eine Kanonisierung über `questionId` würde bei einer
+Antwortänderung (neue `CustomerAnswer`-Zeile, alte auf `isActive = false`)
+denselben Fingerprint-Schlüssel wiederverwenden und könnte so eine
+tatsächlich geänderte Antwort mit dem alten Fingerprint verwechseln. Die
+Attribute-Registry wurde bewusst nicht wiederverwendet (Korrekturpunkt 2,
+Revision 3.2), weil Antworten keine Attribute sind — Attribute gelten für
+`ProductVersion`/`ConsultationSession`, während Antworten über ihren
+eigenen `AnswerType` bereits typisiert sind; eine zusätzliche
+Registry-Zuordnung hätte nur eine parallele, potenziell abweichende
+Typisierung geschaffen.
+
+## Phase 3B: `CommissionModelVersion`-Tie-Break bei mehreren gültigen Versionen
+
+**Entscheidung:** `buildResolveCommission()` (`service.ts`) wählt bei
+mehreren zum Auswertungszeitpunkt gültigen `CommissionModelVersion`-Zeilen
+für dasselbe `productId` (das Schema erzwingt hierfür keine Eindeutigkeit)
+deterministisch die Zeile mit der lexikographisch kleinsten `id`.
+
+**Warum:** Der reguläre Fall ist genau eine gültige Version je Produkt zum
+Zeitpunkt X (analog zum `RuleSetVersion`-`EXCLUDE`-Constraint, der dies für
+Regelsets bereits auf DB-Ebene erzwingt); für `CommissionModelVersion`
+existiert bewusst kein äquivalenter DB-Constraint (Provisionsmodelle können
+sich pro Produkt aus fachlichen Gründen zeitlich überschneiden, z. B.
+Sonderaktionen). Damit die Fingerprint-Berechnung und die tatsächliche
+Provisionsauflösung trotzdem reproduzierbar bleiben, braucht es einen
+festen, dokumentierten Tie-Break statt eines von der Abfragereihenfolge der
+Datenbank abhängigen "ersten Treffers". Lexikographisch kleinste `id` ist
+willkürlich, aber stabil und ohne zusätzliches Sortierfeld umsetzbar.
+
+## Phase 3B: `commissionModelVersionId`-Pinning ausschließlich auf `RecommendationRationale`
+
+**Entscheidung:** `RecommendationItem` besitzt **kein**
+`commissionModelVersionId`-Feld. Das Pinning existiert ausschließlich auf
+`RecommendationRationale.commissionModelVersionId` (nullable, `null` für
+nicht provisionsbasierte Rationale-Zeilen), zusammen mit dem numerischen
+Snapshot `commissionValueMinor: Int?`.
+
+**Warum:** Ein einzelnes `RecommendationItem` kann mehrere
+provisionsbasierte `RecommendationRationale`-Beiträge mit potenziell
+unterschiedlichen `CommissionModelVersion`-Pins haben (mehrere
+`PrioritizationRule`-Treffer mit `commissionRequired = true`). Eine frühere
+Planungsrevision (3.1) hatte zusätzlich ein Item-weites Feld vorgesehen und
+für den Mehrdeutigkeitsfall eine Konvention ("zuletzt ausgewertete bzw.
+gewichtsstärkste Regel") definiert – vom Projektleiter (ChatGPT) als
+fachlich nicht eindeutig zurückgewiesen ("zuletzt ausgewertet" und
+"gewichtsstärkste" sind zwei unterschiedliche Regeln). Ein denormalisiertes
+Item-Feld würde eine fachlich nicht existierende Eindeutigkeit vortäuschen.
+Braucht eine spätere Oberfläche eine Item-weite Übersicht, wird sie zur
+Lesezeit über eine `DISTINCT`-Abfrage der zugehörigen
+`RecommendationRationale`-Zeilen gebildet, nicht als gespeicherter
+Einzelwert. Siehe `PHASE_3B_IMPLEMENTATION_PLAN.md`, Abschnitt 3.8.
+
+## Phase 3B: Integrationstest-Fixture mit einer gemeinsamen "rec-a"-Basis statt Fixture pro Testfall
+
+**Entscheidung:** `tests/integration/recommendation-engine.test.ts` baut in
+`beforeAll` einen einzigen, umfangreichen Tenant-Fixture ("rec-a": zwei
+Produkte BASIC/PREMIUM, ein vollständiges Regelset mit allen vier
+Regeltypen) auf, den die meisten Positivfälle (vollständige Auswertung,
+Idempotenz, Nebenläufigkeit, Ausschluss, Cross-Selling) gemeinsam nutzen.
+Nur die vier Negativfälle, die jeweils eine ganz bestimmte, frühe
+Abbruchbedingung isolieren sollen (`InsufficientAnswerDataError`,
+`RuleSetNotConfiguredError`, `NoValidProductVersionError`, sowie
+`SessionNotEvaluableError` auf einer `COMPLETED`-Session der "rec-a"-Basis),
+bekommen eigene, bewusst minimale Tenant-Fixtures.
+
+**Warum:** `evaluate()` prüft mehrere Vorbedingungen in fester Reihenfolge
+(siehe Abschnitt 5 des Implementierungsplans); ein Test, der z. B.
+`InsufficientAnswerDataError` prüfen will, darf kein RuleSet und keine
+Produkte anlegen müssen, weil diese Prüfung ohnehin vor jeder RuleSet-/
+Produktauflösung greift – ein vollständiges Fixture hätte hier nur
+unnötigen Testaufwand ohne zusätzlichen Aussagewert erzeugt. Umgekehrt
+vermeidet die gemeinsame "rec-a"-Basis für die Positivfälle Duplikation von
+Regel-/Produktaufbau über sechs Testfälle hinweg. Analog zum
+"rec-a"/"rec-b"-Muster aus `tests/integration/questionnaire-engine.test.ts`
+(Tenant-Isolationstest).
+
+## Phase 3B: P2002-Recovery-Zweig ohne Nebenläufigkeitssimulation getestet
+
+**Entscheidung:** Der Recovery-Zweig in `evaluate()` (bei einer
+`P2002`-Unique-Constraint-Verletzung auf
+`(consultationSessionId, evaluationFingerprint)` wird erneut per `SELECT`
+nach einer bereits existierenden `Recommendation` gesucht; wird sie
+gefunden, wird sie zurückgegeben, sonst `RecommendationConsistencyError`
+geworfen) wird im Integrationstest über **echte** Nebenläufigkeit
+(`Promise.all()` mit zwei parallelen `evaluate()`-Aufrufen auf derselben
+Session) geprüft, nicht über eine künstlich injizierte, deterministisch
+ausgelöste `P2002`-Fehlersimulation.
+
+**Warum:** Eine deterministische Simulation (z. B. Mocken des
+Prisma-Clients, um bei einem gezielten Aufruf einen `P2002`-Fehler
+zurückzugeben) hätte den Produktionscode um Testbarkeits-Seams erweitern
+müssen, die außerhalb von Tests keinen Zweck haben. Da eine echte
+Postgres-Instanz (CI-Service-Container) zur Verfügung steht, prüft der
+`Promise.all()`-Ansatz denselben Codepfad unter realistischeren
+Bedingungen: beide parallelen Aufrufe erzeugen denselben Fingerprint, genau
+einer gewinnt den `INSERT`, der andere durchläuft den echten
+`P2002`-Recovery-Zweig der Datenbank. Der Test prüft dabei nur das
+beobachtbare Ergebnis (ein Datensatz, beide Aufrufe liefern dieselbe
+`Recommendation`-ID), nicht den internen Kontrollfluss – der reine
+Fehlerfall "P2002, aber Retry-`SELECT` findet nichts"
+(`RecommendationConsistencyError`) bleibt dadurch ungetestet und ist als
+bekannte Lücke dokumentiert (siehe `PHASE_3B_IMPLEMENTATION_PLAN.md`,
+Abschnitt 11 – ein solcher Zustand deutet laut Planung auf Datenkorruption
+oder einen Fingerprint-Berechnungsfehler hin, nicht auf ein reguläres
+Race-Verhalten, und lässt sich ohne Test-Seam im Produktionscode nicht
+gezielt provozieren).

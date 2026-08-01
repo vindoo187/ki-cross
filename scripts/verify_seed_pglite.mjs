@@ -1,12 +1,27 @@
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 
 const db = new PGlite({ extensions: { btree_gist } });
 const migrationSql = fs.readFileSync("prisma/migrations/20260731000000_init/migration.sql", "utf8");
+// Phase 3B: seed.ts (und damit dieser Spiegel) laeuft gegen den vollen
+// Migrationsstand, nicht nur gegen 20260731000000_init.
+const restrictSql = fs.readFileSync(
+  "prisma/migrations/20260801095926_analytics_events_employee_restrict/migration.sql",
+  "utf8",
+);
+const phase3bSql = fs.readFileSync(
+  "prisma/migrations/20260801130000_recommendation_engine/migration.sql",
+  "utf8",
+);
 
 function uuid() {
   return crypto.randomUUID();
+}
+
+function seedFingerprint(...parts) {
+  return createHash("sha256").update(parts.join("|")).digest("hex");
 }
 
 async function q(sql, params = []) {
@@ -27,9 +42,11 @@ async function expectRejected(label, fn) {
 }
 
 async function main() {
-  console.log("== 1) Migration ausfuehren ==");
+  console.log("== 1) Migrationen ausfuehren (init -> restrict -> recommendation_engine) ==");
   await db.exec(migrationSql);
-  console.log("Migration OK");
+  await db.exec(restrictSql);
+  await db.exec(phase3bSql);
+  console.log("Migrationen OK");
 
   console.log("== 2) Globaler Katalog (Provider, Permissions) ==");
   const providerIds = {};
@@ -168,6 +185,19 @@ async function main() {
       `INSERT INTO tariff_attributes (id, tenant_id, product_version_id, attribute_key, attribute_value, value_type) VALUES ($1,$2,$3,'5g','true','boolean')`,
       [uuid(), tenantId, productVersionId],
     );
+    // Phase 3B: Registry-Attribute (dataVolumeGb/pricePlanTier/hasEuRoaming/
+    // contractCommitmentMonths), siehe src/server/recommendation/attribute-registry.ts.
+    for (const [key, value, valueType] of [
+      ["dataVolumeGb", "20", "number"],
+      ["pricePlanTier", "STANDARD", "string"],
+      ["hasEuRoaming", "true", "boolean"],
+      ["contractCommitmentMonths", "24", "number"],
+    ]) {
+      await q(
+        `INSERT INTO tariff_attributes (id, tenant_id, product_version_id, attribute_key, attribute_value, value_type) VALUES ($1,$2,$3,$4,$5,$6)`,
+        [uuid(), tenantId, productVersionId, key, value, valueType],
+      );
+    }
 
     const commissionModelId = uuid();
     await q(
@@ -179,6 +209,73 @@ async function main() {
        VALUES ($1,$2,$3,1,'ACTIVE','2026-01-01T00:00:00Z','FLAT','EUR',3000,100)`,
       [uuid(), tenantId, commissionModelId],
     );
+
+    // Phase 3B: zwei weitere ProductVersions (S/L), damit Eligibility-/
+    // Exclusion-/Prioritization-/CrossSelling-Regeln unten zwischen
+    // mehreren Produkten unterscheiden koennen (mirror von prisma/seed.ts).
+    async function seedTier(nameSuffix, tierData) {
+      const pId = uuid();
+      await q(
+        `INSERT INTO products (id, tenant_id, provider_id, category_id, product_type, name, is_synthetic) VALUES ($1,$2,$3,$4,'MOBILE_NEW_CONTRACT',$5,true)`,
+        [
+          pId,
+          tenantId,
+          providerIds["o2-telefonica"],
+          categoryId,
+          `DemoTel Mobil ${nameSuffix} (synthetisch)`,
+        ],
+      );
+      const pvId = uuid();
+      await q(
+        `INSERT INTO product_versions (id, tenant_id, product_id, version_number, status, valid_from, currency, monthly_price_minor, one_time_price_minor, contract_months)
+         VALUES ($1,$2,$3,1,'ACTIVE','2026-01-01T00:00:00Z','EUR',$4,0,24)`,
+        [pvId, tenantId, pId, tierData.monthlyPriceMinor],
+      );
+      for (const [key, value, valueType] of [
+        ["dataVolumeGb", tierData.dataVolumeGb, "number"],
+        ["pricePlanTier", tierData.pricePlanTier, "string"],
+        ["hasEuRoaming", tierData.hasEuRoaming, "boolean"],
+        ["contractCommitmentMonths", "24", "number"],
+      ]) {
+        await q(
+          `INSERT INTO tariff_attributes (id, tenant_id, product_version_id, attribute_key, attribute_value, value_type) VALUES ($1,$2,$3,$4,$5,$6)`,
+          [uuid(), tenantId, pvId, key, value, valueType],
+        );
+      }
+      const cmId = uuid();
+      await q(
+        `INSERT INTO commission_models (id, tenant_id, product_id, name) VALUES ($1,$2,$3,$4)`,
+        [cmId, tenantId, pId, `Standardprovision Mobil ${nameSuffix}`],
+      );
+      await q(
+        `INSERT INTO commission_model_versions (id, tenant_id, commission_model_id, version_number, status, valid_from, commission_type, currency, commission_amount_minor, recurring_commission_amount_minor)
+         VALUES ($1,$2,$3,1,'ACTIVE','2026-01-01T00:00:00Z','FLAT','EUR',$4,$5)`,
+        [
+          uuid(),
+          tenantId,
+          cmId,
+          tierData.commissionAmountMinor,
+          tierData.recurringCommissionAmountMinor,
+        ],
+      );
+      return { productId: pId, productVersionId: pvId };
+    }
+    await seedTier("S", {
+      monthlyPriceMinor: 1499,
+      dataVolumeGb: "5",
+      pricePlanTier: "BASIC",
+      hasEuRoaming: "false",
+      commissionAmountMinor: 1500,
+      recurringCommissionAmountMinor: 50,
+    });
+    await seedTier("L", {
+      monthlyPriceMinor: 4499,
+      dataVolumeGb: "50",
+      pricePlanTier: "PREMIUM",
+      hasEuRoaming: "true",
+      commissionAmountMinor: 5000,
+      recurringCommissionAmountMinor: 200,
+    });
 
     await q(
       `INSERT INTO configurable_thresholds (id, tenant_id, key, value, valid_from) VALUES ($1,$2,'renewal_lookahead_days','180','2026-01-01T00:00:00Z')`,
@@ -218,8 +315,90 @@ async function main() {
       [ruleSetVersionId, tenantId, ruleSetId],
     );
     await q(
-      `INSERT INTO eligibility_rules (id, tenant_id, rule_set_version_id, key, description, expression) VALUES ($1,$2,$3,'mind_18','Kunde ist volljaehrig (synthetische Platzhalterregel)','true')`,
+      `INSERT INTO eligibility_rules (id, tenant_id, rule_set_version_id, key, description, legacy_expression) VALUES ($1,$2,$3,'mind_18','Kunde ist volljaehrig (synthetische Platzhalterregel)','true')`,
       [uuid(), tenantId, ruleSetVersionId],
+    );
+
+    // Phase 3B: strukturierte Regeln mit Conditions (mirror von prisma/seed.ts).
+    const ausreichendesDatenvolumenId = uuid();
+    await q(
+      `INSERT INTO eligibility_rules (id, tenant_id, rule_set_version_id, key, description, is_required) VALUES ($1,$2,$3,'ausreichendes_datenvolumen','Produkt bietet mindestens 5 GB Datenvolumen',true)`,
+      [ausreichendesDatenvolumenId, tenantId, ruleSetVersionId],
+    );
+    await q(
+      `INSERT INTO eligibility_rule_conditions (id, tenant_id, eligibility_rule_id, group_index, source_type, attribute_key, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'PRODUCT_ATTRIBUTE','dataVolumeGb','GREATER_THAN_OR_EQUAL','5')`,
+      [uuid(), tenantId, ausreichendesDatenvolumenId],
+    );
+
+    const roamingPasstZuBedarfId = uuid();
+    await q(
+      `INSERT INTO eligibility_rules (id, tenant_id, rule_set_version_id, key, description, is_required, fit_weight) VALUES ($1,$2,$3,'roaming_passt_zu_streaming_bedarf','Streaming-interessierte Kunden profitieren von EU-Roaming',false,60)`,
+      [roamingPasstZuBedarfId, tenantId, ruleSetVersionId],
+    );
+    await q(
+      `INSERT INTO eligibility_rule_conditions (id, tenant_id, eligibility_rule_id, group_index, source_type, question_id, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'ANSWER',$4,'EQUALS','true')`,
+      [uuid(), tenantId, roamingPasstZuBedarfId, questionId],
+    );
+    await q(
+      `INSERT INTO eligibility_rule_conditions (id, tenant_id, eligibility_rule_id, group_index, source_type, attribute_key, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'PRODUCT_ATTRIBUTE','hasEuRoaming','EQUALS','true')`,
+      [uuid(), tenantId, roamingPasstZuBedarfId],
+    );
+
+    const renewalKeinPremiumId = uuid();
+    await q(
+      `INSERT INTO exclusion_rules (id, tenant_id, rule_set_version_id, key, reason_code, description) VALUES ($1,$2,$3,'renewal_kein_premium','RENEWAL_NO_PREMIUM_TIER','Bei Vertragsverlaengerung wird der PREMIUM-Tarif zunaechst nicht empfohlen')`,
+      [renewalKeinPremiumId, tenantId, ruleSetVersionId],
+    );
+    await q(
+      `INSERT INTO exclusion_rule_conditions (id, tenant_id, exclusion_rule_id, group_index, source_type, attribute_key, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'SESSION_ATTRIBUTE','consultationType','EQUALS','RENEWAL')`,
+      [uuid(), tenantId, renewalKeinPremiumId],
+    );
+    await q(
+      `INSERT INTO exclusion_rule_conditions (id, tenant_id, exclusion_rule_id, group_index, source_type, attribute_key, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'PRODUCT_ATTRIBUTE','pricePlanTier','EQUALS','PREMIUM')`,
+      [uuid(), tenantId, renewalKeinPremiumId],
+    );
+
+    const bonusEuRoamingId = uuid();
+    await q(
+      `INSERT INTO prioritization_rules (id, tenant_id, rule_set_version_id, key, description, weight, commission_required) VALUES ($1,$2,$3,'bonus_eu_roaming','Bonus fuer Produkte mit EU-Roaming',30,false)`,
+      [bonusEuRoamingId, tenantId, ruleSetVersionId],
+    );
+    await q(
+      `INSERT INTO prioritization_rule_conditions (id, tenant_id, prioritization_rule_id, group_index, source_type, attribute_key, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'PRODUCT_ATTRIBUTE','hasEuRoaming','EQUALS','true')`,
+      [uuid(), tenantId, bonusEuRoamingId],
+    );
+
+    const bonusNeuvertragPremiumId = uuid();
+    await q(
+      `INSERT INTO prioritization_rules (id, tenant_id, rule_set_version_id, key, description, weight, commission_required) VALUES ($1,$2,$3,'bonus_neuvertrag_premium','Bonus fuer PREMIUM-Tarif bei Neuvertrag',20,true)`,
+      [bonusNeuvertragPremiumId, tenantId, ruleSetVersionId],
+    );
+    await q(
+      `INSERT INTO prioritization_rule_conditions (id, tenant_id, prioritization_rule_id, group_index, source_type, attribute_key, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'SESSION_ATTRIBUTE','consultationType','EQUALS','NEW_CONTRACT')`,
+      [uuid(), tenantId, bonusNeuvertragPremiumId],
+    );
+    await q(
+      `INSERT INTO prioritization_rule_conditions (id, tenant_id, prioritization_rule_id, group_index, source_type, attribute_key, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'PRODUCT_ATTRIBUTE','pricePlanTier','EQUALS','PREMIUM')`,
+      [uuid(), tenantId, bonusNeuvertragPremiumId],
+    );
+
+    const streamingZusatzpaketId = uuid();
+    await q(
+      `INSERT INTO cross_selling_rules (id, tenant_id, rule_set_version_id, key, description, need_type, priority, reason_code) VALUES ($1,$2,$3,'streaming_zusatzpaket','Cross-Selling-Signal fuer ein Streaming-Zusatzpaket','STREAMING',70,'STREAMING_ADDON_SUGGESTED')`,
+      [streamingZusatzpaketId, tenantId, ruleSetVersionId],
+    );
+    await q(
+      `INSERT INTO cross_selling_rule_conditions (id, tenant_id, cross_selling_rule_id, group_index, source_type, question_id, operator, comparison_value)
+       VALUES ($1,$2,$3,0,'ANSWER',$4,'EQUALS','true')`,
+      [uuid(), tenantId, streamingZusatzpaketId, questionId],
     );
 
     const customerReferenceId = uuid();
@@ -253,9 +432,13 @@ async function main() {
       [uuid(), tenantId, sessionId, questionVersionId],
     );
 
+    // source=EMPLOYEE_MARKED (mirror von prisma/seed.ts): diese Demo-Zeile
+    // wird manuell angelegt, nicht ueber ein RecommendationCrossSellingSignal
+    // - RULE_BASED wuerde einen gesetzten trigger_signal_id erfordern
+    // (Service-Layer-Invariante, siehe sales-opportunity.ts).
     const detectedNeedId = uuid();
     await q(
-      `INSERT INTO detected_needs (id, tenant_id, consultation_session_id, need_type, source, detected_at) VALUES ($1,$2,$3,'STREAMING','RULE_BASED','2026-07-15T09:06:30Z')`,
+      `INSERT INTO detected_needs (id, tenant_id, consultation_session_id, need_type, source, detected_at) VALUES ($1,$2,$3,'STREAMING','EMPLOYEE_MARKED','2026-07-15T09:06:30Z')`,
       [detectedNeedId, tenantId, sessionId],
     );
 
@@ -264,16 +447,25 @@ async function main() {
       [uuid(), tenantId, sessionId, detectedNeedId],
     );
 
+    // algorithm_version/evaluation_fingerprint: Pflichtfelder seit Phase 3B
+    // (mirror von prisma/seed.ts - Platzhalter-Fingerprint, da diese Demo-
+    // Zeile nicht durch service.ts::evaluate() gelaufen ist).
     const recommendationId = uuid();
     await q(
-      `INSERT INTO recommendations (id, tenant_id, consultation_session_id, rule_set_version_id, generated_at) VALUES ($1,$2,$3,$4,'2026-07-15T09:07:00Z')`,
-      [recommendationId, tenantId, sessionId, ruleSetVersionId],
+      `INSERT INTO recommendations (id, tenant_id, consultation_session_id, rule_set_version_id, algorithm_version, evaluation_fingerprint, generated_at) VALUES ($1,$2,$3,$4,1,$5,'2026-07-15T09:07:00Z')`,
+      [
+        recommendationId,
+        tenantId,
+        sessionId,
+        ruleSetVersionId,
+        seedFingerprint(tenantId, sessionId, "seed-demo-recommendation"),
+      ],
     );
 
     const recommendationItemId = uuid();
     await q(
-      `INSERT INTO recommendation_items (id, tenant_id, recommendation_id, product_version_id, eligibility_passed, exclusion_reason_codes, business_priority_score, priority_rank)
-       VALUES ($1,$2,$3,$4,true,'{}',0.8,1)`,
+      `INSERT INTO recommendation_items (id, tenant_id, recommendation_id, product_version_id, eligibility_passed, exclusion_reason_codes, customer_fit_score, business_priority_score, priority_rank)
+       VALUES ($1,$2,$3,$4,true,'{}',80,80,1)`,
       [recommendationItemId, tenantId, recommendationId, productVersionId],
     );
 
@@ -378,6 +570,18 @@ async function main() {
     "analytics_events",
     "audit_logs",
     "baseline_measurements",
+    "tariff_attributes",
+    "rule_set_versions",
+    "eligibility_rules",
+    "eligibility_rule_conditions",
+    "exclusion_rules",
+    "exclusion_rule_conditions",
+    "prioritization_rules",
+    "prioritization_rule_conditions",
+    "cross_selling_rules",
+    "cross_selling_rule_conditions",
+    "recommendations",
+    "recommendation_items",
   ];
   for (const t of tables) {
     const r = await q(`SELECT count(*)::int AS c FROM ${t}`);

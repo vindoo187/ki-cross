@@ -160,6 +160,16 @@ enum LogicalCombinator {
   OR
 }
 
+// Phase 3B: Herkunft eines Bedingungswerts in Eligibility-/Exclusion-/
+// Prioritization-/CrossSelling-Regeln (siehe attribute-registry.ts und
+// conditions.ts). Genau eines von questionId/attributeKey muss je nach
+// sourceType gesetzt sein (Service-Layer-Validierung, keine DB-CHECK).
+enum ConditionSourceType {
+  ANSWER
+  PRODUCT_ATTRIBUTE
+  SESSION_ATTRIBUTE
+}
+
 enum LegalBasis {
   CONSENT
   CONTRACT
@@ -500,6 +510,12 @@ model ProductVersion {
   recommendationItems RecommendationItem[]
   dealItems           DealItem[]
 
+  // Phase 3B: zwei getrennte Rueckrelationen, da suggestedProductVersionId
+  // sowohl auf CrossSellingRule (Regel-Konfiguration) als auch auf
+  // RecommendationCrossSellingSignal (unveraenderlicher Snapshot) existiert.
+  crossSellingRulesSuggesting   CrossSellingRule[]                 @relation("CrossSellingRuleSuggestedProduct")
+  crossSellingSignalsSuggesting RecommendationCrossSellingSignal[] @relation("RecommendationCrossSellingSignalSuggestedProduct")
+
   @@unique([tenantId, id])
   @@unique([tenantId, productId, versionNumber])
   @@index([tenantId])
@@ -557,6 +573,11 @@ model CommissionModelVersion {
 
   commissionModel CommissionModel @relation(fields: [tenantId, commissionModelId], references: [tenantId, id], onDelete: Restrict)
 
+  // Phase 3B: RecommendationRationale.commissionModelVersionId referenziert
+  // ueber den zusammengesetzten Tenant-FK - dafuer @@unique([tenantId, id]).
+  recommendationRationales RecommendationRationale[]
+
+  @@unique([tenantId, id])
   @@unique([tenantId, commissionModelId, versionNumber])
   @@index([tenantId])
   @@index([commissionModelId, validFrom, validTo])
@@ -694,6 +715,13 @@ model CustomerAnswer {
   session         ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
   questionVersion QuestionVersion?    @relation(fields: [tenantId, questionVersionId], references: [tenantId, id], onDelete: SetNull)
 
+  // Phase 3B: RecommendationCrossSellingSignal.sourceAnswerId referenziert
+  // eine CustomerAnswer ueber den zusammengesetzten Tenant-FK - dafuer wird
+  // hier (wie bei allen anderen so referenzierten Modellen) ein
+  // @@unique([tenantId, id]) benoetigt.
+  crossSellingSignals RecommendationCrossSellingSignal[]
+
+  @@unique([tenantId, id])
   @@index([tenantId])
   @@index([consultationSessionId])
   @@map("customer_answers")
@@ -717,6 +745,13 @@ model DetectedNeed {
   @@map("detected_needs")
 }
 
+// Phase 3B: SalesOpportunity bleibt MUTABEL und NICHT append-only (im
+// Gegensatz zu RecommendationCrossSellingSignal, siehe dort) - sie bildet
+// den Vertriebs-Workflow ab (Status, Follow-up), nicht das unveraenderliche
+// Auswertungsergebnis. Source-Konsistenz zwischen DetectedNeed.source und
+// triggerSignalId wird NICHT per DB-CHECK erzwungen (technisch nicht
+// umsetzbar, da source auf DetectedNeed liegt, nicht hier), sondern in
+// src/server/recommendation/sales-opportunity.ts (SalesOpportunitySourceMismatchError).
 model SalesOpportunity {
   id                    String            @id @default(uuid()) @db.Uuid
   tenantId              String            @map("tenant_id") @db.Uuid
@@ -726,30 +761,48 @@ model SalesOpportunity {
   status                OpportunityStatus @default(OPEN)
   offeredAt             DateTime?         @map("offered_at") @db.Timestamptz(6)
   resolvedAt            DateTime?         @map("resolved_at") @db.Timestamptz(6)
+  triggerSignalId       String?           @map("trigger_signal_id") @db.Uuid
+  reasonCode            String?           @map("reason_code")
+  justificationParams   Json?             @map("justification_params")
+  priority              Int?
+  followUpRequired      Boolean           @default(false) @map("follow_up_required")
+  followUpReasonCode    String?           @map("follow_up_reason_code")
   createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  session      ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
-  detectedNeed DetectedNeed?       @relation(fields: [tenantId, detectedNeedId], references: [tenantId, id], onDelete: SetNull)
+  session       ConsultationSession               @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
+  detectedNeed  DetectedNeed?                      @relation(fields: [tenantId, detectedNeedId], references: [tenantId, id], onDelete: SetNull)
+  triggerSignal RecommendationCrossSellingSignal?  @relation(fields: [tenantId, triggerSignalId], references: [tenantId, id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([consultationSessionId])
+  @@index([triggerSignalId])
   @@map("sales_opportunities")
 }
 
+// Phase 3B: evaluationFingerprint (SHA-256 ueber eine kanonische JSON-Sicht
+// aller ausgewerteten Eingaben, siehe src/server/recommendation/fingerprint.ts)
+// + algorithmVersion sichern Idempotenz: derselbe Fingerprint fuer dieselbe
+// Session liefert die bereits gespeicherte Recommendation zurueck statt neu
+// zu schreiben (siehe service.ts, Fast-Path-SELECT ausserhalb der Transaktion).
 model Recommendation {
-  id                    String   @id @default(uuid()) @db.Uuid
-  tenantId              String   @map("tenant_id") @db.Uuid
-  consultationSessionId String   @map("consultation_session_id") @db.Uuid
-  ruleSetVersionId      String   @map("rule_set_version_id") @db.Uuid
-  generatedAt           DateTime @map("generated_at") @db.Timestamptz(6)
-  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                          String   @id @default(uuid()) @db.Uuid
+  tenantId                    String   @map("tenant_id") @db.Uuid
+  consultationSessionId       String   @map("consultation_session_id") @db.Uuid
+  ruleSetVersionId            String   @map("rule_set_version_id") @db.Uuid
+  algorithmVersion             Int      @map("algorithm_version")
+  evaluationFingerprint        String   @map("evaluation_fingerprint") @db.Char(64)
+  inputDataCompletenessScore   Float?   @map("input_data_completeness_score")
+  generatedAt                  DateTime @map("generated_at") @db.Timestamptz(6)
+  createdAt                    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   session        ConsultationSession @relation(fields: [tenantId, consultationSessionId], references: [tenantId, id], onDelete: Restrict)
   ruleSetVersion RuleSetVersion      @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
 
-  items RecommendationItem[]
+  items               RecommendationItem[]
+  crossSellingSignals RecommendationCrossSellingSignal[]
 
   @@unique([tenantId, id])
+  @@unique([tenantId, consultationSessionId, evaluationFingerprint])
   @@index([tenantId])
   @@index([consultationSessionId])
   @@map("recommendations")
@@ -762,7 +815,12 @@ model RecommendationItem {
   productVersionId       String  @map("product_version_id") @db.Uuid
   eligibilityPassed      Boolean @map("eligibility_passed")
   exclusionReasonCodes   String[] @default([]) @map("exclusion_reason_codes")
-  businessPriorityScore  Float   @map("business_priority_score")
+  // customerFitScore (0-100): gewichteter Anteil erfuellter, NICHT
+  // verpflichtender (isRequired = false) EligibilityRule-Regeln. Bewusst
+  // KEIN commissionModelVersionId-Feld hier (mehrdeutig bei mehreren
+  // provisionsbasierten Rationale-Zeilen) - siehe RecommendationRationale.
+  customerFitScore       Int      @map("customer_fit_score")
+  businessPriorityScore  Int      @map("business_priority_score")
   priorityRank           Int     @map("priority_rank")
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -778,16 +836,25 @@ model RecommendationItem {
   @@map("recommendation_items")
 }
 
+// commissionModelVersionId ist die EINZIGE Stelle fuer Provisionsversion-
+// Pinning (nicht auf RecommendationItem, siehe dort) - mehrere Rationale-
+// Zeilen desselben Items koennen unterschiedliche Versionen referenzieren.
+// commissionValueMinor ist der zum Auswertungszeitpunkt gelesene Wert
+// (getrennt von der ID, damit spaetere Logikaenderungen die Reproduzierbarkeit
+// bereits erzeugter Rationale-Zeilen nicht beeinflussen).
 model RecommendationRationale {
-  id                   String   @id @default(uuid()) @db.Uuid
-  tenantId             String   @map("tenant_id") @db.Uuid
-  recommendationItemId String   @map("recommendation_item_id") @db.Uuid
-  factorKey            String   @map("factor_key")
-  factorValue          String   @map("factor_value")
-  weight               Float?
-  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                       String   @id @default(uuid()) @db.Uuid
+  tenantId                 String   @map("tenant_id") @db.Uuid
+  recommendationItemId     String   @map("recommendation_item_id") @db.Uuid
+  factorKey                String   @map("factor_key")
+  factorValue              String   @map("factor_value")
+  weight                   Float?
+  commissionModelVersionId String?  @map("commission_model_version_id") @db.Uuid
+  commissionValueMinor     Int?     @map("commission_value_minor")
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  recommendationItem RecommendationItem @relation(fields: [tenantId, recommendationItemId], references: [tenantId, id], onDelete: Restrict)
+  recommendationItem     RecommendationItem      @relation(fields: [tenantId, recommendationItemId], references: [tenantId, id], onDelete: Restrict)
+  commissionModelVersion  CommissionModelVersion? @relation(fields: [tenantId, commissionModelVersionId], references: [tenantId, id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([recommendationItemId])
@@ -979,6 +1046,14 @@ model Question {
   versions             QuestionVersion[]
   visibilityConditions VisibilityCondition[] @relation("QuestionVisibilityTarget")
 
+  // Phase 3B: ANSWER-sourceType-Bedingungen (siehe ConditionSourceType)
+  // referenzieren die stabile Frage, nicht eine konkrete QuestionVersion -
+  // analog zu VisibilityCondition.targetQuestion oben.
+  eligibilityRuleConditions    EligibilityRuleCondition[]    @relation("EligibilityRuleConditionQuestion")
+  exclusionRuleConditions      ExclusionRuleCondition[]      @relation("ExclusionRuleConditionQuestion")
+  prioritizationRuleConditions PrioritizationRuleCondition[] @relation("PrioritizationRuleConditionQuestion")
+  crossSellingRuleConditions   CrossSellingRuleCondition[]   @relation("CrossSellingRuleConditionQuestion")
+
   @@unique([tenantId, id])
   @@index([tenantId, questionnaireVersionId])
   @@map("questions")
@@ -1085,27 +1160,54 @@ model RuleSetVersion {
   eligibilityRules    EligibilityRule[]
   exclusionRules      ExclusionRule[]
   prioritizationRules PrioritizationRule[]
+  crossSellingRules   CrossSellingRule[]
   recommendations     Recommendation[]
+
+  // Phase 3B: zweite Rueckrelation, weil RecommendationCrossSellingSignal
+  // separat von CrossSellingRule.ruleSetVersion auf dieselbe RuleSetVersion
+  // verweist (triggerRuleSetVersionId = Snapshot der zum Ausloesezeitpunkt
+  // aktiven Version).
+  crossSellingSignalsTriggered RecommendationCrossSellingSignal[] @relation("RecommendationCrossSellingSignalTriggerRuleSetVersion")
 
   @@unique([tenantId, id])
   @@index([tenantId, ruleSetId, status])
   @@map("rule_set_versions")
 }
 
+// Phase 3B, Korrekturpunkt 6: zusaetzlicher EXCLUDE-Constraint NUR ueber
+// tenantId (nicht ruleSetId, siehe bestehenden rule_set_versions_no_overlap
+// oben) - stellt sicher, dass pro Tenant zu jedem Zeitpunkt hoechstens EINE
+// RuleSetVersion (ueber alle RuleSets hinweg) den Status ACTIVE hat. Das ist
+// Voraussetzung fuer die Auswertbarkeitspruefung in
+// src/server/recommendation/service.ts (Abschnitt 5 des Implementierungsplans:
+// "genau eine ACTIVE RuleSetVersion je Tenant"). Named
+// rule_set_versions_tenant_active_no_overlap, per rohem SQL in
+// prisma/migrations/<timestamp>_recommendation_engine/migration.sql ergaenzt
+// (Prisma kennt keine EXCLUDE-Constraints, siehe Kommentar bei ProductVersion).
+
 // Eligibility rules gate WHETHER a product may be recommended at all
 // (RecommendationItem.eligibilityPassed). Kept separate from prioritization
 // so "not eligible" and "eligible but low priority" are never conflated.
+// Phase 3B: `expression` -> `legacyExpression` (nullable, physisches Loeschen
+// erst in einer spaeteren Cleanup-Migration, siehe Implementierungsplan
+// Abschnitt 12). Das strukturierte Bedingungsmodell (EligibilityRuleCondition)
+// ist der aktive Auswertungspfad. isRequired=true (Default) = hartes Gate;
+// isRequired=false Regeln fliessen stattdessen gewichtet in
+// RecommendationItem.customerFitScore ein (fitWeight).
 model EligibilityRule {
   id               String   @id @default(uuid()) @db.Uuid
   tenantId         String   @map("tenant_id") @db.Uuid
   ruleSetVersionId String   @map("rule_set_version_id") @db.Uuid
   key              String
   description      String
-  expression       String
+  legacyExpression String?  @map("legacy_expression")
+  isRequired       Boolean  @default(true) @map("is_required")
+  fitWeight        Int      @default(0) @map("fit_weight")
   isActive         Boolean  @default(true) @map("is_active")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  ruleSetVersion RuleSetVersion @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  ruleSetVersion RuleSetVersion             @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  conditions     EligibilityRuleCondition[]
 
   @@unique([tenantId, id])
   @@index([tenantId, ruleSetVersionId])
@@ -1114,42 +1216,205 @@ model EligibilityRule {
 
 // Exclusion rules record a specific reason code why a product was removed
 // from consideration (feeds RecommendationItem.exclusionReasonCodes).
+// Phase 3B: reasonCode muss je RuleSetVersion eindeutig und nicht-leer sein
+// (@@unique unten + CHECK reason_code <> '' per rohem SQL in der Migration,
+// da Prisma kein CHECK auf Nicht-Leere kennt). justificationParams liefert
+// strukturierte Zusatzinfos fuer die zugehoerige RecommendationRationale-Zeile
+// (factorKey = "exclusion:<reasonCode>").
 model ExclusionRule {
-  id               String   @id @default(uuid()) @db.Uuid
-  tenantId         String   @map("tenant_id") @db.Uuid
-  ruleSetVersionId String   @map("rule_set_version_id") @db.Uuid
-  key              String
-  reasonCode       String   @map("reason_code")
-  description      String
-  expression       String
-  isActive         Boolean  @default(true) @map("is_active")
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                  String   @id @default(uuid()) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  ruleSetVersionId    String   @map("rule_set_version_id") @db.Uuid
+  key                 String
+  reasonCode          String   @map("reason_code")
+  description         String
+  legacyExpression    String?  @map("legacy_expression")
+  justificationParams Json?    @map("justification_params")
+  isActive            Boolean  @default(true) @map("is_active")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  ruleSetVersion RuleSetVersion @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  ruleSetVersion RuleSetVersion           @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  conditions     ExclusionRuleCondition[]
 
   @@unique([tenantId, id])
+  @@unique([tenantId, ruleSetVersionId, reasonCode])
   @@index([tenantId, ruleSetVersionId])
   @@map("exclusion_rules")
 }
 
 // Prioritization rules only run on already-eligible items, producing the
 // businessPriorityScore used for ranking (never affects eligibility).
+// Phase 3B: commissionRequired steuert das Verhalten bei nicht aufloesbarer
+// CommissionModelVersion (siehe RecommendationRationale) - true: Abbruch der
+// gesamten Session-Auswertung (CommissionModelUnresolvedError); false
+// (Default): Gewicht-0-Fallback mit factorKey = "commission_model_unresolved".
 model PrioritizationRule {
-  id               String   @id @default(uuid()) @db.Uuid
-  tenantId         String   @map("tenant_id") @db.Uuid
-  ruleSetVersionId String   @map("rule_set_version_id") @db.Uuid
-  key              String
-  description      String
-  weight           Int
-  expression       String
-  isActive         Boolean  @default(true) @map("is_active")
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  ruleSetVersionId   String   @map("rule_set_version_id") @db.Uuid
+  key                String
+  description        String
+  weight             Int
+  legacyExpression   String?  @map("legacy_expression")
+  commissionRequired Boolean  @default(false) @map("commission_required")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  ruleSetVersion RuleSetVersion @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  ruleSetVersion RuleSetVersion               @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  conditions     PrioritizationRuleCondition[]
 
   @@unique([tenantId, id])
   @@index([tenantId, ruleSetVersionId])
   @@map("prioritization_rules")
+}
+
+// Phase 3B: Cross-Selling-Regeln erzeugen KEINE RecommendationItem-Zeilen
+// (anderer Produktkatalog-Pfad), sondern unveraenderliche
+// RecommendationCrossSellingSignal-Snapshots (siehe dort) - strukturell
+// analog zu PrioritizationRule, aber mit eigenem Effekt (needType/priority/
+// reasonCode/optionalem Produktvorschlag statt Gewicht).
+model CrossSellingRule {
+  id                        String   @id @default(uuid()) @db.Uuid
+  tenantId                  String   @map("tenant_id") @db.Uuid
+  ruleSetVersionId          String   @map("rule_set_version_id") @db.Uuid
+  key                       String
+  description               String
+  needType                  NeedType @map("need_type")
+  priority                  Int
+  reasonCode                String   @map("reason_code")
+  suggestedProductVersionId String?  @map("suggested_product_version_id") @db.Uuid
+  isActive                  Boolean  @default(true) @map("is_active")
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  ruleSetVersion          RuleSetVersion                     @relation(fields: [tenantId, ruleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  suggestedProductVersion ProductVersion?                    @relation("CrossSellingRuleSuggestedProduct", fields: [tenantId, suggestedProductVersionId], references: [tenantId, id], onDelete: SetNull)
+  conditions              CrossSellingRuleCondition[]
+  signals                 RecommendationCrossSellingSignal[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, ruleSetVersionId])
+  @@map("cross_selling_rules")
+}
+
+// Strukturiertes Bedingungsmodell (ersetzt `legacyExpression`, siehe oben).
+// Gleicher groupIndex = UND-Verknuepfung, unterschiedlicher groupIndex =
+// ODER-Verknuepfung zwischen den Gruppen (eine Ebene, kein Nesting - analog
+// VisibilityCondition). sourceType bestimmt, welches der beiden Felder
+// questionId/attributeKey gesetzt sein muss (Service-Layer-Validierung in
+// src/server/recommendation/conditions.ts + attribute-registry.ts, keine
+// DB-CHECK-Constraint). Identische Struktur fuer alle vier Regeltypen.
+model EligibilityRuleCondition {
+  id                String              @id @default(uuid()) @db.Uuid
+  tenantId          String              @map("tenant_id") @db.Uuid
+  eligibilityRuleId String              @map("eligibility_rule_id") @db.Uuid
+  groupIndex        Int                 @map("group_index")
+  sourceType        ConditionSourceType @map("source_type")
+  questionId        String?             @map("question_id") @db.Uuid
+  attributeKey      String?             @map("attribute_key")
+  operator          VisibilityOperator
+  comparisonValue   String              @map("comparison_value")
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  eligibilityRule EligibilityRule @relation(fields: [tenantId, eligibilityRuleId], references: [tenantId, id], onDelete: Restrict)
+  question        Question?       @relation("EligibilityRuleConditionQuestion", fields: [tenantId, questionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, eligibilityRuleId])
+  @@map("eligibility_rule_conditions")
+}
+
+model ExclusionRuleCondition {
+  id              String              @id @default(uuid()) @db.Uuid
+  tenantId        String              @map("tenant_id") @db.Uuid
+  exclusionRuleId String              @map("exclusion_rule_id") @db.Uuid
+  groupIndex      Int                 @map("group_index")
+  sourceType      ConditionSourceType @map("source_type")
+  questionId      String?             @map("question_id") @db.Uuid
+  attributeKey    String?             @map("attribute_key")
+  operator        VisibilityOperator
+  comparisonValue String              @map("comparison_value")
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  exclusionRule ExclusionRule @relation(fields: [tenantId, exclusionRuleId], references: [tenantId, id], onDelete: Restrict)
+  question      Question?     @relation("ExclusionRuleConditionQuestion", fields: [tenantId, questionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, exclusionRuleId])
+  @@map("exclusion_rule_conditions")
+}
+
+model PrioritizationRuleCondition {
+  id                   String              @id @default(uuid()) @db.Uuid
+  tenantId             String              @map("tenant_id") @db.Uuid
+  prioritizationRuleId String              @map("prioritization_rule_id") @db.Uuid
+  groupIndex           Int                 @map("group_index")
+  sourceType           ConditionSourceType @map("source_type")
+  questionId           String?             @map("question_id") @db.Uuid
+  attributeKey         String?             @map("attribute_key")
+  operator             VisibilityOperator
+  comparisonValue      String              @map("comparison_value")
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  prioritizationRule PrioritizationRule @relation(fields: [tenantId, prioritizationRuleId], references: [tenantId, id], onDelete: Restrict)
+  question           Question?          @relation("PrioritizationRuleConditionQuestion", fields: [tenantId, questionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, prioritizationRuleId])
+  @@map("prioritization_rule_conditions")
+}
+
+model CrossSellingRuleCondition {
+  id                 String              @id @default(uuid()) @db.Uuid
+  tenantId           String              @map("tenant_id") @db.Uuid
+  crossSellingRuleId String              @map("cross_selling_rule_id") @db.Uuid
+  groupIndex         Int                 @map("group_index")
+  sourceType         ConditionSourceType @map("source_type")
+  questionId         String?             @map("question_id") @db.Uuid
+  attributeKey       String?             @map("attribute_key")
+  operator           VisibilityOperator
+  comparisonValue    String              @map("comparison_value")
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  crossSellingRule CrossSellingRule @relation(fields: [tenantId, crossSellingRuleId], references: [tenantId, id], onDelete: Restrict)
+  question         Question?        @relation("CrossSellingRuleConditionQuestion", fields: [tenantId, questionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, crossSellingRuleId])
+  @@map("cross_selling_rule_conditions")
+}
+
+// Unveraenderlicher (append-only) Snapshot eines ausgeloesten
+// Cross-Selling-Signals zum Auswertungszeitpunkt - bewusst getrennt vom
+// mutablen SalesOpportunity-Vertriebs-Workflow (siehe Kommentar dort).
+// suggestedProductVersionId nutzt onDelete: Restrict statt SetNull, obwohl
+// das Feld nullable ist: ein spaeteres UPDATE waere durch den
+// forbid_update_delete()-Trigger ohnehin verboten, SetNull wuerde dem
+// widersprechen (siehe Implementierungsplan Abschnitt 3.4).
+model RecommendationCrossSellingSignal {
+  id                        String   @id @default(uuid()) @db.Uuid
+  tenantId                  String   @map("tenant_id") @db.Uuid
+  recommendationId          String   @map("recommendation_id") @db.Uuid
+  triggerRuleId             String   @map("trigger_rule_id") @db.Uuid
+  triggerRuleSetVersionId   String   @map("trigger_rule_set_version_id") @db.Uuid
+  sourceAnswerId            String?  @map("source_answer_id") @db.Uuid
+  needType                  NeedType @map("need_type")
+  reasonCode                String   @map("reason_code")
+  justificationParams       Json?    @map("justification_params")
+  priority                  Int
+  suggestedProductVersionId String?  @map("suggested_product_version_id") @db.Uuid
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  recommendation          Recommendation   @relation(fields: [tenantId, recommendationId], references: [tenantId, id], onDelete: Restrict)
+  triggerRule              CrossSellingRule @relation(fields: [tenantId, triggerRuleId], references: [tenantId, id], onDelete: Restrict)
+  triggerRuleSetVersion    RuleSetVersion   @relation("RecommendationCrossSellingSignalTriggerRuleSetVersion", fields: [tenantId, triggerRuleSetVersionId], references: [tenantId, id], onDelete: Restrict)
+  sourceAnswer              CustomerAnswer? @relation(fields: [tenantId, sourceAnswerId], references: [tenantId, id], onDelete: Restrict)
+  suggestedProductVersion  ProductVersion?  @relation("RecommendationCrossSellingSignalSuggestedProduct", fields: [tenantId, suggestedProductVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  opportunities SalesOpportunity[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, recommendationId])
+  @@map("recommendation_cross_selling_signals")
 }
 
 // Generic, versioned business threshold store. Seeded with

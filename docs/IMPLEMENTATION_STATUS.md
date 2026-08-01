@@ -166,6 +166,7 @@ werden, obwohl sie nicht Teil des Projekts sind:
 - `_tmp_20_be2baffc037932ce7dd80d17bf22a85a`
 - `_tmp_20_e69110ec3545a176303bbf82f9937574`
 - `src/newdir/file.txt`
+- `_rmtest.txt` (neu hinzugekommen während Phase 3B)
 
 Diese Dateien sind funktionslose Reste aus früheren Zwischenschritten
 dieser Sitzung (keine Sicherheits- oder Datenschutzrelevanz, kein
@@ -283,3 +284,69 @@ Das DSGVO-konforme Anonymisierungs-/Löschkonzept für ausgeschiedene
 Mitarbeiter mit vorhandenen AnalyticsEvents ist separat als offene
 Entscheidung #14 in [OPEN_DECISIONS.md](OPEN_DECISIONS.md) sowie als
 Risiko in [RISK_REGISTER.md](RISK_REGISTER.md) dokumentiert.
+
+## Phase 3B – Empfehlungs-Engine: Umfang und Verifikationsstatus
+
+Gemäß `PHASE_3B_IMPLEMENTATION_PLAN.md` (Rev. 3.2, finales
+Implementierungs-GO von ChatGPT als Projektleiter) umfasst diese Phase
+**ausschließlich**: das Prisma-Schema für die Regel-/Empfehlungs-Engine
+(`RuleSetVersion` → `EligibilityRule`/`ExclusionRule`/
+`PrioritizationRule`/`CrossSellingRule` → `RuleCondition`, sowie
+`Recommendation` → `RecommendationItem` → `RecommendationRationale`,
+`RecommendationCrossSellingSignal`, `SalesOpportunity`), die
+Service-Schicht (`src/server/recommendation/`), die
+Attribute-Registry (`attribute-registry.ts`), synthetische
+Seed-Erweiterung, Unit- und Integrationstests sowie diese Dokumentation.
+Fachliche Details siehe [RECOMMENDATION_ENGINE.md](RECOMMENDATION_ENGINE.md)
+und [DATA_MODEL.md](DATA_MODEL.md).
+
+### Tatsächlich in dieser Sitzung ausgeführte Prüfungen
+
+| Prüfung                       | Werkzeug                            | Ergebnis                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit-Tests (gesamtes Projekt) | `npm run test:unit`                 | 261/261 Tests grün, 21 Testdateien, davon 111 neu für die Empfehlungs-Engine über 10 Dateien in `tests/unit/recommendation/`: `attribute-registry.test.ts` (24), `fingerprint.test.ts` (21), `conditions.test.ts` (17), `fit-score.test.ts` (12), `tie-break.test.ts` (8), `sales-opportunity.test.ts` (8), `eligibility.test.ts` (6), `prioritization.test.ts` (6), `cross-selling.test.ts` (5), `exclusion.test.ts` (4)                                                                   |
+| Migration gegen leere DB      | `npm run verify:migration` (pglite) | erfolgreich: 61 Tabellen (6 neue Phase-3B-Tabellen), 101 Fremdschlüssel; zusätzlich End-to-End-Smoke-Test (Recommendation samt Item/Rationale/Provisions-Pinning/CrossSellingSignal/SalesOpportunity anlegen), 3 Append-only-Ablehnungsproben (`recommendations`/`recommendation_items`/`recommendation_cross_selling_signals`), 1 Beweis dass `sales_opportunities` mutabel bleibt, 1 EXCLUDE-Constraint-Ablehnungsprobe (`rule_set_versions_tenant_active_no_overlap`) – alle erfolgreich |
+| ESLint                        | `npm run lint` (`--max-warnings=0`) | 0 Fehler, 0 Warnungen (ein vorgefundener Fehler – ungenutzte private Funktion `parseDecimal` in `attribute-registry.ts`, totes Code aus der Registry-Vorbereitung für einen aktuell nicht verwendeten `DECIMAL`-Attributtyp – wurde in dieser Sitzung entfernt, inkl. Bereinigung des zugehörigen Imports)                                                                                                                                                                                  |
+| Prettier                      | `npm run format`                    | gesamtes Projekt sauber formatiert (16 zunächst abweichende Dateien, überwiegend Phase-3B-Planungsdokumente sowie neue `src/server/recommendation/*`/`tests/unit/recommendation/*`/`tests/integration/recommendation-engine.test.ts`, mit `prettier --write .` korrigiert)                                                                                                                                                                                                                  |
+| TypeScript-Typprüfung         | `npm run typecheck`                 | ausschließlich die bekannten, durch fehlenden `prisma generate` verursachten Fehler (siehe "Zentrale Sandbox-Einschränkung" oben); keine neuen Typfehler durch Phase 3B                                                                                                                                                                                                                                                                                                                     |
+
+### Integrationstest `recommendation-engine.test.ts`
+
+`tests/integration/recommendation-engine.test.ts` (12 `it()`-Fälle) ist
+`tsc`- und `eslint`-sauber und wurde durch `vitest run` ausgeführt; der
+Lauf schlägt – wie bei allen `tests/integration/*`-Dateien dieses Projekts
+– ausschließlich mit `Cannot find module '.prisma/client/default'` fehl,
+also derselben, bereits in Phase 2B/3A dokumentierten
+Sandbox-Einschränkung (kein `prisma generate` möglich). Zur Bestätigung,
+dass dies kein neues, Phase-3B-spezifisches Problem ist, wurde derselbe
+Fehler reproduzierbar auch für die bereits in CI grün laufende, unveränderte
+`tests/integration/questionnaire-engine.test.ts` ausgelöst. Der Lauf in
+CI (`.github/workflows/ci.yml`, echter `@prisma/client` gegen
+Postgres-Service-Container) gilt als abschließende Bestätigung.
+
+### Weiterhin nicht in dieser Sandbox ausführbar
+
+Aus demselben Grund wie in Phase 2B/3A (kein Zugriff auf
+`binaries.prisma.sh`, siehe "Zentrale Sandbox-Einschränkung" oben)
+konnten folgende Prüfungen der Empfehlungs-Engine in dieser Sitzung
+**nicht** ausgeführt werden:
+
+- `tests/integration/recommendation-engine.test.ts` gegen einen echten,
+  generierten `@prisma/client` – benötigt `prisma generate` + laufende
+  Postgres-Instanz. Läuft automatisch in CI.
+- `npm run build` (Next.js-Produktionsbuild).
+
+Beide sind im Code vorbereitet und in `.github/workflows/ci.yml`
+verankert; der erste CI-Lauf nach dem Push dieser Phase gilt als
+abschließende Bestätigung, nicht diese Sitzung allein.
+
+### Bekannte, bewusst offen gelassene Testlücke
+
+Der `RecommendationConsistencyError`-Zweig (P2002-Konflikt beim
+Idempotenz-Fingerprint, bei dem die anschließende Recovery-`SELECT` keinen
+Treffer findet – deutet auf Datenkorruption oder einen
+Fingerprint-Berechnungsfehler hin) ist absichtlich ungetestet geblieben,
+da er einen Test-Seam im Produktionscode ohne legitimen
+Nicht-Test-Zweck erfordern würde. Begründung siehe
+[DECISION_LOG.md](DECISION_LOG.md), Phase-3B-Eintrag
+"P2002-Recovery-Zweig ohne Nebenläufigkeitssimulation getestet".

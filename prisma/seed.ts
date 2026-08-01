@@ -1,5 +1,5 @@
 /**
- * Synthetisches Seed-Skript (Phase 2).
+ * Synthetisches Seed-Skript (Phase 2, erweitert um Phase 3A/3B).
  *
  * Erzeugt AUSSCHLIESSLICH synthetische/fiktive Testdaten (keine echten
  * Kunden-, Mitarbeiter- oder Vertragsdaten), markiert ueberall mit
@@ -11,13 +11,40 @@
  * pruefen koennen, dass ein Tenant niemals Daten eines anderen Tenants
  * lesen oder referenzieren kann.
  *
+ * Phase 3B (siehe PHASE_3B_IMPLEMENTATION_PLAN.md): jeder Tenant erhaelt
+ * zusaetzlich drei Produktversionen (S/M/L-Tarif) mit den vier
+ * Registry-Attributen aus src/server/recommendation/attribute-registry.ts
+ * (dataVolumeGb, pricePlanTier, hasEuRoaming, contractCommitmentMonths)
+ * sowie eine ACTIVE RuleSetVersion mit je mindestens einer Eligibility-,
+ * Exclusion-, Prioritization- und CrossSelling-Regel inkl. strukturierter
+ * Conditions, damit src/server/recommendation/service.ts::evaluate() gegen
+ * die Seed-Daten ausgewertet werden kann (siehe scripts/verify_seed_pglite.mjs
+ * fuer eine schema-verifizierte SQL-Spiegelung dieses Skripts).
+ *
  * Idempotent: Kann mehrfach ausgefuehrt werden (upsert auf eindeutigen
- * Schluesseln wie tenant.key, product.key, ...).
+ * Schluesseln wie tenant.key, product.key, ...). Die Phase-3B-Ergaenzungen
+ * (weitere ProductVersions, RuleSetVersion-Inhalte, Demo-Recommendation)
+ * folgen dem bereits bestehenden Muster ohne Upsert (siehe `product`,
+ * `productVersion`, `commissionModel` oben) - ein wiederholter Lauf gegen
+ * eine bereits befuellte DB legt daher (wie schon vor dieser Erweiterung)
+ * zusaetzliche Zeilen an statt zu aktualisieren.
  */
 
+import { createHash } from "node:crypto";
 import { PrismaClient, ProductType, CommissionType, AnswerType, NeedType } from "@prisma/client";
 
 const prisma = new PrismaClient();
+
+/**
+ * Deterministischer Platzhalter-Fingerprint fuer die manuell (nicht ueber
+ * src/server/recommendation/service.ts::evaluate()) angelegten Demo-
+ * Recommendation-Zeilen unten. `Recommendation.evaluationFingerprint` ist
+ * @db.Char(64) (SHA-256-Hexdigest) - hier ohne echte Auswertungseingaben
+ * berechnet, da dieser Demo-Datensatz nicht durch die Engine gelaufen ist.
+ */
+function seedFingerprint(...parts: string[]): string {
+  return createHash("sha256").update(parts.join("|")).digest("hex");
+}
 
 const RENEWAL_LOOKAHEAD_DAYS_DEFAULT = 180;
 
@@ -232,6 +259,39 @@ async function seedTenant(
         attributeValue: "true",
         valueType: "boolean",
       },
+      // Phase 3B: Attribute-Keys aus der geschlossenen Registry (siehe
+      // src/server/recommendation/attribute-registry.ts,
+      // PRODUCT_ATTRIBUTE_DEFINITIONS) - zusaetzlich zu den obigen
+      // Legacy-Keys ("data_gb"/"5g"), die von der Regel-Engine nicht
+      // gelesen werden.
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersion.id,
+        attributeKey: "dataVolumeGb",
+        attributeValue: "20",
+        valueType: "number",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersion.id,
+        attributeKey: "pricePlanTier",
+        attributeValue: "STANDARD",
+        valueType: "string",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersion.id,
+        attributeKey: "hasEuRoaming",
+        attributeValue: "true",
+        valueType: "boolean",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersion.id,
+        attributeKey: "contractCommitmentMonths",
+        attributeValue: "24",
+        valueType: "number",
+      },
     ],
   });
 
@@ -249,6 +309,154 @@ async function seedTenant(
       currency: "EUR",
       commissionAmountMinor: 3000,
       recurringCommissionAmountMinor: 100,
+    },
+  });
+
+  // --- Phase 3B: zwei weitere Produktversionen (S/L-Tarif), damit die
+  // Eligibility-/Exclusion-/Prioritization-/CrossSelling-Regeln unten
+  // tatsaechlich zwischen mehreren ProductVersions unterscheiden koennen
+  // (siehe PHASE_3B_IMPLEMENTATION_PLAN.md Abschnitt 3.1/3.3/3.5). ---
+  const productS = await prisma.product.create({
+    data: {
+      tenantId: tenant.id,
+      providerId: providers[0]!.id,
+      categoryId: category.id,
+      productType: ProductType.MOBILE_NEW_CONTRACT,
+      name: "DemoTel Mobil S (synthetisch)",
+      isSynthetic: true,
+    },
+  });
+  const productVersionS = await prisma.productVersion.create({
+    data: {
+      tenantId: tenant.id,
+      productId: productS.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      currency: "EUR",
+      monthlyPriceMinor: 1499,
+      oneTimePriceMinor: 0,
+      contractMonths: 24,
+    },
+  });
+  await prisma.tariffAttribute.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersionS.id,
+        attributeKey: "dataVolumeGb",
+        attributeValue: "5",
+        valueType: "number",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersionS.id,
+        attributeKey: "pricePlanTier",
+        attributeValue: "BASIC",
+        valueType: "string",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersionS.id,
+        attributeKey: "hasEuRoaming",
+        attributeValue: "false",
+        valueType: "boolean",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersionS.id,
+        attributeKey: "contractCommitmentMonths",
+        attributeValue: "24",
+        valueType: "number",
+      },
+    ],
+  });
+  const commissionModelS = await prisma.commissionModel.create({
+    data: { tenantId: tenant.id, productId: productS.id, name: "Standardprovision Mobil S" },
+  });
+  await prisma.commissionModelVersion.create({
+    data: {
+      tenantId: tenant.id,
+      commissionModelId: commissionModelS.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      commissionType: CommissionType.FLAT,
+      currency: "EUR",
+      commissionAmountMinor: 1500,
+      recurringCommissionAmountMinor: 50,
+    },
+  });
+
+  const productL = await prisma.product.create({
+    data: {
+      tenantId: tenant.id,
+      providerId: providers[0]!.id,
+      categoryId: category.id,
+      productType: ProductType.MOBILE_NEW_CONTRACT,
+      name: "DemoTel Mobil L (synthetisch)",
+      isSynthetic: true,
+    },
+  });
+  const productVersionL = await prisma.productVersion.create({
+    data: {
+      tenantId: tenant.id,
+      productId: productL.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      currency: "EUR",
+      monthlyPriceMinor: 4499,
+      oneTimePriceMinor: 0,
+      contractMonths: 24,
+    },
+  });
+  await prisma.tariffAttribute.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersionL.id,
+        attributeKey: "dataVolumeGb",
+        attributeValue: "50",
+        valueType: "number",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersionL.id,
+        attributeKey: "pricePlanTier",
+        attributeValue: "PREMIUM",
+        valueType: "string",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersionL.id,
+        attributeKey: "hasEuRoaming",
+        attributeValue: "true",
+        valueType: "boolean",
+      },
+      {
+        tenantId: tenant.id,
+        productVersionId: productVersionL.id,
+        attributeKey: "contractCommitmentMonths",
+        attributeValue: "24",
+        valueType: "number",
+      },
+    ],
+  });
+  const commissionModelL = await prisma.commissionModel.create({
+    data: { tenantId: tenant.id, productId: productL.id, name: "Standardprovision Mobil L" },
+  });
+  await prisma.commissionModelVersion.create({
+    data: {
+      tenantId: tenant.id,
+      commissionModelId: commissionModelL.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      commissionType: CommissionType.FLAT,
+      currency: "EUR",
+      commissionAmountMinor: 5000,
+      recurringCommissionAmountMinor: 200,
     },
   });
 
@@ -543,7 +751,11 @@ async function seedTenant(
     },
   });
 
-  // --- Regelsatz (minimal, eine Eligibility-Regel) ---
+  // --- Regelsatz (Phase 3B: strukturierte Eligibility-/Exclusion-/
+  // Prioritization-/CrossSelling-Regeln mit Conditions, siehe
+  // PHASE_3B_IMPLEMENTATION_PLAN.md Abschnitt 3.1-3.4). Genau eine ACTIVE
+  // RuleSetVersion je Tenant (EXCLUDE-Constraint
+  // rule_set_versions_tenant_active_no_overlap). ---
   const ruleSet = await prisma.ruleSet.upsert({
     where: { tenantId_key: { tenantId: tenant.id, key: "standardregeln" } },
     update: {},
@@ -558,13 +770,198 @@ async function seedTenant(
       status: "ACTIVE",
     },
   });
+
+  // Hartes Gate ohne echte Einschraenkung (Platzhalter aus Phase 2,
+  // `expression` -> `legacyExpression` umbenannt; keine strukturierten
+  // Conditions = immer erfuellt, siehe conditions.ts::evaluateConditionGroups).
   await prisma.eligibilityRule.create({
     data: {
       tenantId: tenant.id,
       ruleSetVersionId: ruleSetVersion.id,
       key: "mind_18",
       description: "Kunde ist volljaehrig (synthetische Platzhalterregel)",
-      expression: "true",
+      legacyExpression: "true",
+    },
+  });
+
+  // Hartes Gate ueber ein echtes PRODUCT_ATTRIBUTE: alle drei Demo-Tarife
+  // (S=5, M=20, L=50 GB) erfuellen dies, demonstriert aber einen echten
+  // PRODUCT_ATTRIBUTE-Vergleich ohne die Empfehlung einzuschraenken.
+  const ausreichendesDatenvolumen = await prisma.eligibilityRule.create({
+    data: {
+      tenantId: tenant.id,
+      ruleSetVersionId: ruleSetVersion.id,
+      key: "ausreichendes_datenvolumen",
+      description: "Produkt bietet mindestens 5 GB Datenvolumen",
+      isRequired: true,
+    },
+  });
+  await prisma.eligibilityRuleCondition.create({
+    data: {
+      tenantId: tenant.id,
+      eligibilityRuleId: ausreichendesDatenvolumen.id,
+      groupIndex: 0,
+      sourceType: "PRODUCT_ATTRIBUTE",
+      attributeKey: "dataVolumeGb",
+      operator: "GREATER_THAN_OR_EQUAL",
+      comparisonValue: "5",
+    },
+  });
+
+  // Weiche Regel (isRequired=false): fliesst gewichtet in
+  // RecommendationItem.customerFitScore ein statt eligibilityPassed zu
+  // beeinflussen. Kombiniert ANSWER (Streaming-Bedarf) UND PRODUCT_ATTRIBUTE
+  // (EU-Roaming) per gleichem groupIndex (UND-Verknuepfung).
+  const roamingPasstZuBedarf = await prisma.eligibilityRule.create({
+    data: {
+      tenantId: tenant.id,
+      ruleSetVersionId: ruleSetVersion.id,
+      key: "roaming_passt_zu_streaming_bedarf",
+      description: "Streaming-interessierte Kunden profitieren von EU-Roaming",
+      isRequired: false,
+      fitWeight: 60,
+    },
+  });
+  await prisma.eligibilityRuleCondition.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        eligibilityRuleId: roamingPasstZuBedarf.id,
+        groupIndex: 0,
+        sourceType: "ANSWER",
+        questionId: question.id,
+        operator: "EQUALS",
+        comparisonValue: "true",
+      },
+      {
+        tenantId: tenant.id,
+        eligibilityRuleId: roamingPasstZuBedarf.id,
+        groupIndex: 0,
+        sourceType: "PRODUCT_ATTRIBUTE",
+        attributeKey: "hasEuRoaming",
+        operator: "EQUALS",
+        comparisonValue: "true",
+      },
+    ],
+  });
+
+  // Exclusion-Regel: bei Vertragsverlaengerung (SESSION_ATTRIBUTE) wird der
+  // PREMIUM-Tarif (PRODUCT_ATTRIBUTE) zunaechst ausgeschlossen.
+  const renewalKeinPremium = await prisma.exclusionRule.create({
+    data: {
+      tenantId: tenant.id,
+      ruleSetVersionId: ruleSetVersion.id,
+      key: "renewal_kein_premium",
+      reasonCode: "RENEWAL_NO_PREMIUM_TIER",
+      description: "Bei Vertragsverlaengerung wird der PREMIUM-Tarif zunaechst nicht empfohlen",
+    },
+  });
+  await prisma.exclusionRuleCondition.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        exclusionRuleId: renewalKeinPremium.id,
+        groupIndex: 0,
+        sourceType: "SESSION_ATTRIBUTE",
+        attributeKey: "consultationType",
+        operator: "EQUALS",
+        comparisonValue: "RENEWAL",
+      },
+      {
+        tenantId: tenant.id,
+        exclusionRuleId: renewalKeinPremium.id,
+        groupIndex: 0,
+        sourceType: "PRODUCT_ATTRIBUTE",
+        attributeKey: "pricePlanTier",
+        operator: "EQUALS",
+        comparisonValue: "PREMIUM",
+      },
+    ],
+  });
+
+  // Prioritization-Regel: Bonus fuer EU-Roaming-faehige Produkte.
+  const bonusEuRoaming = await prisma.prioritizationRule.create({
+    data: {
+      tenantId: tenant.id,
+      ruleSetVersionId: ruleSetVersion.id,
+      key: "bonus_eu_roaming",
+      description: "Bonus fuer Produkte mit EU-Roaming",
+      weight: 30,
+      commissionRequired: false,
+    },
+  });
+  await prisma.prioritizationRuleCondition.create({
+    data: {
+      tenantId: tenant.id,
+      prioritizationRuleId: bonusEuRoaming.id,
+      groupIndex: 0,
+      sourceType: "PRODUCT_ATTRIBUTE",
+      attributeKey: "hasEuRoaming",
+      operator: "EQUALS",
+      comparisonValue: "true",
+    },
+  });
+
+  // Prioritization-Regel mit commissionRequired=true (uebt den strikten
+  // Provisions-Aufloesungspfad aus, siehe service.ts::buildResolveCommission
+  // - alle drei Demo-Tarife haben eine aktive CommissionModelVersion, der
+  // Pfad schlaegt hier also nie fehl).
+  const bonusNeuvertragPremium = await prisma.prioritizationRule.create({
+    data: {
+      tenantId: tenant.id,
+      ruleSetVersionId: ruleSetVersion.id,
+      key: "bonus_neuvertrag_premium",
+      description: "Bonus fuer PREMIUM-Tarif bei Neuvertrag",
+      weight: 20,
+      commissionRequired: true,
+    },
+  });
+  await prisma.prioritizationRuleCondition.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        prioritizationRuleId: bonusNeuvertragPremium.id,
+        groupIndex: 0,
+        sourceType: "SESSION_ATTRIBUTE",
+        attributeKey: "consultationType",
+        operator: "EQUALS",
+        comparisonValue: "NEW_CONTRACT",
+      },
+      {
+        tenantId: tenant.id,
+        prioritizationRuleId: bonusNeuvertragPremium.id,
+        groupIndex: 0,
+        sourceType: "PRODUCT_ATTRIBUTE",
+        attributeKey: "pricePlanTier",
+        operator: "EQUALS",
+        comparisonValue: "PREMIUM",
+      },
+    ],
+  });
+
+  // Cross-Selling-Regel: Streaming-Zusatzpaket-Signal bei entsprechendem
+  // Bedarf (matcht die unten angelegte Beispiel-Antwort auf
+  // "hat_streaming_bedarf").
+  const streamingZusatzpaket = await prisma.crossSellingRule.create({
+    data: {
+      tenantId: tenant.id,
+      ruleSetVersionId: ruleSetVersion.id,
+      key: "streaming_zusatzpaket",
+      description: "Cross-Selling-Signal fuer ein Streaming-Zusatzpaket",
+      needType: NeedType.STREAMING,
+      priority: 70,
+      reasonCode: "STREAMING_ADDON_SUGGESTED",
+    },
+  });
+  await prisma.crossSellingRuleCondition.create({
+    data: {
+      tenantId: tenant.id,
+      crossSellingRuleId: streamingZusatzpaket.id,
+      groupIndex: 0,
+      sourceType: "ANSWER",
+      questionId: question.id,
+      operator: "EQUALS",
+      comparisonValue: "true",
     },
   });
 
@@ -614,12 +1011,16 @@ async function seedTenant(
     },
   });
 
+  // source=EMPLOYEE_MARKED, da diese Demo-Zeile manuell (nicht ueber ein
+  // RecommendationCrossSellingSignal) angelegt wird - siehe
+  // src/server/recommendation/sales-opportunity.ts::assertSalesOpportunitySourceConsistency
+  // (RULE_BASED erfordert einen gesetzten triggerSignalId, den es hier nicht gibt).
   const detectedNeed = await prisma.detectedNeed.create({
     data: {
       tenantId: tenant.id,
       consultationSessionId: session.id,
       needType: NeedType.STREAMING,
-      source: "RULE_BASED",
+      source: "EMPLOYEE_MARKED",
       detectedAt: new Date("2026-07-15T09:06:30Z"),
     },
   });
@@ -634,11 +1035,18 @@ async function seedTenant(
     },
   });
 
+  // algorithmVersion/evaluationFingerprint: Pflichtfelder seit Phase 3B
+  // (Idempotenz-Grundlage, siehe src/server/recommendation/fingerprint.ts).
+  // Diese Demo-Zeile durchlaeuft nicht die echte Engine (service.ts::evaluate()),
+  // daher ein deterministischer Platzhalter-Fingerprint statt eines echten,
+  // aus Eingabedaten berechneten Werts.
   const recommendation = await prisma.recommendation.create({
     data: {
       tenantId: tenant.id,
       consultationSessionId: session.id,
       ruleSetVersionId: ruleSetVersion.id,
+      algorithmVersion: 1,
+      evaluationFingerprint: seedFingerprint(tenant.id, session.id, "seed-demo-recommendation"),
       generatedAt: new Date("2026-07-15T09:07:00Z"),
     },
   });
@@ -650,7 +1058,8 @@ async function seedTenant(
       productVersionId: productVersion.id,
       eligibilityPassed: true,
       exclusionReasonCodes: [],
-      businessPriorityScore: 0.8,
+      customerFitScore: 80,
+      businessPriorityScore: 80,
       priorityRank: 1,
     },
   });
