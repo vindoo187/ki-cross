@@ -230,9 +230,16 @@ async function main() {
 
     const sessionId = uuid();
     await q(
-      `INSERT INTO consultation_sessions (id, tenant_id, store_id, employee_id, customer_reference_id, consultation_type, status, started_at, ended_at, data_completeness_score)
-       VALUES ($1,$2,$3,$4,$5,'NEW_CONTRACT','COMPLETED','2026-07-15T09:00:00Z','2026-07-15T09:20:00Z',0.9)`,
-      [sessionId, tenantId, storeIds[0], employeeIds[0], customerReferenceId],
+      `INSERT INTO consultation_sessions (id, tenant_id, store_id, employee_id, customer_reference_id, questionnaire_version_id, consultation_type, status, started_at, ended_at, data_completeness_score)
+       VALUES ($1,$2,$3,$4,$5,$6,'NEW_CONTRACT','COMPLETED','2026-07-15T09:00:00Z','2026-07-15T09:20:00Z',0.9)`,
+      [
+        sessionId,
+        tenantId,
+        storeIds[0],
+        employeeIds[0],
+        customerReferenceId,
+        questionnaireVersionId,
+      ],
     );
 
     await q(
