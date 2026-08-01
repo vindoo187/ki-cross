@@ -8,11 +8,16 @@ einzubetten – das ist hier korrigiert.)
 
 Repository: `https://github.com/vindoo187/ki-cross`, Branch `main`,
 Code-/Skriptstand entspricht dem bereits gepushten und CI-geprüften Commit
-`474be0d` (CI-Lauf #11, Status: Success). Diese Fassung des Dokuments
-selbst wurde in einem separaten, rein dokumentarischen Folgecommit nach
-`main` gepusht, der ausschließlich den nach Push von `474be0d` bestätigten
-CI-#11-Status in den Text einträgt – ohne Änderung an Code, Skripten oder
-Migrationen.
+`474be0d` (CI-Lauf #11, Status: Success, 1m 35s). Der unmittelbare
+Vorgänger-Commit dieser Textfassung, `dc1d8f0` (rein dokumentarisch,
+ausschließlich Eintragung des CI-#11-Status, keine Code-/Skriptänderung),
+hat seinerseits CI-Lauf #12 ausgelöst, ebenfalls Status: Success, 1m 40s.
+Da `ci.yml` ohne Pfadfilter bei jedem Push nach `main` auslöst, löst auch
+der Push dieser aktuellen Textfassung automatisch einen weiteren,
+rein dokumentarischen CI-Lauf aus; dieser prüft denselben Code-/Skriptstand
+wie CI #11/#12 erneut und wird aus Konsistenzgründen nicht mehr einzeln
+kommentiert, da er keine inhaltliche Änderung an Code, Skripten oder
+Migrationen betrifft.
 
 ## 1. Technische Versionen
 
