@@ -231,3 +231,55 @@ Installation via pnpm in Kombination mit den Datei-/Symlink-Restriktionen
 des gemounteten Ordners unzuverlässig war; da kein funktionaler Grund für
 pnpm identifiziert wurde, wurde daraus in Phase 2B eine bewusste,
 dauerhafte Festlegung statt offener technischer Schuld.
+
+## Phase 3A – CI-Fehlerbehebung (CI #7, #8, #9)
+
+Nach dem ersten Push nach GitHub schlug CI zunächst fehl. Beide Fehler
+wurden behoben, mit ChatGPT (Projektleiter) abgestimmt und über GitHub
+Actions verifiziert:
+
+- **CI #7**: Testbugs in `tests/integration/questionnaire-engine.test.ts`
+  (`asTenantA`-Wrapper fehlte an mehreren Stellen; `afterAll` versuchte
+  ein `deleteMany` auf append-only-geschützten Tabellen). Behoben durch
+  Korrektur der Wrapper-Aufrufe.
+- **CI #8**: `AnalyticsEvent.employee` nutzte `onDelete: SetNull`, was
+  beim Löschen eines Employees ein `UPDATE` auf `analytics_events`
+  auslöst – blockiert durch den Append-only-Trigger
+  `forbid_update_delete()` (Migration `20260731000000_init`). Dies war
+  kein reiner Testbug, sondern ein Schema-Designfehler: derselbe Fehler
+  wäre auch in Produktion aufgetreten. Behoben durch Umstellung auf
+  `onDelete: Restrict` (neue Migration
+  `20260801095926_analytics_events_employee_restrict`) sowie Reduktion
+  von `afterAll` in `questionnaire-engine.test.ts` auf `$disconnect()`,
+  da CI ohnehin eine ephemere Postgres-Instanz pro Lauf nutzt (siehe
+  `.github/workflows/ci.yml`) und Testisolation durch `randomUUID`-Suffixe
+  je Testlauf sichergestellt ist. `BaselineMeasurement.employee` behält
+  bewusst `SetNull`, da `baseline_measurements` keinen Append-only-Trigger
+  hat.
+- **CI #9** (Commit `85e4022`): **Success**, Laufzeit 1m 33s, keine
+  Fehler – ausschließlich die bekannte, folgenlose Node.js-20-
+  Deprecation-Warnung. Von ChatGPT als finales GO für den CI-technischen
+  Abschluss von Phase 3A bestätigt.
+
+## Bekannte offene technische Aufgaben (nicht blockierend für Phase 3A)
+
+Von ChatGPT bei der Phase-3A-Freigabe explizit als nicht-blockierend
+eingestuft, aber für eine spätere Phase festzuhalten:
+
+- **FK-Fehler in fachliche Fehlermeldung übersetzen.** Voraussetzung
+  bereits erfüllt: der bestehende zentrale Error-Handler verhindert schon
+  heute, dass rohe SQL-/Prisma-Details an Clients gelangen; eine
+  spezifische, fachlich verständliche Übersetzung von FK-Verletzungen
+  (z. B. „Mitarbeiter kann nicht gelöscht werden, da noch Analytics-Daten
+  vorhanden sind") steht noch aus.
+- **Dedizierte Testdatenbank mit Schutzmechanismus.** Lokale
+  Integrationstests sollen künftig die DB-URL auf ein `_test`-Namensmuster
+  prüfen und den Start abbrechen, wenn die Ziel-DB nicht eindeutig als
+  Testdatenbank erkennbar ist (siehe auch
+  [RISK_REGISTER.md](RISK_REGISTER.md), Abschnitt "Phase 3A – neu
+  identifizierte Risiken").
+
+Das DSGVO-konforme Anonymisierungs-/Löschkonzept für ausgeschiedene
+Mitarbeiter mit vorhandenen AnalyticsEvents ist separat als offene
+Entscheidung #14 in [OPEN_DECISIONS.md](OPEN_DECISIONS.md) sowie als
+Risiko in [RISK_REGISTER.md](RISK_REGISTER.md) dokumentiert.
