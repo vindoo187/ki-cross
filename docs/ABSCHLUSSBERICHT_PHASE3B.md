@@ -5,14 +5,31 @@ Aussagen sind hier direkt belegt, ohne dass andere Dateien gelesen werden
 müssen (Vorgabe aus der NO-GO-Rückmeldung zu einer früheren Fassung des
 Phase-3A-Berichts, hier von Anfang an eingehalten).
 
-Repository: `https://github.com/vindoo187/ki-cross`, Branch `main`,
-Code-/Skriptstand entspricht dem gepushten und CI-geprüften Commit
-`3805af6`. Historie dieser Phase: `106b2da` (Implementierung) →
-CI-Lauf #13 fehlgeschlagen (Prisma-Schema-Validierungsfehler P1012) →
-`89d0f98` (Fix CI #13/#14) → CI-Lauf #15 fehlgeschlagen
-(TypeScript-Kompilierungsfehler in einer Testdatei) → `3805af6` (Fix CI
-#15) → **CI-Lauf #16: Success**. Beide Fehler und ihre Behebung sind in
-Abschnitt 13 vollständig dokumentiert.
+Repository: `https://github.com/vindoo187/ki-cross`, Branch `main`.
+**Zwei zu unterscheidende Commit-/CI-Stände:**
+
+- **Implementierungs-Commit `3805af6`** — der gesamte Code-, Migrations-
+  und Testinhalt dieser Phase (Schema, Service-Schicht, Tests, Skripte).
+  Historie: `106b2da` (Implementierung) → CI-Lauf #13 fehlgeschlagen
+  (Prisma-Schema-Validierungsfehler P1012) → `89d0f98` (Fix CI #13/#14) →
+  CI-Lauf #15 fehlgeschlagen (TypeScript-Kompilierungsfehler in einer
+  Testdatei) → `3805af6` (Fix CI #15) → **CI-Lauf #16: Success**. Beide
+  Fehler und ihre Behebung sind in Abschnitt 13 vollständig dokumentiert.
+  Dieser Commit ist die inhaltliche/technische Grundlage dieses gesamten
+  Berichts (alle Code-Fakten, Testzahlen, Dateilisten in Abschnitt 12
+  beziehen sich auf diesen Stand).
+- **Korrigierter Berichts-Commit `593f938`** — ausschließlich eine
+  redaktionelle Korrektur von *`docs/ABSCHLUSSBERICHT_PHASE3B.md`* selbst
+  (Behebung der vorherigen ChatGPT-NO-GO-Punkte: Append-only-Tabellenzahl,
+  Testzahlen-Trennung, Upgrade-Test-Beleg), **ohne Code-/Migrations-
+  /Teständerung**. Bestätigt durch **CI-Lauf #17: Success** (derselbe
+  CI-Workflow läuft bei jedem Push, auch bei reinen Doku-Commits, und
+  bestätigt damit erneut den unveränderten, weiterhin grünen Code-Stand
+  auf `main`).
+
+`HEAD` von `main` ist aktuell `593f938`; der darin enthaltene Code-/
+Skriptstand ist identisch zu `3805af6` (nur die Berichtsdatei wurde
+geändert).
 
 ## 1. Technische Versionen
 
@@ -417,12 +434,20 @@ per Code-Review behauptet):
 | `npx tsc --noEmit`                                                              |            1             | 38 Fehler, ausnahmslos auf die bekannte Sandbox-Einschränkung zurückführbar (11 Wurzelursache-Fehler "Cannot find module '@prisma/client'", Rest daraus kaskadierende `implicit any`/`unknown`-Folgefehler) — keine neuen Logikfehler (siehe Abschnitt 13)                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | CI-Lauf #16 (Commit `3805af6`), Schritt „Integrationstests (echte Postgres-DB)" |       0 (Success)        | `npm run test:integration` → vitest: **Test Files 3 passed (3)**, **Tests 35 passed (35)** — `tests/integration/tenant-isolation.test.ts` (6 Tests, 409ms), `tests/integration/questionnaire-engine.test.ts` (17 Tests, 1040ms), `tests/integration/recommendation-engine.test.ts` (12 Tests, 998ms, **neu in Phase 3B**); Gesamtdauer 1,64s                                                                                                                                                                                                                                                                                                                                                                                 |
 | CI-Lauf #16 (Commit `3805af6`), Gesamtjob `build-and-test`                      | Success (GitHub Actions) | 1m 27s, vollständiger Durchlauf inkl. `prisma generate`, `prisma migrate deploy` gegen echte Postgres-Service-Instanz, Lint/Format/Typecheck/Unit-Tests/Integrationstests (s. o.)/`npm run build` — abschließende Bestätigung, dass diese Phase auch außerhalb der Sandbox vollständig besteht                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| CI-Lauf #17 (Commit `593f938`), Gesamtjob `build-and-test`                      | Success (GitHub Actions) | 1m 31s. Dieser Commit enthält **ausschließlich** eine redaktionelle Korrektur von `docs/ABSCHLUSSBERICHT_PHASE3B.md` selbst (keine Code-/Migrations-/Teständerung). CI-Lauf #17 bestätigt damit erneut denselben, unveränderten grünen Code-Stand (identisch zu CI-Lauf #16) — dient als unabhängiger Beleg, dass der aktuelle `HEAD` von `main` weiterhin vollständig besteht                                                                                                                                                                                                                                                                                                                                              |
 
 ## 12. Vollständige Liste erstellter und geänderter Dateien
 
-`git diff --stat b11d3ce..HEAD` (`b11d3ce` = letzter Commit vor Beginn
-Phase 3B, `HEAD` = `3805af6`): **39 Dateien geändert, 8.535 Zeilen
-hinzugefügt, 169 Zeilen entfernt.**
+`git diff --stat b11d3ce..3805af6` (`b11d3ce` = letzter Commit vor Beginn
+Phase 3B, `3805af6` = **Implementierungs-Commit**, d. h. der letzte Commit
+mit tatsächlichem Code-/Migrations-/Testinhalt dieser Phase): **39 Dateien
+geändert, 8.535 Zeilen hinzugefügt, 169 Zeilen entfernt.**
+
+Diese Diff-Statistik reicht bewusst nur bis `3805af6` und **enthält nicht**
+den späteren Commit `593f938` (Korrigierter Berichts-Commit). `593f938`
+ändert ausschließlich `docs/ABSCHLUSSBERICHT_PHASE3B.md` (redaktionelle
+Korrektur, keine Code-/Migrations-/Testdatei betroffen) und ist damit für
+diese datei-/zeilenbasierte Implementierungsübersicht nicht relevant.
 
 ```
 PHASE_3B_IMPLEMENTATION_PLAN.md                              | 1095 ++++++++++
@@ -575,18 +600,34 @@ Anwendungscode referenziert sie; bitte manuell löschen.
 
 ## 15. GO/NO-GO
 
-Aus technischer Sicht: **GO.** Alle 261 Unit-Tests grün, Migration
-(inkl. Upgrade-Pfad auf bestehende Daten) fehlerfrei mit vollständigem
-Smoke-Test verifiziert, ESLint/Prettier sauber, `tsc --noEmit` zeigt
-ausschließlich die bekannte, folgenlose Sandbox-Einschränkung, und CI-Lauf
-#16 (Commit `3805af6`) ist erfolgreich — die einzige tatsächlich
-abschließende Prüfinstanz für `prisma generate`, echte Postgres-
-Integrationstests und den Produktions-Build. Beide während dieser Phase in
-CI aufgetretenen Fehler (#13/#14, #15) wurden transparent dokumentiert,
-auf ihre Grundursache zurückgeführt, behoben und durch einen erneuten
-grünen CI-Lauf bestätigt — keiner davon deutete auf einen Fachlogikfehler
-hin, beide waren Instanzen derselben bereits bekannten
-Sandbox-Einschränkung (kein lokaler `prisma generate`).
+Diese Freigabe unterscheidet zwei getrennte Prüfinstanzen, die sich auf
+zwei unterschiedliche Commits beziehen (siehe Einleitung und Abschnitt 12):
+
+**a) Technische Freigabe (Code/Migration/Tests) — CI-Lauf #16, Commit
+`3805af6`:** Aus technischer Sicht: **GO.** Alle 261 Unit-Tests grün,
+Migration (inkl. Upgrade-Pfad auf bestehende Daten) fehlerfrei mit
+vollständigem Smoke-Test verifiziert, ESLint/Prettier sauber, `tsc
+--noEmit` zeigt ausschließlich die bekannte, folgenlose
+Sandbox-Einschränkung, und CI-Lauf #16 (Commit `3805af6`) ist erfolgreich
+— die einzige tatsächlich abschließende Prüfinstanz für `prisma
+generate`, echte Postgres-Integrationstests und den Produktions-Build.
+Beide während dieser Phase in CI aufgetretenen Fehler (#13/#14, #15)
+wurden transparent dokumentiert, auf ihre Grundursache zurückgeführt,
+behoben und durch einen erneuten grünen CI-Lauf bestätigt — keiner davon
+deutete auf einen Fachlogikfehler hin, beide waren Instanzen derselben
+bereits bekannten Sandbox-Einschränkung (kein lokaler `prisma generate`).
+
+**b) Bestätigung des korrigierten Berichtsstands — CI-Lauf #17, Commit
+`593f938`:** Der vorliegende Bericht wurde nach vorheriger Rückmeldung
+redaktionell korrigiert (Append-only-Tabellenzahl, Testzahlen-Trennung,
+Upgrade-Test-Beleg, sowie die in dieser Fassung ergänzte Unterscheidung
+Implementierungs-/Berichts-Commit). Dieser Korrektur-Commit `593f938`
+enthält ausschließlich Änderungen an `docs/ABSCHLUSSBERICHT_PHASE3B.md`
+und keinerlei Code-/Migrations-/Teständerung. CI-Lauf #17 bestätigt, dass
+derselbe grüne Code-Stand (identisch zu `3805af6`) auch nach diesem
+Doku-Commit unverändert vollständig besteht. `593f938` ist der aktuelle
+`HEAD` von `main` und damit der Commit, den dieser Bericht in seiner
+jetzigen Fassung beschreibt.
 
 Endgültige Freigabe obliegt wie in den Vorphasen dem Projektleiter
 (ChatGPT) und dem Auftraggeber.
