@@ -7,7 +7,12 @@ zurückgewiesen, weil sie auf andere Dokumente verwies statt Inhalte
 einzubetten – das ist hier korrigiert.)
 
 Repository: `https://github.com/vindoo187/ki-cross`, Branch `main`,
-aktueller Commit `b11d3ce`.
+Code-/Skriptstand entspricht dem bereits gepushten und CI-geprüften Commit
+`474be0d` (CI-Lauf #11, Status: Success). Diese Fassung des Dokuments
+selbst wurde in einem separaten, rein dokumentarischen Folgecommit nach
+`main` gepusht, der ausschließlich den nach Push von `474be0d` bestätigten
+CI-#11-Status in den Text einträgt – ohne Änderung an Code, Skripten oder
+Migrationen.
 
 ## 1. Technische Versionen
 
@@ -386,12 +391,13 @@ Beide Integrationstestdateien können in der aktuellen Entwicklungs-Sandbox
 '.prisma/client/default'`. Ursache ist die in Abschnitt 13 beschriebene
 Sandbox-Einschränkung (kein Zugriff auf `binaries.prisma.sh`, daher kein
 `prisma generate` möglich). Sie sind im Code vollständig vorhanden und in
-`.github/workflows/ci.yml` verankert; laut der bisherigen CI-Historie in
-GitHub Actions lief CI-Lauf #9 (Commit `85e4022`) erfolgreich in 1m 33s ohne
-Fehler (einzige Ausgabe: eine folgenlose Node.js-20-Deprecation-Warnung).
-Diese Aussage stützt sich auf die CI-Historie in GitHub Actions, nicht auf
-einen in dieser Sitzung selbst durchgeführten Lauf, und wird hier explizit
-als solche gekennzeichnet.
+`.github/workflows/ci.yml` verankert; laut der CI-Historie in GitHub Actions
+lief CI-Lauf #11 (Commit `474be0d`, der aktuelle, finale gepushte Commit
+dieses Berichts) erfolgreich in 1m 35s ohne Fehler (einzige Ausgabe: eine
+folgenlose Node.js-20-Deprecation-Warnung, identisch zu allen vorherigen
+Läufen). Diese Aussage stützt sich auf die CI-Historie in GitHub Actions,
+nicht auf einen in dieser Sitzung selbst durchgeführten Lauf, und wird hier
+explizit als solche gekennzeichnet.
 
 ## 11. Vollständige Prüfkommandos mit Ergebnissen und Exit-Codes
 
@@ -438,15 +444,16 @@ bereits den korrigierten Zustand zeigt).
 
 ## 12. Vollständige Liste erstellter und geänderter Dateien
 
-`git diff --stat 90b8df4 HEAD` (Vergleich Ende Phase 2B → aktueller Commit
-`b11d3ce`), 34 Dateien, 5.776 Zeilen hinzugefügt, 183 Zeilen entfernt:
+`git diff --stat 90b8df4 474be0d` (Vergleich Ende Phase 2B → aktueller,
+bereits nach `main` gepushter Commit `474be0d`), 35 Dateien, 6.292 Zeilen
+hinzugefügt, 186 Zeilen entfernt:
 
 ```
 PHASE_3A_IMPLEMENTATION_PLAN.md                         |  167 +++ (neu)
 PHASE_3A_STARTPROMPT.md                                 |  653 +++++++++++ (neu)
 README.md                                                |   19 +-
 _write_test_file                                         |    0 (Artefakt ohne Inhaltsänderung, siehe unten)
-docs/ABSCHLUSSBERICHT_PHASE3A.md                         |   88 ++ (neu, jetzt durch dieses Dokument ersetzt)
+docs/ABSCHLUSSBERICHT_PHASE3A.md                         |  594 ++++++++++ (neu, dieses Dokument)
 docs/ARCHITECTURE.md                                     |   14 +-
 docs/DATA_MODEL.md                                       |   61 +-
 docs/DECISION_LOG.md                                     |  229 ++++ (neu)
@@ -461,6 +468,7 @@ prisma/migrations/20260801095926_analytics_events_employee_restrict/migration.sq
 prisma/schema.prisma                                      |  127 ++-
 prisma/seed.ts                                            |  238 ++ (Fragen-Engine-Seeddaten)
 scripts/schema_to_sql.py                                  |    8 +-
+scripts/verify_seed_pglite.mjs                            |   13 +- (Bugfix questionnaire_version_id, siehe Abschnitt 11)
 src/server/questionnaire/answer-validation.ts             |  192 ++ (neu)
 src/server/questionnaire/decimal.ts                        |   53 ++ (neu)
 src/server/questionnaire/errors.ts                         |  160 ++ (neu)
@@ -484,6 +492,15 @@ Zusätzlich außerhalb dieses Diff-Bereichs, aus der CI-#8-Fehlerbehebung
 auf `onDelete: Restrict` (in obiger Zeilenzahl von `prisma/schema.prisma`
 bereits enthalten) sowie die neue Migration
 `20260801095926_analytics_events_employee_restrict` (oben aufgeführt).
+
+Diese Dateiliste bezieht sich auf den tatsächlich gepushten Commit `474be0d`,
+nicht mehr auf `b11d3ce`. `474be0d` enthält gegenüber `b11d3ce` genau die vier
+in Abschnitt 11 beschriebenen Korrekturen: den Bugfix in
+`scripts/verify_seed_pglite.mjs`, die Prettier-Korrekturen in
+`docs/OPEN_DECISIONS.md` und `docs/RISK_REGISTER.md`, sowie den vollständigen
+Ersatz von `docs/ABSCHLUSSBERICHT_PHASE3A.md` durch diese Fassung. Es wurde
+ausschließlich Dokumentation und ein Sandbox-Verifikationsskript geändert,
+kein Anwendungscode (`src/`, `prisma/schema.prisma`, `prisma/migrations/`).
 
 Anmerkung zu `_write_test_file`: eine 0-Byte-Datei ohne Inhalt und ohne
 Referenz aus Anwendungscode, technisches Artefakt eines
@@ -513,9 +530,10 @@ genau diese fehlenden generierten Typen zurückführbar (siehe Abschnitt 11),
 keiner weist auf einen echten Logikfehler hin.
 
 **Nicht in dieser Sandbox geprüft, aber in CI verankert und dort laut
-bisheriger CI-Historie erfolgreich gelaufen (CI-Lauf #9, Commit `85e4022`,
-1m 33s, keine Fehler):** beide Integrationstestdateien gegen echten
-`@prisma/client` + Postgres-Service-Container, `npm run build`.
+CI-Historie erfolgreich gelaufen (CI-Lauf #11, Commit `474be0d`, der
+finale gepushte Commit dieses Berichts, 1m 35s, keine Fehler):** beide
+Integrationstestdateien gegen echten `@prisma/client` +
+Postgres-Service-Container, `npm run build`.
 
 **Bekannte offene technische Aufgaben (von ChatGPT als nicht-blockierend für
 Phase 3A eingestuft, für spätere Phase festgehalten):**
@@ -580,15 +598,17 @@ Fassung korrigiert das.
 **Status dieser Fassung:** Alle Prüfkommandos wurden für diesen Bericht am
 2026-08-01 tatsächlich neu ausgeführt (siehe Abschnitt 11), inklusive der
 Behebung eines bis dahin unentdeckten Fehlers im Seed-Verifikationsskript
-und einer Prettier-Formatierungslücke in zwei Dokumentationsdateien. Dieser
-Bericht ist zur erneuten Prüfung durch ChatGPT (Projektleiter) vorgesehen;
-die endgültige GO/NO-GO-Entscheidung zum **Berichtsinhalt** liegt bei
-ChatGPT.
+und einer Prettier-Formatierungslücke in zwei Dokumentationsdateien. Der
+finale Commit `474be0d` ist nach `main` gepusht und CI-Lauf #11 dafür ist
+grün (Status: Success, 1m 35s, keine Fehler, einzige Ausgabe eine
+folgenlose Node.js-20-Deprecation-Warnung). Dieser Bericht ist zur
+erneuten Prüfung durch ChatGPT (Projektleiter) vorgesehen; die endgültige
+GO/NO-GO-Entscheidung zum **Berichtsinhalt** liegt bei ChatGPT.
 
 **Offen für den Auftraggeber:** Nach dem Klonen dieses Projekts mit
 normalem Internetzugang müssen einmalig ausgeführt werden:
 `npm install`, `npx prisma generate`, `npx prisma migrate deploy` (bzw.
 `migrate dev` in lokaler Entwicklung). Erst danach sind `tsc --noEmit`,
 `npm run build` und beide `tests/integration/*`-Dateien lokal vollständig
-lauffähig; im CI-System sind sie es laut bisheriger Historie bereits
-(CI-Lauf #9).
+lauffähig; im CI-System sind sie es bereits (CI-Lauf #11, Commit
+`474be0d`).
