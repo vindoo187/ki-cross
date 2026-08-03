@@ -162,3 +162,89 @@ export class CrossSellingSignalNotFoundError extends RecommendationEngineError {
     super(`RecommendationCrossSellingSignal "${signalId}" wurde nicht gefunden.`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// RecommendationOutcome (outcome.ts, siehe PHASE_5_IMPLEMENTATION_PLAN.md
+// Abschnitt 2.2 Punkt 3 + Abschnitt 8, AP5)
+// ---------------------------------------------------------------------------
+
+/** Das referenzierte RecommendationItem existiert nicht (oder gehoert zu einem anderen Mandanten). */
+export class RecommendationItemNotFoundError extends RecommendationEngineError {
+  constructor(recommendationItemId: string) {
+    super(`RecommendationItem "${recommendationItemId}" wurde nicht gefunden.`);
+  }
+}
+
+/**
+ * Fuer dieses RecommendationItem existiert bereits ein RecommendationOutcome
+ * (`@@unique([tenantId, recommendationItemId])` in prisma/schema.prisma -
+ * genau ein Outcome pro Item, append-only). Wiederholte Klicks (Doppel-
+ * Request-Race) sollen dem Mitarbeiter den bereits gespeicherten Stand
+ * zeigen statt eines technischen Fehlers (siehe Plan Abschnitt 8).
+ */
+export class RecommendationOutcomeAlreadyExistsError extends RecommendationEngineError {
+  constructor(
+    public readonly recommendationItemId: string,
+    public readonly decidedAt: Date | null,
+  ) {
+    super(
+      `Fuer RecommendationItem "${recommendationItemId}" wurde bereits ein Outcome gespeichert` +
+        (decidedAt ? ` (entschieden am ${decidedAt.toISOString()}).` : "."),
+    );
+  }
+}
+
+/** outcome = REJECTED verlangt eine rejectionReasonId aus der gepflegten RejectionReason-Liste (Pflichtangabe, siehe docs/RECOMMENDATION_ENGINE.md). */
+export class RejectionReasonRequiredError extends RecommendationEngineError {
+  constructor(recommendationItemId: string) {
+    super(
+      `Outcome "REJECTED" fuer RecommendationItem "${recommendationItemId}" erfordert eine rejectionReasonId.`,
+    );
+  }
+}
+
+/** rejectionReasonId wurde gesetzt, obwohl outcome != REJECTED - Feld ist ausschliesslich fuer Ablehnungen vorgesehen. */
+export class RejectionReasonNotApplicableError extends RecommendationEngineError {
+  constructor(recommendationItemId: string, outcome: string) {
+    super(
+      `rejectionReasonId ist fuer outcome "${outcome}" (RecommendationItem "${recommendationItemId}") nicht zulaessig - nur fuer "REJECTED" vorgesehen.`,
+    );
+  }
+}
+
+/** Die referenzierte RejectionReason existiert nicht, gehoert zu einem anderen Mandanten, oder ist nicht mehr aktiv (isActive = false). */
+export class RejectionReasonNotFoundError extends RecommendationEngineError {
+  constructor(rejectionReasonId: string) {
+    super(`RejectionReason "${rejectionReasonId}" wurde nicht gefunden oder ist nicht mehr aktiv.`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SalesOpportunity-Statusaktualisierung (opportunity-status.ts, siehe Plan
+// Abschnitt 2.2 Punkt 4 + Abschnitt 9, Stop-Punkt 3, AP5)
+// ---------------------------------------------------------------------------
+
+/** Die referenzierte SalesOpportunity existiert nicht (oder gehoert zu einem anderen Mandanten). */
+export class SalesOpportunityNotFoundError extends RecommendationEngineError {
+  constructor(salesOpportunityId: string) {
+    super(`SalesOpportunity "${salesOpportunityId}" wurde nicht gefunden.`);
+  }
+}
+
+/**
+ * Der angeforderte Statuswechsel ist gemaess der mit ChatGPT abgestimmten
+ * Uebergangsreihenfolge (Plan Abschnitt 9: OPEN -> OFFERED ->
+ * ACCEPTED|DECLINED, DEFERRED nur aus OFFERED, aus DEFERRED zurueck zu
+ * OFFERED) nicht erlaubt.
+ */
+export class InvalidOpportunityStatusTransitionError extends RecommendationEngineError {
+  constructor(
+    salesOpportunityId: string,
+    public readonly currentStatus: string,
+    public readonly requestedStatus: string,
+  ) {
+    super(
+      `SalesOpportunity "${salesOpportunityId}": Statuswechsel von "${currentStatus}" zu "${requestedStatus}" ist nicht erlaubt.`,
+    );
+  }
+}

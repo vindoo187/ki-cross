@@ -485,3 +485,68 @@ Abschnitt 11 – ein solcher Zustand deutet laut Planung auf Datenkorruption
 oder einen Fingerprint-Berechnungsfehler hin, nicht auf ein reguläres
 Race-Verhalten, und lässt sich ohne Test-Seam im Produktionscode nicht
 gezielt provozieren).
+
+## Phase 5: Nicht-modales "Embedded Panel"-Muster statt `<dialog>`-Modals
+
+**Entscheidung:** Wiederkehrende UI-Elemente, die zusätzliche Details oder
+Aktionen zu einer Empfehlung/Sitzung anzeigen (`RationaleDrawer`,
+`OutcomeDialog`, `OpportunityCard`, `AbandonConsultationButton`), werden
+als nicht-modale, eingebettete Panels statt als `<dialog>`-Modals
+umgesetzt. Auf Mobil/Tablet-Hochformat wird `RationaleDrawer` zu einem
+fixierten Bottom-Sheet mit Scrim (siehe AP11), bleibt aber weiterhin kein
+echtes Modal (kein Fokus-Trap, der die übrige Seite blockiert).
+
+**Warum:** Der Mitarbeiter soll während der Beratung jederzeit den Bezug
+zu den übrigen, gleichzeitig sichtbaren Empfehlungskarten behalten
+können. Ein echtes Modal würde die restliche Seite verdecken/blockieren
+und den Vergleich mehrerer Empfehlungen erschweren – siehe
+`PHASE_5_IMPLEMENTATION_PLAN.md`, Abschnitt 4.7.
+
+## Phase 5: Kein Freitext für Ablehnungs-/Abbruchgründe
+
+**Entscheidung:** Sowohl `OutcomeDialog` (Ablehnung einer Empfehlung) als
+auch `AbandonConsultationButton` (Beratungsabbruch) bieten ausschließlich
+eine feste, kleine Menge strukturierter Gründe/Codes zur Auswahl an –
+kein freies Textfeld.
+
+**Warum:** Konsistent mit dem seit Phase 3A geltenden Grundsatz "kein
+Freitext als Grundlage einer strukturierten, auswertbaren Entscheidung"
+(siehe Abschnitt "Phase 3A: Verbot von Freitext" oben) sowie mit
+[PRIVACY_AND_SECURITY.md](PRIVACY_AND_SECURITY.md): Freitext birgt das
+Risiko, dass personenbezogene/sensible Angaben unbeabsichtigt in
+Analytics-Auswertungen landen. Strukturierte Codes sind zudem
+konsistent auswertbar (KPIs/Filialvergleich), während Freitext das nicht
+wäre.
+
+## Phase 5: Abschluss und Abbruch einer Beratungssitzung sind endgültig
+
+**Entscheidung:** Sowohl `completeConsultation()` als auch
+`abandonConsultation()` sind endgültige, nicht rückgängig machbare
+Zustandsübergänge (analog zur Phase-3A-Entscheidung "Abschluss ist
+endgültig" oben). Es gibt in Phase 5 keine Service-Funktion, die eine
+`COMPLETED`- oder `ABANDONED`-Sitzung zurücksetzt. Beide Aktionen sind
+über eine zweistufige Bestätigung in der UI abgesichert, um versehentliche
+Auslösung zu verhindern.
+
+**Warum:** Konsistent mit dem append-only-/Unveränderlichkeits-Grundsatz,
+der das Projekt seit Phase 3A durchzieht. Eine Wiedereröffnungsfunktion
+würde zusätzliche Zustandsübergänge und Testfälle erfordern, ohne dass ein
+fachlicher Bedarf dafür bereits nachgewiesen ist; siehe neu identifiziertes
+Risiko in [RISK_REGISTER.md](RISK_REGISTER.md), Abschnitt "Phase 5".
+
+## Phase 5: Dev-Auth-Mechanismus bewusst minimal und explizit nicht produktionsreif
+
+**Entscheidung:** Der in AP3 eingeführte Authentifizierungsmechanismus
+(einfache Auswahl eines synthetischen Mitarbeiters ohne Passwort/Session-
+Sicherheitsmerkmale) dient ausschließlich dazu, `runWithTenantContext()`
+pro Request mit einem echten Mitarbeiter-/Mandantenbezug zu befüllen und
+die übrige UI durchgängig testbar zu machen.
+
+**Warum:** Ein vollwertiger, produktionstauglicher Auth-Mechanismus
+(Passwort-Hashing, Session-Management, ggf. SSO) war ausdrücklich nicht
+Teil des Phase-5-Auftrags (Fokus: Mitarbeiter-UI-Qualität) und hätte den
+Umfang erheblich vergrößert, ohne für den MVP-Test (AP15, interne
+Mitarbeiter, synthetische Daten) notwendig zu sein. Verbindlich
+dokumentiert als Einschränkung in [CONSULTATION_UI.md](CONSULTATION_UI.md)
+und [RISK_REGISTER.md](RISK_REGISTER.md), damit dies vor einem echten
+Produktivbetrieb nicht übersehen wird.

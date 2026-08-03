@@ -1,6 +1,25 @@
 :root {
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* AP11 (Plan Abschnitt 11) benennt diese Werte als "Vorschlag" fuer
+     wenige, klar benannte Variablen -- bewusst kein neues Design-System.
+     Bestehende Regeln, die bereits denselben Wert hart kodiert haben
+     (z. B. `min-height: 44px`), werden NICHT nachtraeglich umgestellt, um
+     das Risiko einer breiten, ungetesteten Regression zu vermeiden. Neue
+     Regeln koennen diese Variablen verwenden. */
+  --touch-target-min: 44px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --font-size-body: 15px;
+}
+html {
+  /* AP11 (Plan Abschnitt 11): Puffer, damit fokussierte Eingabefelder beim
+     Aufklappen der virtuellen Tastatur nicht dauerhaft verdeckt bleiben --
+     der Browser scrollt fokussierte Elemente so, dass dieser Abstand zum
+     unteren Viewport-Rand erhalten bleibt. */
+  scroll-padding-bottom: 96px;
 }
 body {
   margin: 0;
@@ -25,4 +44,899 @@ code {
   background: #eceef2;
   padding: 1px 4px;
   border-radius: 3px;
+}
+
+.login-page {
+  max-width: 640px;
+  margin: 48px auto;
+  padding: 0 20px;
+}
+.login-page__hint {
+  color: #555;
+  font-size: 14px;
+}
+.login-page__candidates {
+  list-style: none;
+  margin: 24px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dev-login-candidate {
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+  border: 1px solid #d9dbe0;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+}
+.dev-login-candidate:hover {
+  border-color: #9aa0ac;
+}
+.dev-login-candidate:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.dev-login-candidate__name {
+  font-weight: 600;
+}
+.dev-login-candidate__meta {
+  font-size: 13px;
+  color: #666;
+}
+.dev-login-candidate__error {
+  color: #b3261e;
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Beratungs-UI (AP4) -- siehe PHASE_5_IMPLEMENTATION_PLAN.md Abschnitt 11 */
+/* (Desktop >=1024px zweispaltig, Tablet <1024px einspaltig).             */
+/* ---------------------------------------------------------------------- */
+
+.consultation-entry,
+.consultation-workspace {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.consultation-entry__hint {
+  color: #555;
+  font-size: 14px;
+}
+
+.consultation-entry__sessions {
+  list-style: none;
+  margin: 12px 0 24px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.consultation-entry__session-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 16px;
+  border: 1px solid #d9dbe0;
+  border-radius: 8px;
+  background: #fff;
+  min-height: 44px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.consultation-entry__session-link:hover {
+  border-color: #9aa0ac;
+}
+
+.consultation-entry__session-meta {
+  font-size: 13px;
+  color: #666;
+}
+
+.start-consultation-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 420px;
+}
+
+.start-consultation-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.start-consultation-form__field select {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #d9dbe0;
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.start-consultation-form button,
+.question-flow button,
+.question-card button,
+.complete-consultation button,
+.abandon-consultation button,
+.outcome-dialog button,
+.evaluate-recommendation button {
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1px solid #1a1a1a;
+  border-radius: 6px;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.start-consultation-form button:disabled,
+.question-flow button:disabled,
+.question-card button:disabled,
+.complete-consultation button:disabled,
+.abandon-consultation button:disabled,
+.outcome-dialog button:disabled,
+.evaluate-recommendation button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.start-consultation-form__error,
+.complete-consultation__error,
+.abandon-consultation__error {
+  color: #b3261e;
+  font-size: 13px;
+}
+
+.complete-consultation {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.abandon-consultation {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.abandon-consultation--confirming {
+  border-top: 1px solid #eceef2;
+  padding-top: 12px;
+  align-items: stretch;
+  width: 100%;
+  max-width: 480px;
+}
+
+.abandon-consultation__confirm-label {
+  margin: 0;
+  font-size: 14px;
+}
+
+.abandon-consultation__reason-label {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.abandon-consultation__reason-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.abandon-consultation__reason-option label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.abandon-consultation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.progress-bar {
+  margin-bottom: 24px;
+}
+
+.progress-bar__track {
+  width: 100%;
+  height: 10px;
+  background: #eceef2;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.progress-bar__fill {
+  height: 100%;
+  background: #2f6feb;
+  transition: width 0.2s ease;
+}
+
+.progress-bar__label {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #555;
+}
+
+.question-flow__body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.question-flow__main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.question-navigator__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.question-navigator__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid #d9dbe0;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.question-navigator__item--answered {
+  background: #f2f8f2;
+}
+
+.question-navigator__item--active {
+  border-color: #2f6feb;
+  border-width: 2px;
+}
+
+.question-navigator__index {
+  font-weight: 600;
+  color: #666;
+}
+
+.question-navigator__required {
+  color: #b3261e;
+}
+
+.question-navigator__check {
+  color: #2e7d32;
+  margin-left: auto;
+}
+
+.question-card {
+  border: 1px solid #d9dbe0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.question-card__label {
+  font-size: 18px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.question-card__errors {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.question-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-input--text {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #d9dbe0;
+  border-radius: 6px;
+  font-size: 15px;
+  max-width: 320px;
+  scroll-margin-bottom: 96px;
+}
+
+.question-input__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.saving-indicator {
+  font-size: 13px;
+  color: #666;
+}
+
+.saving-indicator--saved {
+  color: #2e7d32;
+}
+
+.status-banner {
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.status-banner--conflict {
+  background: #fff4e5;
+  border: 1px solid #f0b429;
+}
+
+.status-banner--offline {
+  background: #fdeaea;
+  border: 1px solid #b3261e;
+}
+
+.question-flow__complete-banner {
+  border: 1px solid #2e7d32;
+  background: #f2f8f2;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-flow__complete-error {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 0;
+}
+
+.question-flow--completed {
+  border: 1px solid #2e7d32;
+  background: #f2f8f2;
+  border-radius: 8px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Tablet-Landscape 768-1023px (AP11, Plan Abschnitt 11): bleibt einspaltig
+   wie Mobile/Tablet-Portrait (der Zweispalter greift erst ab 1024px unten),
+   bekommt aber grosszuegigere Abstaende, da hier mehr Platz als am
+   Schmalformat vorhanden ist und weiterhin per Touch bedient wird. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .question-flow__body {
+    gap: 32px;
+  }
+
+  .question-navigator__list {
+    gap: 8px;
+  }
+
+  .question-navigator__item {
+    padding: 10px 16px;
+  }
+}
+
+/* Desktop >=1024px: Navigator und aktive Frage nebeneinander. */
+@media (min-width: 1024px) {
+  .question-flow__body {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .question-navigator {
+    flex: 0 0 280px;
+  }
+
+  .question-flow__main {
+    flex: 1 1 auto;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Empfehlungs-/Begruendungs-UI (AP6) -- siehe                            */
+/* PHASE_5_IMPLEMENTATION_PLAN.md Abschnitt 7.                            */
+/* ---------------------------------------------------------------------- */
+
+.recommendation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.recommendation-list__empty {
+  color: #555;
+  font-size: 14px;
+}
+
+.recommendation-card {
+  border: 1px solid #d9dbe0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recommendation-card__header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.recommendation-card__rank {
+  font-weight: 700;
+  color: #666;
+}
+
+.recommendation-card__title {
+  margin: 0;
+  font-size: 18px;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.recommendation-card__fit {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.recommendation-card__fit--hoch {
+  background: #f2f8f2;
+  color: #2e7d32;
+}
+
+.recommendation-card__fit--mittel {
+  background: #fff4e5;
+  color: #8a5a00;
+}
+
+.recommendation-card__fit--niedrig {
+  background: #f5f6f8;
+  color: #666;
+}
+
+.recommendation-card__prices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin: 0;
+}
+
+.recommendation-card__price {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recommendation-card__price dt {
+  font-size: 12px;
+  color: #666;
+}
+
+.recommendation-card__price dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.recommendation-card__attributes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 13px;
+  color: #444;
+}
+
+.recommendation-card__attributes li {
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.rationale-drawer {
+  border-top: 1px solid #eceef2;
+  padding-top: 12px;
+}
+
+.rationale-drawer__toggle {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid #d9dbe0;
+  border-radius: 6px;
+  background: #f5f6f8;
+  color: #1a1a1a;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.rationale-drawer__panel {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Nur auf Tablet-Portrait (<768px, siehe Media Query unten) tatsaechlich
+   sichtbar -- auf Desktop/Tablet-Landscape bleibt das Scrim ausgeblendet,
+   da das Panel dort inline im Accordion-Fluss bleibt. */
+.rationale-drawer__backdrop {
+  display: none;
+}
+
+.rationale-drawer__section {
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.rationale-drawer__section--positive {
+  background: #f2f8f2;
+  border: 1px solid #2e7d32;
+}
+
+.rationale-drawer__section--neutral {
+  background: #f5f6f8;
+  border: 1px solid #d9dbe0;
+}
+
+.rationale-drawer__heading {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.rationale-drawer__list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+
+.rationale-drawer__empty {
+  margin: 0;
+  font-size: 13px;
+  color: #555;
+}
+
+/* Tablet-Portrait <768px (AP11, Plan Abschnitt 11): dasselbe Panel-Markup
+   wird zum fixierten Bottom-Sheet statt Inline-Accordion -- verdeckt die
+   uebrigen Empfehlungskarten nicht dauerhaft (nur waehrend das Sheet offen
+   ist, per Scrim erkennbar und per Klick/Escape schliessbar, siehe
+   RationaleDrawer.tsx). */
+@media (max-width: 767px) {
+  .rationale-drawer__backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 40;
+  }
+
+  .rationale-drawer__panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 41;
+    margin: 0;
+    max-height: 70vh;
+    overflow-y: auto;
+    background: #fff;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.2);
+    padding: 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+.evaluate-recommendation {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.evaluate-recommendation__error {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Ablehnungs-/Aenderungsflow-UI (AP7) -- siehe                           */
+/* PHASE_5_IMPLEMENTATION_PLAN.md Abschnitt 8.                            */
+/* ---------------------------------------------------------------------- */
+
+.outcome-dialog {
+  border-top: 1px solid #eceef2;
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.outcome-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.outcome-dialog__reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.outcome-dialog__reasons-label {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.outcome-dialog__reasons-empty {
+  margin: 0;
+  font-size: 13px;
+  color: #555;
+}
+
+.outcome-dialog__reasons-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.outcome-dialog__reason-option label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.outcome-dialog__reasons-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.outcome-dialog__error {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 0;
+}
+
+.outcome-dialog__decided {
+  border-top: 1px solid #eceef2;
+  padding-top: 12px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #2e7d32;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Cross-Selling-UI (AP8) -- siehe PHASE_5_IMPLEMENTATION_PLAN.md          */
+/* Abschnitt 9.                                                            */
+/* ---------------------------------------------------------------------- */
+
+.cross-selling-banner {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cross-selling-banner__heading {
+  margin: 0;
+  font-size: 16px;
+}
+
+.cross-selling-banner__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.opportunity-card {
+  border: 1px solid #f0b429;
+  border-radius: 8px;
+  background: #fff4e5;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.opportunity-card__need {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.opportunity-card__reason {
+  margin: 0;
+  font-size: 14px;
+  color: #444;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.opportunity-card__product {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.opportunity-card__missing {
+  margin: 0;
+  font-size: 13px;
+  color: #555;
+}
+
+.opportunity-card__decided {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #2e7d32;
+}
+
+.opportunity-card__status {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #666;
+}
+
+.opportunity-card button {
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1px solid #1a1a1a;
+  border-radius: 6px;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  font-size: 15px;
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+
+.opportunity-card button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.opportunity-card__error {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Zusammenfassungsseite (AP9) -- siehe PHASE_5_IMPLEMENTATION_PLAN.md     */
+/* Abschnitt 5, Schritt 10.                                                */
+/* ---------------------------------------------------------------------- */
+
+.session-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  margin-top: 16px;
+}
+
+.session-summary__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.session-summary__heading {
+  margin: 0;
+  font-size: 18px;
+}
+
+.session-summary__empty {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+}
+
+.session-summary__answers {
+  margin: 0;
+  padding: 16px 20px;
+  border: 1px solid #eceef2;
+  border-radius: 8px;
+  background: #f5f6f8;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.session-summary__answer {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-summary__answer dt {
+  font-size: 13px;
+  color: #666;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.session-summary__answer dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+@media (min-width: 1024px) {
+  .session-summary__answers {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px 32px;
+  }
 }

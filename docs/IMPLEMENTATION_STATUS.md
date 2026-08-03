@@ -285,6 +285,107 @@ Mitarbeiter mit vorhandenen AnalyticsEvents ist separat als offene
 Entscheidung #14 in [OPEN_DECISIONS.md](OPEN_DECISIONS.md) sowie als
 Risiko in [RISK_REGISTER.md](RISK_REGISTER.md) dokumentiert.
 
+## Phase 5 – Mitarbeiter-UI (MVP-Qualität): Umfang und Verifikationsstatus
+
+Gemäß `PHASE_5_IMPLEMENTATION_PLAN.md` (von ChatGPT als Projektleiter inkl.
+aller 4 Stop-Punkte bestätigt, separates explizites Implementierungs-GO des
+Auftraggebers am 2026-08-02) umfasst diese Phase die erste vollständige
+Mitarbeiteroberfläche über den gesamten Beratungsablauf: dünne API-Schicht
+(AP2), minimaler Dev-Auth-Mechanismus (AP3, ausdrücklich NICHT
+produktionsreif), Fragenfluss-UI (AP4), Service-Ergänzungen für
+`RecommendationOutcome`/`SalesOpportunity`-Statuswechsel (AP5),
+Empfehlungs-/Begründungs-UI (AP6), Ablehnungs-/Änderungsflow (AP7),
+Cross-Selling-UI (AP8), Zusammenfassungsseite (AP9),
+Analytics-Vervollständigung inkl. `CONSULTATION_ABANDONED` (AP10),
+Responsive-/Tablet-Feinschliff (AP11), Testsuite (AP12) sowie diese
+Dokumentation (AP13). Fachliche/UI-Details siehe
+[CONSULTATION_UI.md](CONSULTATION_UI.md); AP14 (Commit/Push/echter CI-Lauf),
+AP15 (echter Mitarbeitertest) und AP16 (Abschlussbericht) stehen noch aus.
+
+**Ausdrücklich zu beachten:** Alle Arbeitspakete dieser Phase gelten als
+implementiert und im lokal technisch möglichen Umfang verifiziert – die
+funktionale End-to-End-Bestätigung (insbesondere der Playwright-E2E-Suite
+gegen einen echten Browser) bleibt bis zum ersten grünen CI-Lauf in AP14
+ausstehend, da Phase 5 bislang ungecommittet im Arbeitsverzeichnis liegt.
+Formulierungen wie "vollständig getestet"/"erfolgreich verifiziert" ohne
+diese Einschränkung sind für AP2–AP13 nicht zutreffend.
+
+### AP10 – Analytics-Vervollständigung, `CONSULTATION_ABANDONED`
+
+Abgeschlossen (2026-08-03): `abandonConsultation()`
+(`src/server/consultation-ui/abandonment.ts`), Route
+`POST /api/consultation/sessions/[id]/summary/abandon`,
+`AbandonConsultationButton.tsx` (auf allen drei aktiven Beratungsseiten
+verdrahtet, jeweils gated auf `status === "IN_PROGRESS"`),
+Integrationstests (`tests/integration/consultation-abandonment.test.ts`).
+Projektleiter-Entscheidung: manueller Button statt Timeout, zweistufige
+Bestätigung, optionaler strukturierter Abbruchgrund (4 feste Codes, kein
+Freitext), `CONSULTATION_ABANDONED` rein aus bestehenden Analytics-Events
+abgeleitet (kein neues Lifecycle-Feld). Verifikation: ESLint/Prettier
+sauber, `tsc --noEmit` nur bekannte Sandbox-Fehler (siehe "Zentrale
+Sandbox-Einschränkung" oben), 293/293 Unit-Tests grün; Integrationstests
+und `npm run build` scheitern aus derselben, bereits dokumentierten
+Sandbox-Einschränkung (kein generierter `@prisma/client`), kein neues
+Problem.
+
+### AP11 – Responsive-/Tablet-Feinschliff
+
+Abgeschlossen (2026-08-03): drei Breakpoint-Stufen in
+`src/app/globals.css` (mobil/Tablet-Hochformat < 768px, Tablet-Querformat
+768–1023px, Desktop ≥ 1024px), Mindest-Touch-Zielgröße 44×44px,
+Umbruchverhalten für lange Textinhalte, RationaleDrawer als fixiertes
+Bottom-Sheet mit Scrim unterhalb 768px. Tastatur-/Fokus-Feinschliff für
+`QuestionFlow.tsx` inbegriffen. Details siehe
+[CONSULTATION_UI.md](CONSULTATION_UI.md), Abschnitt "Responsive/Tablet-
+Verhalten".
+
+### AP12 – Testsuite (Unit/Komponente/Integration/E2E)
+
+Vollständig implementiert und im lokal technisch möglichen Umfang
+verifiziert; die funktionale E2E- und finale AP12-Abnahme bleibt bis zum
+grünen CI-Lauf in AP14 ausstehend (ChatGPTs bindende Vorgabe vom
+2026-08-03, "bedingtes GO").
+
+- **AP12a–c** (Playwright/jsdom/Testing-Library-Abhängigkeiten,
+  `vitest.config.component.ts`, 18 Komponententestdateien/92 Tests grün) –
+  von ChatGPT abgenommen.
+- **AP12d** (Playwright-E2E-Spezifikationen: `happy-path.spec.ts`,
+  `abandonment.spec.ts`, `customer-situations.spec.ts` – drei
+  nachweislich unterschiedliche Kundensituationen anhand der sichtbaren
+  Fragen-Navigation –, `tenant-isolation.spec.ts` – negativer
+  Zugriffstest ohne Annahme eines konkreten Statuscodes) – Status
+  verbindlich "implementiert, lokal nicht ausführbar, CI-Verifikation
+  ausstehend".
+- **AP12e** (CI-Integration: `.github/workflows/ci.yml` um
+  Playwright-Browser-Install, `npm run test:e2e` sowie
+  Artefakt-Upload bei Fehlern für `playwright-report/`/`test-results/`
+  ergänzt) – implementiert, ebenfalls noch nicht via echtem CI-Lauf
+  verifiziert.
+- **AP12f** (volle lokale Verifikation): ESLint 0 Fehler, Prettier
+  projektweit sauber (15 vorbestehende Formatierungslücken mit
+  `prettier --write` mitgefixt, keine Verhaltensänderung), 293/293
+  Unit-Tests grün, 18/18 Komponententestdateien/92 Tests grün, `tsc
+--noEmit` nur die bekannten, vorbestehenden `@prisma/client`-Typfehler.
+
+**Verbindliche Abnahmefolge:** AP12d und AP12e erhalten das finale GO erst
+gemeinsam, nach dem ersten vollständig grünen Playwright-CI-Lauf in AP14.
+AP14s bindende Abnahmekriterien (ChatGPT, 2026-08-03): PostgreSQL und die
+Anwendung starten in GitHub Actions erfolgreich; beide Playwright-Projekte
+(Desktop und Tablet) werden tatsächlich ausgeführt; alle vier
+Spec-Dateien laufen ohne `skip`/`only`/Fehlerunterdrückung;
+Testdatenaufbau, Migrationen und Authentifizierung funktionieren
+reproduzierbar; bei Fehlern werden Report, Traces, Screenshots und Videos
+hochgeladen; der vollständige CI-Lauf ist grün. Ein fehlschlagender erster
+CI-Lauf ist kein automatisches NO-GO für Phase 5, muss aber behoben und
+erneut ausgeführt werden.
+
+### AP13 – Dokumentation
+
+`docs/CONSULTATION_UI.md` neu erstellt; dieser Abschnitt sowie die
+zugehörigen Ergänzungen in [RISK_REGISTER.md](RISK_REGISTER.md) und
+[DECISION_LOG.md](DECISION_LOG.md) sind die Fortschreibung gemäß
+Plan-Abschnitt AP13.
+
 ## Phase 3B – Empfehlungs-Engine: Umfang und Verifikationsstatus
 
 Gemäß `PHASE_3B_IMPLEMENTATION_PLAN.md` (Rev. 3.2, finales

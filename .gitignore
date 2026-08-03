@@ -25,3 +25,10 @@ scripts/_test_trigger.mjs
 # Migration). Massgeblich ist ausschliesslich
 # prisma/migrations/20260731000000_init/migration.sql.
 prisma/migration_generated.sql
+
+# Playwright E2E (AP12d): Laufzeit-Artefakte und die von prisma/seed-e2e.ts
+# bei jedem Lauf neu geschriebene Ausgabedatei mit den fuer die Tests
+# benoetigten, laufzeitgenerierten IDs (siehe tests/e2e/seed-output.ts).
+playwright-report
+test-results
+tests/e2e/.e2e-seed-output.json

@@ -158,3 +158,24 @@ export class AnswerAlreadyExistsError extends QuestionEngineError {
     );
   }
 }
+
+/**
+ * Versuch, `abandonConsultation()` (AP10, siehe PHASE_5_IMPLEMENTATION_PLAN.md
+ * Abschnitt 10 + Projektleiter-Entscheidung zum manuellen Abbruchflow) fuer
+ * eine ConsultationSession aufzurufen, fuer die bereits ein
+ * `CONSULTATION_COMPLETED`-Analytics-Event existiert. `CONSULTATION_COMPLETED`
+ * und `CONSULTATION_ABANDONED` schliessen sich gegenseitig aus -- die
+ * Mandatentrennung erfolgt bewusst ueber die bereits geschriebenen
+ * terminalen Analytics-Events, nicht ueber ein neues Lifecycle-Feld (siehe
+ * Modulkommentar in `completion.ts`/`abandonment.ts`).
+ */
+export class ConsultationAlreadyCompletedError extends QuestionEngineError {
+  constructor(
+    consultationSessionId: string,
+    public readonly completedAt: Date,
+  ) {
+    super(
+      `ConsultationSession "${consultationSessionId}" wurde bereits am ${completedAt.toISOString()} abgeschlossen (CONSULTATION_COMPLETED) und kann daher nicht mehr abgebrochen werden.`,
+    );
+  }
+}
