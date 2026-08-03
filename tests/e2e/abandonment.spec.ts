@@ -32,5 +32,5 @@ test("Abbruch: Beratung mit Grund abbrechen fuehrt zurueck zur Uebersicht", asyn
   ]);
 
   await page.waitForURL(/\/consultation$/);
-  await expect(page.getByRole("heading", { name: "Beratung" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Beratung", exact: true })).toBeVisible();
 });

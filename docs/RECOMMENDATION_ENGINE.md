@@ -95,7 +95,11 @@ geschlossene Attribute-Registry (`attribute-registry.ts`), Antworten über
 den jeweiligen `QuestionVersion.answerType`.
 
 **Orchestrierung (`evaluate()`):** Sitzung laden → Auswertbarkeit prüfen
-(Status `IN_PROGRESS`, Vollständigkeit über dieselbe
+(Status `IN_PROGRESS` oder `COMPLETED` — `ABANDONED` bleibt gesperrt; seit
+AP14/CI#22-Fix explizit auch nach Abschluss des Fragebogens auswertbar, da
+`completeQuestionnaire()` den Status bereits vor dem eigentlichen
+"Empfehlung auswerten"-Schritt auf `COMPLETED` setzt, siehe
+`assertSessionEvaluable()` in `service.ts`; Vollständigkeit über dieselbe
 `computeVisiblePath()`/`computeProgress()`-Logik wie die Fragen-Engine aus
 Phase 3A, aktive `RuleSetVersion` vorhanden) → Produktkandidaten laden →
 je Kandidat Eignung, `customerFitScore`, Ausschluss und Priorisierung

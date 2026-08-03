@@ -72,8 +72,8 @@ jobs:
       - name: Produktions-Build
         run: npm run build
 
-      - name: Playwright-Browser installieren (Chromium)
-        run: npx playwright install --with-deps chromium
+      - name: Playwright-Browser installieren (Chromium + WebKit)
+        run: npx playwright install --with-deps chromium webkit
 
       - name: E2E-Tests (Playwright, Desktop + Tablet)
         run: npm run test:e2e

@@ -28,6 +28,7 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runWithTenantContext } from "@/server/tenant/context";
 import { ConsultationSessionNotFoundError } from "@/server/questionnaire/errors";
+import { completeQuestionnaire } from "@/server/questionnaire/service";
 import { evaluate, getLatestRecommendation } from "@/server/recommendation/service";
 import {
   InsufficientAnswerDataError,
@@ -234,7 +235,7 @@ describe.skipIf(!hasDatabaseUrl)("Empfehlungs-Engine (Integrationstest, echte Po
     employeeId: string,
     questionnaireVersionId: string,
     consultationType: "NEW_CONTRACT" | "RENEWAL",
-    status: "IN_PROGRESS" | "COMPLETED" = "IN_PROGRESS",
+    status: "IN_PROGRESS" | "COMPLETED" | "ABANDONED" = "IN_PROGRESS",
   ) {
     const session = await rawClient.consultationSession.create({
       data: {
@@ -738,7 +739,31 @@ describe.skipIf(!hasDatabaseUrl)("Empfehlungs-Engine (Integrationstest, echte Po
   // Fehlerpfade
   // -------------------------------------------------------------------------
 
-  it("evaluate() wirft SessionNotEvaluableError fuer eine bereits abgeschlossene Session", async () => {
+  it("evaluate() wirft SessionNotEvaluableError fuer eine abgebrochene (ABANDONED) Session", async () => {
+    // AP14/CI#22-Fix (mit ChatGPT abgestimmt): ABANDONED bleibt gesperrt,
+    // waehrend COMPLETED seit diesem Fix bewusst auswertbar ist (siehe die
+    // beiden folgenden Tests). Vor dem Fix stand hier "COMPLETED" - das
+    // testete faelschlich genau das Verhalten, das den echten Bug in CI #22
+    // verursacht hat (completeQuestionnaire() setzt COMPLETED bereits VOR
+    // dem "Empfehlung auswerten"-Schritt im regulaeren Ablauf).
+    const sessionId = await createSession(
+      tenantAId,
+      storeAId,
+      employeeAId,
+      questionnaireVersionAId,
+      "NEW_CONTRACT",
+      "ABANDONED",
+    );
+    await expect(asTenant(tenantAId, () => evaluate(sessionId))).rejects.toThrow(
+      SessionNotEvaluableError,
+    );
+  });
+
+  it("evaluate() wertet eine bereits abgeschlossene (COMPLETED) Session erfolgreich aus", async () => {
+    // Positiv-Gegenstueck zum AP14/CI#22-Fix: completeQuestionnaire() setzt
+    // den Status bereits auf COMPLETED, bevor "Empfehlung auswerten" im
+    // regulaeren Ablauf ueberhaupt geklickt wird - assertSessionEvaluable()
+    // muss das seit Fix 3 zulassen (positive Whitelist IN_PROGRESS|COMPLETED).
     const sessionId = await createSession(
       tenantAId,
       storeAId,
@@ -747,9 +772,32 @@ describe.skipIf(!hasDatabaseUrl)("Empfehlungs-Engine (Integrationstest, echte Po
       "NEW_CONTRACT",
       "COMPLETED",
     );
-    await expect(asTenant(tenantAId, () => evaluate(sessionId))).rejects.toThrow(
-      SessionNotEvaluableError,
+    const result = await asTenant(tenantAId, () => evaluate(sessionId));
+    expect(result.items.length).toBeGreaterThan(0);
+  });
+
+  it("Pipeline completeQuestionnaire() -> evaluate(): erfolgreiche Auswertung nach regulaerem Fragebogen-Abschluss", async () => {
+    // Genau die Kombination, die den Bug in CI #22 verdeckt hat (siehe
+    // ChatGPT-Abstimmung zu AP14/Fix 3): ueber den echten Service-Aufruf
+    // completeQuestionnaire() (nicht per rawClient direkt auf COMPLETED
+    // gesetzt) und danach evaluate() auf derselben Session.
+    const sessionId = await createSession(
+      tenantAId,
+      storeAId,
+      employeeAId,
+      questionnaireVersionAId,
+      "NEW_CONTRACT",
     );
+
+    await asTenant(tenantAId, () => completeQuestionnaire(sessionId));
+
+    const sessionAfterCompletion = await rawClient.consultationSession.findUniqueOrThrow({
+      where: { id: sessionId },
+    });
+    expect(sessionAfterCompletion.status).toBe("COMPLETED");
+
+    const result = await asTenant(tenantAId, () => evaluate(sessionId));
+    expect(result.items.length).toBeGreaterThan(0);
   });
 
   it("evaluate() wirft InsufficientAnswerDataError, wenn eine sichtbare Pflichtfrage unbeantwortet ist", async () => {

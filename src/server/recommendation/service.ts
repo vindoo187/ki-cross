@@ -229,8 +229,20 @@ async function requireSession(consultationSessionId: string): Promise<Consultati
   return session;
 }
 
+/**
+ * Auswertbar sind Sessions mit Status `IN_PROGRESS` (regulaerer Ablauf waehrend
+ * der Beratung) UND `COMPLETED` (AP14/CI#22-Fix, mit ChatGPT abgestimmt):
+ * `completeQuestionnaire()` (siehe `questionnaire/service.ts`) setzt den
+ * Session-Status bereits auf `COMPLETED`, BEVOR im vorgesehenen Ablauf
+ * "Empfehlung auswerten" ueberhaupt geklickt wird -- ohne diese Erweiterung
+ * konnte `evaluate()` im regulaeren Happy-Path nie erfolgreich sein (siehe
+ * CI-Lauf #22, tests/e2e/happy-path.spec.ts). `ABANDONED` bleibt bewusst
+ * gesperrt. Ausdruecklich als POSITIVE Whitelist formuliert (nicht als
+ * `!== "ABANDONED"`), damit spaeter ergaenzte Statuswerte standardmaessig
+ * gesperrt bleiben, bis sie hier bewusst freigegeben werden (ChatGPT-Vorgabe).
+ */
 function assertSessionEvaluable(session: { id: string; status: string }): void {
-  if (session.status !== "IN_PROGRESS") {
+  if (session.status !== "IN_PROGRESS" && session.status !== "COMPLETED") {
     throw new SessionNotEvaluableError(session.id, session.status);
   }
 }
