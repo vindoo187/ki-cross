@@ -38,7 +38,7 @@
  * `@prisma/client` verifizierbar.
  */
 
-import type { OpportunityStatus } from "@prisma/client";
+import type { AnalyticsEventType, OpportunityStatus } from "@prisma/client";
 import { db } from "../db/client";
 import { getTenantId } from "../tenant/context";
 import { InvalidOpportunityStatusTransitionError, SalesOpportunityNotFoundError } from "./errors";
@@ -68,7 +68,7 @@ const ALLOWED_TRANSITIONS: Record<OpportunityStatus, OpportunityStatus[]> = {
 };
 
 /** Analytics-Zuordnung fuer Statuswechsel (Plan Abschnitt 10). ACCEPTED/DEFERRED bewusst ohne Eintrag - siehe Modulkommentar. */
-const OPPORTUNITY_ANALYTICS_EVENT_TYPE: Partial<Record<OpportunityStatus, string>> = {
+const OPPORTUNITY_ANALYTICS_EVENT_TYPE: Partial<Record<OpportunityStatus, AnalyticsEventType>> = {
   OFFERED: "OPPORTUNITY_OFFERED",
   DECLINED: "OPPORTUNITY_DECLINED",
 };

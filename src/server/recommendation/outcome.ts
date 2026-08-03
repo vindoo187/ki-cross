@@ -41,7 +41,7 @@
  * gegen einen echten `@prisma/client` verifizierbar.
  */
 
-import type { RecommendationOutcomeType } from "@prisma/client";
+import type { AnalyticsEventType, RecommendationOutcomeType } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { db } from "../db/client";
 import { getTenantContext, getTenantId, MissingTenantContextError } from "../tenant/context";
@@ -76,10 +76,11 @@ export interface RecommendationOutcomeResult {
  * Analytics-Zuordnung fuer den Outcome-Entscheid (Plan Abschnitt 10).
  * DEFERRED hat bewusst KEINEN Eintrag - siehe Modulkommentar.
  */
-const OUTCOME_ANALYTICS_EVENT_TYPE: Partial<Record<RecommendationOutcomeType, string>> = {
-  ACCEPTED: "RECOMMENDATION_ACCEPTED",
-  REJECTED: "RECOMMENDATION_REJECTED",
-};
+const OUTCOME_ANALYTICS_EVENT_TYPE: Partial<Record<RecommendationOutcomeType, AnalyticsEventType>> =
+  {
+    ACCEPTED: "RECOMMENDATION_ACCEPTED",
+    REJECTED: "RECOMMENDATION_REJECTED",
+  };
 
 /**
  * Speichert die Mitarbeiter-Entscheidung (Annehmen/Ablehnen/Zurueckstellen)
