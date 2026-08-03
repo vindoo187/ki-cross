@@ -11,6 +11,7 @@
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import type { NextRequest } from "next/server";
 
 export const SESSION_COOKIE_NAME = "ki_cross_dev_session";
 
@@ -122,4 +123,40 @@ export function verifySessionToken(token: string | undefined | null): SessionPay
   }
 
   return payload;
+}
+
+/**
+ * Entscheidet, ob das Session-Cookie mit dem `Secure`-Attribut gesetzt werden
+ * soll -- ausgehend vom TATSAECHLICHEN Transportprotokoll der eingehenden
+ * Anfrage, NICHT von `NODE_ENV`.
+ *
+ * Hintergrund (CI #23, Root Cause 4, mit ChatGPT abgestimmt am 2026-08-03):
+ * `next start` (Produktions-Modus) setzt `NODE_ENV=production` unabhaengig
+ * davon, ob die Verbindung tatsaechlich per TLS erfolgt. In den Playwright-
+ * E2E-Tests laeuft der Server im Produktions-Modus, die Tests verbinden sich
+ * aber ueber reines HTTP zu `127.0.0.1`. Ein an `NODE_ENV` gekoppeltes
+ * `Secure`-Attribut wuerde dort faelschlich gesetzt: Chromium akzeptiert das
+ * dank seiner Loopback-Ausnahme trotzdem, WebKit (u.a. im
+ * `tablet-ipad-landscape`-Projekt) verweigert das Senden eines Secure-Cookies
+ * ueber eine unverschluesselte Verbindung jedoch strikt -- die Session ging
+ * dadurch auf dem Tablet-Profil vollstaendig verloren.
+ *
+ * Zusaetzlich zum direkten Anfrageprotokoll wird `x-forwarded-proto`
+ * ausgewertet, damit das Cookie auch hinter einem TLS-terminierenden
+ * Reverse-Proxy (bei dem die interne Verbindung zum Node-Prozess selbst nur
+ * HTTP ist) korrekt als Secure gilt. WICHTIG: `x-forwarded-proto` darf in
+ * einem echten Deployment nur von einem vertrauenswuerdigen Reverse-Proxy
+ * gesetzt werden -- dieser Dev-/Pilot-Mechanismus bleibt unabhaengig davon
+ * ausdruecklich NICHT produktionsreif (siehe src/server/auth/errors.ts).
+ */
+export function resolveSecureCookieFlag(request: NextRequest): boolean {
+  if (request.nextUrl.protocol === "https:") {
+    return true;
+  }
+  const forwardedProto = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim()
+    .toLowerCase();
+  return forwardedProto === "https";
 }

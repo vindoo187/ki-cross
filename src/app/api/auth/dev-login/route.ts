@@ -4,6 +4,7 @@ import { buildSessionPayloadForEmployee } from "@/server/auth/dev-users";
 import { InvalidDevLoginCandidateError } from "@/server/auth/errors";
 import {
   createSessionToken,
+  resolveSecureCookieFlag,
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
 } from "@/server/auth/session";
@@ -41,7 +42,7 @@ export async function POST(request: NextRequest) {
     response.cookies.set(SESSION_COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: resolveSecureCookieFlag(request),
       path: "/",
       maxAge: SESSION_MAX_AGE_SECONDS,
     });

@@ -82,3 +82,9 @@ Bei Nutzung eines externen KI-Dienstes (z. B. für Gesprächszusammenfassung) gi
 - Audit-Log ist unveränderlich (append-only) für Konfigurationsänderungen.
 
 Ein dedizierter, tieferer Sicherheits-Review (z. B. Threat Modeling, Penetrationstest) ist vor Produktivbetrieb mit echten Kundendaten vorzusehen – als eigener Meilenstein im [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), nicht als vage "später"-Notiz.
+
+## Dev-/Pilot-Auth-Mechanismus: Cookie-Transportentscheidung (Phase 5, AP14)
+
+Der minimale Dev-/Pilot-Login (`src/app/api/auth/dev-login/route.ts`, siehe auch `src/server/auth/errors.ts` und `src/server/auth/session.ts`) ist **ausdrücklich nicht produktionsreif** (kein Passwort, keine echte Identitätsprüfung). Das gesetzte Session-Cookie erhält das `Secure`-Attribut über `resolveSecureCookieFlag()` (`src/server/auth/session.ts`) auf Basis des tatsächlichen Anfrageprotokolls (`request.nextUrl.protocol`) sowie – für den Betrieb hinter einem TLS-terminierenden Reverse-Proxy – des `x-forwarded-proto`-Headers, **nicht** anhand von `NODE_ENV`. Grund: `next start` setzt `NODE_ENV=production` unabhängig davon, ob die Verbindung tatsächlich per TLS erfolgt (siehe CI #23, Root Cause 4, mit ChatGPT abgestimmt am 2026-08-03) – eine reine `NODE_ENV`-Kopplung hätte das Cookie auch über unverschlüsseltes HTTP als Secure markiert.
+
+Vor einem echten Produktivbetrieb hinter TLS/Reverse-Proxy muss erneut geprüft werden, dass `x-forwarded-proto` ausschließlich von einer vertrauenswürdigen Proxy-Schicht gesetzt/überschrieben werden kann – dieser Dev-Mechanismus selbst bleibt davon unabhängig ausdrücklich kein Ersatz für ein vollständiges Authentifizierungssystem.
