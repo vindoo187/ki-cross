@@ -17,6 +17,22 @@
  * lokal (~500ms, Annahme aus Abschnitt 4 des Plans) und rufen `onCommit` erst
  * nach einer Tippschreibpause auf, um nicht bei jedem Tastendruck zu
  * speichern.
+ *
+ * Bugfix 2026-08-06 (ChatGPT-Konsultation, Fix 1): Freitext-/Zahlenfelder
+ * werden waehrend eines laufenden Speichervorgangs NICHT mehr per
+ * `disabled` gesperrt -- vorher konnte ein Nutzer, der kurz nach einer
+ * Tippschreibpause weiterschrieb, mitten im Tippen auf ein gesperrtes Feld
+ * treffen, solange der Server-Roundtrip noch lief. `disabled` wird fuer
+ * diese drei Felder nur noch als `aria-busy` angezeigt (Screenreader-Hinweis,
+ * blockiert aber keine Eingabe). Damit neuere Tastatureingaben niemals durch
+ * die verspaetete Serverantwort eines AELTEREN Speichervorgangs ueberschrieben
+ * werden, merkt sich jede Komponente per Ref, welcher Rohwert zuletzt
+ * tatsaechlich gesendet wurde (`onFire`), und uebernimmt einen vom Server
+ * zurueckgegebenen Wert nur dann in die Anzeige, wenn seit diesem letzten
+ * Senden nichts Neueres eingetippt wurde (oder die Frage gewechselt hat).
+ * Das eigentliche Ueberschreiben-vermeiden bei ueberlappenden Speichervorgaengen
+ * (kein zweiter Request mit veralteter `expectedAnswerVersion`) uebernimmt
+ * `QuestionFlow.tsx` durch Serialisierung/Nachsenden pro Frage.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -37,17 +53,28 @@ export interface QuestionInputProps {
    * bewusst (kein sinnvolles Zeitfenster).
    */
   onLocalEdit?: () => void;
-  /** true waehrend ein Speichervorgang fuer diese Frage laeuft (In-Flight-Lock). */
+  /**
+   * true waehrend ein Speichervorgang fuer diese Frage laeuft. Fuer
+   * Single/Multiple/Boolean/Date weiterhin ein hartes `disabled` (kurzer,
+   * unkritischer Klick-Roundtrip). Fuer Freitext-/Zahlenfelder nur noch
+   * `aria-busy`, siehe Modul-Kommentar oben.
+   */
   disabled: boolean;
 }
 
 const DEBOUNCE_MS = 500;
 
-/** Gemeinsamer Debounce-Hook fuer Freitext-/Zahlenfelder. */
+/**
+ * Gemeinsamer Debounce-Hook fuer Freitext-/Zahlenfelder. `onFire` wird genau
+ * dann aufgerufen, wenn der Debounce tatsaechlich abgelaufen ist und ein
+ * Speichervorgang ausgeloest wird -- die aufrufende Komponente nutzt dies,
+ * um sich den zuletzt gesendeten Rohwert zu merken (siehe Modul-Kommentar).
+ */
 function useDebouncedCommit(
   onCommit: (value: AnswerValueInput) => void,
   buildValue: (raw: string) => AnswerValueInput,
   onLocalEdit?: () => void,
+  onFire?: (raw: string) => void,
 ) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -65,6 +92,7 @@ function useDebouncedCommit(
       clearTimeout(timerRef.current);
     }
     timerRef.current = setTimeout(() => {
+      onFire?.(raw);
       onCommit(buildValue(raw));
     }, DEBOUNCE_MS);
   };
@@ -165,18 +193,34 @@ export function IntegerInput({
   onLocalEdit,
   disabled,
 }: QuestionInputProps) {
-  const [raw, setRaw] = useState(value?.integerValue != null ? String(value.integerValue) : "");
+  const initialRaw = value?.integerValue != null ? String(value.integerValue) : "";
+  const [raw, setRaw] = useState(initialRaw);
+  const rawRef = useRef(initialRaw);
+  const lastSentRawRef = useRef(initialRaw);
+  const lastQuestionIdRef = useRef(question.questionId);
   const commitDebounced = useDebouncedCommit(
     onCommit,
     (r) => ({
       integerValue: r.trim() === "" ? null : Number.parseInt(r, 10),
     }),
     onLocalEdit,
+    (sentRaw) => {
+      lastSentRawRef.current = sentRaw;
+    },
   );
 
   useEffect(() => {
-    setRaw(value?.integerValue != null ? String(value.integerValue) : "");
-  }, [value?.integerValue]);
+    const incoming = value?.integerValue != null ? String(value.integerValue) : "";
+    const questionChanged = lastQuestionIdRef.current !== question.questionId;
+    const noNewerLocalEdit =
+      incoming === lastSentRawRef.current && rawRef.current === lastSentRawRef.current;
+    if (questionChanged || noNewerLocalEdit) {
+      setRaw(incoming);
+      rawRef.current = incoming;
+      lastSentRawRef.current = incoming;
+      lastQuestionIdRef.current = question.questionId;
+    }
+  }, [value?.integerValue, question.questionId]);
 
   return (
     <input
@@ -187,10 +231,11 @@ export function IntegerInput({
       min={question.minValue ?? undefined}
       max={question.maxValue ?? undefined}
       value={raw}
-      disabled={disabled}
       aria-label={question.label}
+      aria-busy={disabled || undefined}
       onChange={(event) => {
         setRaw(event.target.value);
+        rawRef.current = event.target.value;
         commitDebounced(event.target.value);
       }}
     />
@@ -204,18 +249,34 @@ export function DecimalInput({
   onLocalEdit,
   disabled,
 }: QuestionInputProps) {
-  const [raw, setRaw] = useState(value?.decimalValue ?? "");
+  const initialRaw = value?.decimalValue ?? "";
+  const [raw, setRaw] = useState(initialRaw);
+  const rawRef = useRef(initialRaw);
+  const lastSentRawRef = useRef(initialRaw);
+  const lastQuestionIdRef = useRef(question.questionId);
   const commitDebounced = useDebouncedCommit(
     onCommit,
     (r) => ({
       decimalValue: r.trim() === "" ? null : r.trim(),
     }),
     onLocalEdit,
+    (sentRaw) => {
+      lastSentRawRef.current = sentRaw;
+    },
   );
 
   useEffect(() => {
-    setRaw(value?.decimalValue ?? "");
-  }, [value?.decimalValue]);
+    const incoming = value?.decimalValue ?? "";
+    const questionChanged = lastQuestionIdRef.current !== question.questionId;
+    const noNewerLocalEdit =
+      incoming === lastSentRawRef.current && rawRef.current === lastSentRawRef.current;
+    if (questionChanged || noNewerLocalEdit) {
+      setRaw(incoming);
+      rawRef.current = incoming;
+      lastSentRawRef.current = incoming;
+      lastQuestionIdRef.current = question.questionId;
+    }
+  }, [value?.decimalValue, question.questionId]);
 
   return (
     <input
@@ -226,10 +287,11 @@ export function DecimalInput({
       min={question.minValue ?? undefined}
       max={question.maxValue ?? undefined}
       value={raw}
-      disabled={disabled}
       aria-label={question.label}
+      aria-busy={disabled || undefined}
       onChange={(event) => {
         setRaw(event.target.value);
+        rawRef.current = event.target.value;
         commitDebounced(event.target.value);
       }}
     />
@@ -243,18 +305,34 @@ export function ShortTextInput({
   onLocalEdit,
   disabled,
 }: QuestionInputProps) {
-  const [raw, setRaw] = useState(value?.freeTextValue ?? "");
+  const initialRaw = value?.freeTextValue ?? "";
+  const [raw, setRaw] = useState(initialRaw);
+  const rawRef = useRef(initialRaw);
+  const lastSentRawRef = useRef(initialRaw);
+  const lastQuestionIdRef = useRef(question.questionId);
   const commitDebounced = useDebouncedCommit(
     onCommit,
     (r) => ({
       freeTextValue: r.trim() === "" ? null : r,
     }),
     onLocalEdit,
+    (sentRaw) => {
+      lastSentRawRef.current = sentRaw;
+    },
   );
 
   useEffect(() => {
-    setRaw(value?.freeTextValue ?? "");
-  }, [value?.freeTextValue]);
+    const incoming = value?.freeTextValue ?? "";
+    const questionChanged = lastQuestionIdRef.current !== question.questionId;
+    const noNewerLocalEdit =
+      incoming === lastSentRawRef.current && rawRef.current === lastSentRawRef.current;
+    if (questionChanged || noNewerLocalEdit) {
+      setRaw(incoming);
+      rawRef.current = incoming;
+      lastSentRawRef.current = incoming;
+      lastQuestionIdRef.current = question.questionId;
+    }
+  }, [value?.freeTextValue, question.questionId]);
 
   return (
     <input
@@ -263,10 +341,11 @@ export function ShortTextInput({
       inputMode="text"
       maxLength={question.maxLength ?? undefined}
       value={raw}
-      disabled={disabled}
       aria-label={question.label}
+      aria-busy={disabled || undefined}
       onChange={(event) => {
         setRaw(event.target.value);
+        rawRef.current = event.target.value;
         commitDebounced(event.target.value);
       }}
     />

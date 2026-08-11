@@ -187,7 +187,41 @@ Zusätzlich (nicht eines der fünf MVP-Kriterien, aber vom Startprompt gefordert
 
 ## 13. Plan für den echten Mitarbeitertest
 
-Kurzes, neutrales Testskript (**Entwurf, vor Durchführung mit ChatGPT/Nutzer abzustimmen**): Mitarbeiter erhält nur eine Ausgangssituation (z. B. "Ein Kunde möchte einen SIM-only-Vertrag mit möglichst viel Datenvolumen") schriftlich, kein Entwickler führt vor oder greift ein. Protokolliert werden: benötigte Zeit (Start bis Zusammenfassung), Stellen mit Rückfragen, Fehlbedienungen, nicht verstandene Begriffe (insbesondere deutsche Übersetzung von `factorKey`-Werten und Cross-Selling-Bezeichnungen), abgebrochene Schritte, tatsächlich erkannte Empfehlung, Verständnis der Begründung (Nachfrage: "Warum wurde das empfohlen?"), Verständnis von Ablehnung und Änderung (Nachfrage: "Wie würden Sie eine andere Empfehlung anfordern?"), genutztes Gerät (Desktop/Tablet, Quer-/Hochformat), Ergebnis bestanden/nicht bestanden gegen die fünf MVP-Kriterien. Mindestens ein Testlauf auf Desktop und einer auf Tablet. Ein durch Entwickler geführter Test erfüllt das Abnahmekriterium ausdrücklich **nicht** (Startprompt Abschnitt 7) — dieser Test muss von einem tatsächlichen Mitarbeiter selbstständig durchgeführt werden, was organisatorisch außerhalb der reinen Code-Implementierung liegt und rechtzeitig mit dem Nutzer zu terminieren ist.
+**Finale, mit ChatGPT abgestimmte Fassung (GO mit Änderungen erteilt am 2026-08-03; ersetzt den ursprünglichen Entwurf, der nur eine Ausgangssituation und keine Abbruch-/Entscheidungsregeln enthielt).**
+
+Der Test wird in einer vorbereiteten Testumgebung ausschließlich mit synthetischen Kundendaten durchgeführt. Es finden mindestens vier voneinander getrennte Testläufe mit mindestens zwei tatsächlichen Mitarbeitern statt: drei vollständige Beratungsfälle mit fachlich unterschiedlichen Ausgangssituationen und nachweislich unterschiedlichen Fragenpfaden sowie ein separater Abbruchfall. Mindestens ein vollständiger Lauf erfolgt auf einem Desktop und mindestens ein vollständiger Lauf auf einem Tablet; Gerät, Browser, Bildschirmformat sowie Quer- oder Hochformat werden protokolliert.
+
+Vor dem Test erhält der Mitarbeiter keine Vorführung, Schulung oder Schritt-für-Schritt-Anleitung, sondern nur die URL, erforderliche Testzugangsdaten und jeweils eine schriftliche Ausgangssituation. Als vollständige Fälle werden verwendet:
+
+- **Fall A:** „Ein Kunde möchte einen SIM-only-Vertrag mit möglichst viel Datenvolumen, nutzt ungefähr 80 GB pro Monat, benötigt kein neues Smartphone, möchte höchstens 40 Euro monatlich bezahlen und seine bisherige Rufnummer übernehmen.“
+- **Fall B:** „Eine 22-jährige Kundin sucht einen Vertrag mit Smartphone, nutzt ungefähr 25 GB pro Monat, streamt häufig unterwegs und möchte insgesamt höchstens 55 Euro monatlich bezahlen.“
+- **Fall C:** „Ein bestehender Kunde benötigt zusätzlich einen Tarif für seinen Partner, der ungefähr 15 GB pro Monat nutzt und seine Rufnummer behalten möchte; außerdem interessiert sich der Haushalt für Internet zu Hause.“
+
+Die Szenarien und die jeweils fachlich erwarteten Empfehlungen werden vor dem Test anhand der kontrollierten Testdaten intern überprüft, dem Mitarbeiter jedoch nicht mitgeteilt. Die einzige Anweisung an den Mitarbeiter lautet: „Bearbeiten Sie diesen Kundenfall so, wie Sie es im Verkauf selbstständig tun würden. Denken Sie dabei gern laut. Ich beobachte nur und darf Ihnen während des Tests nicht erklären, wo Sie klicken oder wie Sie fortfahren müssen.“
+
+Der Beobachter greift nicht ein, führt nichts vor und beantwortet Bedienungsfragen ausschließlich neutral mit „Bitte entscheiden Sie selbst anhand der Oberfläche“. Jede Rückfrage und jede benötigte Hilfestellung wird protokolliert; bleibt der Mitarbeiter länger als zwei Minuten an derselben Stelle blockiert oder kann er nur durch konkrete Hilfe fortfahren, gilt das betreffende Abnahmekriterium als nicht bestanden.
+
+Bei jedem vollständigen Lauf werden protokolliert: Start- und Endzeit, benötigte Gesamtzeit, Fragenpfad, Stellen mit Rückfragen, Fehlbedienungen, nicht verstandene Begriffe (insbesondere deutsche Bezeichnungen von `factorKey`-Werten und Cross-Selling-Angeboten), zurückgegangene oder geänderte Antworten, abgebrochene Schritte, erkannte Empfehlung, erkannte Cross-Selling-Möglichkeiten, Änderung oder Ablehnung einer Empfehlung, Zusammenfassung und endgültiger Abschluss.
+
+**Bestanden-Kriterien für einen vollständigen Lauf** (alle fünf MVP-Kriterien müssen erfüllt sein):
+
+1. Der Mitarbeiter kann die Beratung ohne konkrete Hilfe starten, die sichtbaren Pflichtfragen bearbeiten und den vorgesehenen Fragenpfad abschließen.
+2. Innerhalb von höchstens 15 Minuten wird die für das Szenario erwartete Empfehlung erreicht und vom Mitarbeiter eindeutig erkannt.
+3. Auf die neutrale Nachfrage „Warum wurde das empfohlen?“ kann der Mitarbeiter mindestens zwei auf der Oberfläche dargestellte Gründe in eigenen Worten richtig erklären.
+4. Er erkennt vorhandene Cross-Selling-Möglichkeiten und kann auf die Nachfrage „Wie würden Sie eine andere Empfehlung anfordern?“ selbstständig eine Angabe ändern oder die Empfehlung mit einem vorgesehenen Grund ablehnen und anschließend die neue Auswertung aufrufen.
+5. Er erkennt die Zusammenfassung, prüft die wesentlichen Kundeneingaben und schließt die Beratung erfolgreich ab.
+
+**Separater Abbruchfall:** Der Mitarbeiter erhält eine neue Ausgangssituation, beginnt die Beratung, beantwortet mindestens zwei Fragen und bekommt anschließend nur die neutrale Anweisung „Der Kunde möchte die Beratung jetzt beenden.“ Der Mitarbeiter muss den Abbruch selbstständig finden, die Sicherheitsabfrage korrekt bestätigen, den Beratungsablauf verlassen und anschließend erkennen können, dass die Beratung abgebrochen und nicht abgeschlossen wurde; der Abbruchfall muss innerhalb von fünf Minuten und ohne konkrete Hilfe gelingen.
+
+**Nachbefragung** (unmittelbar nach jedem Lauf, ausschließlich neutrale Fragen, keine Korrektur oder suggestive Nachfrage): „Was war für Sie gerade die Aufgabe?“, „Was hat Ihnen die Empfehlung gezeigt?“, „Warum wurde diese Empfehlung Ihrer Meinung nach ausgegeben?“, „Wie würden Sie eine andere Empfehlung anfordern?“, „Welche Begriffe oder Schritte waren unklar?“, „Was würden Sie an der Bedienung ändern?“.
+
+Ein durch einen Entwickler geführter, vorgeführter oder während der Bedienung erklärter Test erfüllt das Abnahmekriterium ausdrücklich **nicht**; mindestens die vorgeschriebenen selbstständigen Testläufe müssen von tatsächlichen Mitarbeitern durchgeführt werden, was organisatorisch außerhalb der reinen Code-Implementierung liegt und rechtzeitig mit dem Nutzer zu terminieren ist.
+
+**Entscheidungsregel:**
+
+- **GO:** Alle vier Testläufe werden ohne konkrete Hilfe bestanden, alle erwarteten Empfehlungen sind fachlich korrekt, Desktop und Tablet funktionieren erfolgreich, kein kritischer Bedienungsfehler tritt auf.
+- **GO mit Nacharbeit:** Alle Kernabläufe werden selbstständig und mit korrektem Ergebnis abgeschlossen, aber es treten einzelne nicht blockierende Verständlichkeits-, Übersetzungs- oder Bedienprobleme auf; diese werden als konkrete Aufgaben dokumentiert und die betroffenen Schritte anschließend erneut getestet.
+- **NO-GO:** Ein vollständiger Beratungs- oder Abbruchlauf kann ohne Hilfe nicht abgeschlossen werden, eine falsche Empfehlung wird ausgegeben oder nicht verständlich begründet, Eingaben oder Status werden falsch gespeichert, Cross-Selling/Änderung/Ablehnung/Zusammenfassung/Abschluss sind nicht auffindbar, es besteht ein kritischer Unterschied zwischen Desktop und Tablet, oder konkrete Entwicklerhilfe wird erforderlich.
 
 ## 14. Voraussichtlich zu erstellende und zu ändernde Dateien
 

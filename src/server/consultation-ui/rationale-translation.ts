@@ -56,6 +56,9 @@ const KNOWN_TRANSLATIONS: Record<string, RationaleTranslator> = {
   // CrossSellingRule.reasonCode (synthetischer Demo-Regelsatz, prisma/seed.ts).
   "cross_selling:STREAMING_ADDON_SUGGESTED": () =>
     "Erkannter Streaming-Bedarf -- ein Streaming-Zusatzpaket koennte passend sein",
+  // Fix 4 (ChatGPT-Konsultation 2026-08-06): DSL-Cross-Selling-Szenario.
+  "cross_selling:DSL_ADDON_SUGGESTED": () =>
+    "Erkanntes Interesse an einem Internetanschluss zuhause -- ein DSL-Angebot koennte passend sein",
 };
 
 /**

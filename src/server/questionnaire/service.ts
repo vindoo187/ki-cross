@@ -346,6 +346,18 @@ async function loadRepresentativeQuestionNodesForValidation(
   return { nodes, questionsWithoutVersion };
 }
 
+/**
+ * Formatiert ein DB-Datum als reines Kalenderdatum (YYYY-MM-DD, UTC-basiert,
+ * keine lokale Zeitzonenumrechnung). Wird ausschliesslich fuer den Rueckweg
+ * zu `DateInput` (natives `<input type="date">`) benoetigt -- dieses Feld
+ * akzeptiert zwingend nur dieses Format, ein voller ISO-Zeitstempel
+ * (`toISOString()`) fuehrt dazu, dass die Auswahl nach jedem Speichern als
+ * leer angezeigt wird (Bugfix, siehe ChatGPT-Konsultation 2026-08-06).
+ */
+function toDateOnlyString(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
 function mapAnswerRowToAnsweredValue(row: RawAnswerRow): AnsweredValue {
   return {
     answerType: row.answerType,
@@ -367,7 +379,7 @@ function rawRowToAnswerValueInput(row: RawAnswerRow): AnswerValueInput {
     integerValue: row.integerValue ?? undefined,
     decimalValue: row.decimalValue !== null ? row.decimalValue.toString() : undefined,
     booleanValue: row.booleanValue ?? undefined,
-    dateValue: row.dateValue ? row.dateValue.toISOString() : undefined,
+    dateValue: row.dateValue ? toDateOnlyString(row.dateValue) : undefined,
     choiceValues: row.choiceValues,
     freeTextValue: row.freeTextValue ?? undefined,
   };

@@ -197,24 +197,47 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
     return () => window.removeEventListener("beforeunload", handler);
   }, [phase]);
 
+  // Fix 1 (ChatGPT-Konsultation 2026-08-06): Text-/Zahlenfelder sperren sich
+  // waehrend eines laufenden Speichervorgangs nicht mehr (siehe
+  // QuestionInputs.tsx), der Nutzer kann also weitertippen. Damit dabei
+  // niemals ein zweiter, ueberlappender Request mit einer bereits veralteten
+  // `expectedAnswerVersion` an den Server geht -- und damit eine aeltere
+  // Serverantwort niemals eine neuere Eingabe ueberschreibt -- werden Saves
+  // pro Frage serialisiert: laeuft fuer die aktive Frage bereits ein Save,
+  // wird der neueste Wert nur gemerkt (`queuedEditRef`) und automatisch
+  // nachgesendet, sobald der laufende Request abgeschlossen ist (mit der dann
+  // aktuellen, vom Server zurueckgegebenen Version).
+  const inFlightQuestionIdRef = useRef<string | null>(null);
+  const queuedEditRef = useRef<{ questionId: string; value: AnswerValueInput } | null>(null);
+
   async function commitAnswer(value: AnswerValueInput) {
     if (!activeQuestion) {
       return;
     }
+    const questionId = activeQuestion.questionId;
+
+    if (inFlightQuestionIdRef.current === questionId) {
+      queuedEditRef.current = { questionId, value };
+      return;
+    }
+
+    await commitAnswerForQuestion(questionId, value, activeQuestion.currentAnswerVersion);
+  }
+
+  async function commitAnswerForQuestion(
+    questionId: string,
+    value: AnswerValueInput,
+    expectedAnswerVersion: number | null,
+  ) {
+    inFlightQuestionIdRef.current = questionId;
     dispatch({ type: "SAVE_START", value });
     try {
-      const isChange = activeQuestion.currentAnswerVersion !== null;
+      const isChange = expectedAnswerVersion !== null;
       const response = await fetch(`/api/consultation/sessions/${sessionId}/answers`, {
         method: isChange ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          isChange
-            ? {
-                questionId: activeQuestion.questionId,
-                value,
-                expectedAnswerVersion: activeQuestion.currentAnswerVersion,
-              }
-            : { questionId: activeQuestion.questionId, value },
+          isChange ? { questionId, value, expectedAnswerVersion } : { questionId, value },
         ),
       });
 
@@ -224,9 +247,29 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
           state: QuestionnaireState;
         };
         dispatch({ type: "SAVE_SUCCESS", state: body.state, writeResult: body.writeResult });
+        inFlightQuestionIdRef.current = null;
+
+        const queued = queuedEditRef.current;
+        if (queued && queued.questionId === questionId) {
+          queuedEditRef.current = null;
+          const freshQuestion = body.state.visibleQuestions.find(
+            (q) => q.questionId === questionId,
+          );
+          // Frage evtl. durch den Speichervorgang nicht mehr sichtbar (Pfad
+          // hat sich geaendert) -- dann wird der nachgeholte Wert bewusst
+          // NICHT mehr gesendet.
+          if (freshQuestion) {
+            await commitAnswerForQuestion(
+              questionId,
+              queued.value,
+              freshQuestion.currentAnswerVersion,
+            );
+          }
+        }
         return;
       }
 
+      inFlightQuestionIdRef.current = null;
       const errorBody = await parseErrorBody(response);
       if (response.status === 422 && errorBody.issues) {
         dispatch({ type: "SAVE_VALIDATION_ERROR", issues: errorBody.issues });
@@ -236,6 +279,7 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
         dispatch({ type: "SAVE_NETWORK_ERROR", message: errorBody.message });
       }
     } catch {
+      inFlightQuestionIdRef.current = null;
       dispatch({ type: "SAVE_NETWORK_ERROR", message: "Verbindung zum Server fehlgeschlagen." });
     }
   }

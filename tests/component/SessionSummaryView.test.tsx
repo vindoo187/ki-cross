@@ -84,4 +84,22 @@ describe("SessionSummaryView", () => {
       screen.getByText("Fuer diese Sitzung liegt noch keine Empfehlung vor."),
     ).toBeInTheDocument();
   });
+
+  // Fix 6 (ChatGPT-Konsultation 2026-08-07): Read-only-Hinweistext fuer
+  // COMPLETED/ABANDONED, keinerlei Hinweis fuer IN_PROGRESS -- bewusst
+  // explizite Statuspruefung statt "!== IN_PROGRESS" (siehe Modulkommentar).
+  it('zeigt den Abschluss-Hinweistext "Fragebogen abgeschlossen -- nur Ansicht" bei COMPLETED', () => {
+    render(<SessionSummaryView summary={buildSessionSummary({ status: "COMPLETED" })} />);
+    expect(screen.getByText(/Fragebogen abgeschlossen -- nur Ansicht\./)).toBeInTheDocument();
+  });
+
+  it('zeigt den Abbruch-Hinweistext "Beratung abgebrochen -- nur Ansicht" bei ABANDONED', () => {
+    render(<SessionSummaryView summary={buildSessionSummary({ status: "ABANDONED" })} />);
+    expect(screen.getByText(/Beratung abgebrochen -- nur Ansicht\./)).toBeInTheDocument();
+  });
+
+  it("zeigt keinen Read-only-Hinweistext bei IN_PROGRESS", () => {
+    render(<SessionSummaryView summary={buildSessionSummary({ status: "IN_PROGRESS" })} />);
+    expect(screen.queryByText(/nur Ansicht/)).not.toBeInTheDocument();
+  });
 });

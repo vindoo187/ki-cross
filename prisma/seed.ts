@@ -460,6 +460,64 @@ async function seedTenant(
     },
   });
 
+  // --- Fix 4 (ChatGPT-Konsultation 2026-08-06): begrenztes, synthetisches
+  // DSL-Testprodukt fuer das DSL-Cross-Selling-Szenario weiter unten. Bewusst
+  // KEIN vollstaendiger Telekom-/O2-DSL-Produktkatalog -- nur ein einzelnes
+  // Produkt, referenziert ueber CrossSellingRule.suggestedProductVersionId.
+  // Wird NICHT in der Haupt-Tarifempfehlung angezeigt (buildConsultationRecommendationView
+  // filtert dort auf eligibilityPassed, Cross-Selling-Signale durchlaufen
+  // diesen Filter nicht), auch wenn die mobilfunkspezifische
+  // "ausreichendesDatenvolumen"-Regel (dataVolumeGb) fuer dieses Produkt
+  // mangels passendem Attribut nicht erfuellt ist -- das ist hier unschaedlich.
+  const productDsl = await prisma.product.create({
+    data: {
+      tenantId: tenant.id,
+      providerId: providers[0]!.id,
+      categoryId: category.id,
+      productType: ProductType.DSL,
+      name: "DemoTel Home DSL 100 (synthetisch)",
+      isSynthetic: true,
+    },
+  });
+  const productVersionDsl = await prisma.productVersion.create({
+    data: {
+      tenantId: tenant.id,
+      productId: productDsl.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      currency: "EUR",
+      monthlyPriceMinor: 2499,
+      oneTimePriceMinor: 0,
+      contractMonths: 24,
+    },
+  });
+  await prisma.tariffAttribute.create({
+    data: {
+      tenantId: tenant.id,
+      productVersionId: productVersionDsl.id,
+      attributeKey: "bandwidth_mbit",
+      attributeValue: "100",
+      valueType: "number",
+    },
+  });
+  const commissionModelDsl = await prisma.commissionModel.create({
+    data: { tenantId: tenant.id, productId: productDsl.id, name: "Standardprovision Home DSL" },
+  });
+  await prisma.commissionModelVersion.create({
+    data: {
+      tenantId: tenant.id,
+      commissionModelId: commissionModelDsl.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      commissionType: CommissionType.FLAT,
+      currency: "EUR",
+      commissionAmountMinor: 2000,
+      recurringCommissionAmountMinor: 100,
+    },
+  });
+
   // --- Konfigurierbarer Schwellenwert (Renewal-Lookahead, seed = 180 Tage) ---
   await prisma.configurableThreshold.upsert({
     where: {
@@ -708,9 +766,14 @@ async function seedTenant(
     data: {
       tenantId: tenant.id,
       questionId: streamingPaketQuestion.id,
-      label: "Welches Streaming-Paket bevorzugen Sie?",
-      answerType: AnswerType.SINGLE_CHOICE,
+      // Fix 5 (ChatGPT-Konsultation 2026-08-07): Mehrfachauswahl statt
+      // Einfachauswahl -- Label entsprechend pluralisiert (Kunden koennen
+      // mehrere Streaming-Anbieter gleichzeitig nutzen wollen).
+      label: "Welche Streaming-Pakete interessieren Sie?",
+      answerType: AnswerType.MULTIPLE_CHOICE,
       isRequired: false,
+      minSelections: 1,
+      maxSelections: 3,
       validFrom: new Date("2026-01-01T00:00:00Z"),
       status: "ACTIVE",
     },
@@ -745,6 +808,231 @@ async function seedTenant(
       tenantId: tenant.id,
       questionVersionId: streamingPaketQuestionVersion.id,
       targetQuestionId: question.id,
+      operator: "EQUALS",
+      comparisonValue: "true",
+      combinator: "AND",
+    },
+  });
+
+  // --- Fix 3 (ChatGPT-Konsultation 2026-08-06): drei weitere, fachlich
+  // unterschiedliche Fragenpfade mit eigenem Sichtbarkeits-Branching, damit
+  // die Fragen-Engine im manuellen Test/AP15 tatsaechlich als dynamisch
+  // wahrgenommen wird (vorher gab es ausser Streaming keine weitere
+  // VisibilityCondition). Die Fragen-Engine selbst wird dafuer NICHT
+  // veraendert -- nur zusaetzliche Seed-Fragen/-Bedingungen nach demselben,
+  // bereits bestehenden Muster (siehe streamingPaketQuestion oben).
+
+  // Pfad 2: Smartphone-Bedarf -> Geraeteklasse-Folgefrage.
+  const smartphoneQuestion = await prisma.question.create({
+    data: {
+      tenantId: tenant.id,
+      questionnaireVersionId: questionnaireVersion.id,
+      key: "smartphone_benoetigt",
+      sortOrder: 9,
+    },
+  });
+  await prisma.questionVersion.create({
+    data: {
+      tenantId: tenant.id,
+      questionId: smartphoneQuestion.id,
+      label: "Benoetigen Sie ein neues Smartphone?",
+      answerType: AnswerType.BOOLEAN,
+      isRequired: false,
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      status: "ACTIVE",
+    },
+  });
+
+  const smartphoneGeraeteklasseQuestion = await prisma.question.create({
+    data: {
+      tenantId: tenant.id,
+      questionnaireVersionId: questionnaireVersion.id,
+      key: "smartphone_geraeteklasse",
+      sortOrder: 10,
+    },
+  });
+  const smartphoneGeraeteklasseQuestionVersion = await prisma.questionVersion.create({
+    data: {
+      tenantId: tenant.id,
+      questionId: smartphoneGeraeteklasseQuestion.id,
+      // Fix 5 (ChatGPT-Konsultation 2026-08-07): Mehrfachauswahl statt
+      // Einfachauswahl -- Label entsprechend pluralisiert.
+      label: "Welche Geraeteklassen kommen fuer Sie infrage?",
+      answerType: AnswerType.MULTIPLE_CHOICE,
+      isRequired: false,
+      minSelections: 1,
+      maxSelections: 3,
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      status: "ACTIVE",
+    },
+  });
+  await prisma.answerOption.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        questionVersionId: smartphoneGeraeteklasseQuestionVersion.id,
+        key: "einsteiger",
+        label: "Einsteigerklasse",
+        sortOrder: 1,
+      },
+      {
+        tenantId: tenant.id,
+        questionVersionId: smartphoneGeraeteklasseQuestionVersion.id,
+        key: "mittelklasse",
+        label: "Mittelklasse",
+        sortOrder: 2,
+      },
+      {
+        tenantId: tenant.id,
+        questionVersionId: smartphoneGeraeteklasseQuestionVersion.id,
+        key: "premium",
+        label: "Premiumklasse",
+        sortOrder: 3,
+      },
+    ],
+  });
+  await prisma.visibilityCondition.create({
+    data: {
+      tenantId: tenant.id,
+      questionVersionId: smartphoneGeraeteklasseQuestionVersion.id,
+      targetQuestionId: smartphoneQuestion.id,
+      operator: "EQUALS",
+      comparisonValue: "true",
+      combinator: "AND",
+    },
+  });
+
+  // Pfad 3: Rufnummernmitnahme -> Portierungs-Folgefrage.
+  const rufnummerMitnehmenQuestion = await prisma.question.create({
+    data: {
+      tenantId: tenant.id,
+      questionnaireVersionId: questionnaireVersion.id,
+      key: "rufnummer_mitnehmen",
+      sortOrder: 11,
+    },
+  });
+  await prisma.questionVersion.create({
+    data: {
+      tenantId: tenant.id,
+      questionId: rufnummerMitnehmenQuestion.id,
+      label: "Moechten Sie Ihre bisherige Rufnummer mitnehmen (Portierung)?",
+      answerType: AnswerType.BOOLEAN,
+      isRequired: false,
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      status: "ACTIVE",
+    },
+  });
+
+  const rufnummerAnbieterQuestion = await prisma.question.create({
+    data: {
+      tenantId: tenant.id,
+      questionnaireVersionId: questionnaireVersion.id,
+      key: "rufnummer_bisheriger_anbieter",
+      sortOrder: 12,
+    },
+  });
+  const rufnummerAnbieterQuestionVersion = await prisma.questionVersion.create({
+    data: {
+      tenantId: tenant.id,
+      questionId: rufnummerAnbieterQuestion.id,
+      label: "Bei welchem Anbieter ist Ihre aktuelle Rufnummer registriert?",
+      answerType: AnswerType.SHORT_TEXT,
+      isRequired: false,
+      maxLength: 100,
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      status: "ACTIVE",
+    },
+  });
+  await prisma.visibilityCondition.create({
+    data: {
+      tenantId: tenant.id,
+      questionVersionId: rufnummerAnbieterQuestionVersion.id,
+      targetQuestionId: rufnummerMitnehmenQuestion.id,
+      operator: "EQUALS",
+      comparisonValue: "true",
+      combinator: "AND",
+    },
+  });
+
+  // Pfad 4: DSL-/Internet-zuhause-Bedarf -> Bandbreiten-Folgefrage. Traegt
+  // needType DSL, damit die CrossSellingRuleCondition unten (Fix 4) per
+  // ANSWER-Bedingung darauf verweisen kann (analog hat_streaming_bedarf).
+  const dslBedarfQuestion = await prisma.question.create({
+    data: {
+      tenantId: tenant.id,
+      questionnaireVersionId: questionnaireVersion.id,
+      key: "dsl_bedarf",
+      needType: NeedType.DSL,
+      sortOrder: 13,
+    },
+  });
+  await prisma.questionVersion.create({
+    data: {
+      tenantId: tenant.id,
+      questionId: dslBedarfQuestion.id,
+      label: "Interessieren Sie sich zusaetzlich fuer einen Internetanschluss (DSL) zuhause?",
+      answerType: AnswerType.BOOLEAN,
+      isRequired: false,
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      status: "ACTIVE",
+    },
+  });
+
+  const dslBandbreiteQuestion = await prisma.question.create({
+    data: {
+      tenantId: tenant.id,
+      questionnaireVersionId: questionnaireVersion.id,
+      key: "dsl_bevorzugte_bandbreite",
+      sortOrder: 14,
+    },
+  });
+  const dslBandbreiteQuestionVersion = await prisma.questionVersion.create({
+    data: {
+      tenantId: tenant.id,
+      questionId: dslBandbreiteQuestion.id,
+      // Fix 5 (ChatGPT-Konsultation 2026-08-07): Mehrfachauswahl statt
+      // Einfachauswahl -- Label auf "welche Bandbreiten kommen infrage"
+      // umformuliert, damit die Mehrfachauswahl semantisch nicht
+      // widerspruechlich wirkt (ChatGPT-Vorschlag).
+      label: "Welche Bandbreiten kommen fuer Sie infrage?",
+      answerType: AnswerType.MULTIPLE_CHOICE,
+      isRequired: false,
+      minSelections: 1,
+      maxSelections: 3,
+      validFrom: new Date("2026-01-01T00:00:00Z"),
+      status: "ACTIVE",
+    },
+  });
+  await prisma.answerOption.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        questionVersionId: dslBandbreiteQuestionVersion.id,
+        key: "bis_50",
+        label: "bis 50 Mbit/s",
+        sortOrder: 1,
+      },
+      {
+        tenantId: tenant.id,
+        questionVersionId: dslBandbreiteQuestionVersion.id,
+        key: "bis_100",
+        label: "bis 100 Mbit/s",
+        sortOrder: 2,
+      },
+      {
+        tenantId: tenant.id,
+        questionVersionId: dslBandbreiteQuestionVersion.id,
+        key: "bis_250",
+        label: "bis 250 Mbit/s",
+        sortOrder: 3,
+      },
+    ],
+  });
+  await prisma.visibilityCondition.create({
+    data: {
+      tenantId: tenant.id,
+      questionVersionId: dslBandbreiteQuestionVersion.id,
+      targetQuestionId: dslBedarfQuestion.id,
       operator: "EQUALS",
       comparisonValue: "true",
       combinator: "AND",
@@ -960,6 +1248,33 @@ async function seedTenant(
       groupIndex: 0,
       sourceType: "ANSWER",
       questionId: question.id,
+      operator: "EQUALS",
+      comparisonValue: "true",
+    },
+  });
+
+  // Fix 4 (ChatGPT-Konsultation 2026-08-06): Cross-Selling-Regel fuer das
+  // DSL-Testprodukt oben, matcht die "dsl_bedarf"-Antwort (Fix 3). Analog zum
+  // Streaming-Muster darueber, zusaetzlich mit suggestedProductVersionId.
+  const dslZusatzpaket = await prisma.crossSellingRule.create({
+    data: {
+      tenantId: tenant.id,
+      ruleSetVersionId: ruleSetVersion.id,
+      key: "dsl_zusatzpaket",
+      description: "Cross-Selling-Signal fuer einen DSL-Internetanschluss",
+      needType: NeedType.DSL,
+      priority: 65,
+      reasonCode: "DSL_ADDON_SUGGESTED",
+      suggestedProductVersionId: productVersionDsl.id,
+    },
+  });
+  await prisma.crossSellingRuleCondition.create({
+    data: {
+      tenantId: tenant.id,
+      crossSellingRuleId: dslZusatzpaket.id,
+      groupIndex: 0,
+      sourceType: "ANSWER",
+      questionId: dslBedarfQuestion.id,
       operator: "EQUALS",
       comparisonValue: "true",
     },
