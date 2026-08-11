@@ -82,6 +82,18 @@ function firstQuestionIdToShow(state: QuestionnaireState): string | null {
   return state.progress.nextQuestionId ?? state.visibleQuestions[0]?.questionId ?? null;
 }
 
+// Fix 7 (ChatGPT-Konsultation 2026-08-11): Auto-Weiterspringen zur naechsten
+// Frage nach erfolgreichem Speichern -- ausdruecklich NUR fuer Antworttypen,
+// bei denen ein einzelner Commit tatsaechlich eine vollstaendig
+// abgeschlossene Entscheidung darstellt (ein Klick = eine fertige Antwort,
+// kein Debouncing, siehe QuestionInputs.tsx). MULTIPLE_CHOICE ist bewusst
+// ausgeschlossen, da dort mehrere Werte nacheinander ausgewaehlt werden
+// koennen -- ein Auto-Advance nach dem ersten Checkbox-Klick wuerde die
+// Auswahl weiterer Optionen verhindern. SHORT_TEXT/INTEGER/DECIMAL sind
+// ebenfalls ausgeschlossen, da ein debounced Save nach einer Tippschreibpause
+// nicht zwingend bedeutet, dass der Mitarbeiter mit der Frage fertig ist.
+const AUTO_ADVANCE_ANSWER_TYPES = new Set(["BOOLEAN", "SINGLE_CHOICE", "DATE"]);
+
 function reducer(state: FlowState, action: Action): FlowState {
   switch (action.type) {
     case "SELECT_QUESTION":
@@ -94,9 +106,24 @@ function reducer(state: FlowState, action: Action): FlowState {
       const stillVisible = action.state.visibleQuestions.some(
         (q) => q.questionId === state.activeQuestionId,
       );
-      const nextActive = stillVisible
-        ? state.activeQuestionId
-        : firstQuestionIdToShow(action.state);
+      // Auto-Advance nutzt bewusst die bereits vom Server berechnete
+      // `progress.nextQuestionId` (erste unbeantwortete sichtbare Frage in
+      // sortOrder, siehe path.ts) statt selbst im Frontend die naechste
+      // Frage zu bestimmen -- der sichtbare Pfad kann sich durch die gerade
+      // gespeicherte Antwort komplett veraendert haben.
+      const previousActiveQuestion = state.questionnaire.visibleQuestions.find(
+        (q) => q.questionId === state.activeQuestionId,
+      );
+      const shouldAutoAdvance =
+        previousActiveQuestion != null &&
+        AUTO_ADVANCE_ANSWER_TYPES.has(previousActiveQuestion.answerType) &&
+        action.state.progress.nextQuestionId != null &&
+        action.state.progress.nextQuestionId !== state.activeQuestionId;
+      const nextActive = shouldAutoAdvance
+        ? action.state.progress.nextQuestionId
+        : stillVisible
+          ? state.activeQuestionId
+          : firstQuestionIdToShow(action.state);
       return {
         ...state,
         phase: "saved",

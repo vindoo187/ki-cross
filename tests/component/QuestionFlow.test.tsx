@@ -90,7 +90,13 @@ describe("QuestionFlow", () => {
       ok: true,
       json: async () => ({
         writeResult: {},
-        state: buildQuestionnaireState({ visibleQuestions: [question], progress: buildProgress() }),
+        state: buildQuestionnaireState({
+          visibleQuestions: [question],
+          // Fix 7: nextQuestionId bewusst null (keine weitere sichtbare Frage
+          // in diesem Ein-Fragen-Fixture), damit dieser Test weiterhin die
+          // unveraenderte activeQuestionId prueft statt Auto-Advance.
+          progress: buildProgress({ nextQuestionId: null }),
+        }),
       }),
     } as Response);
     render(
@@ -125,7 +131,10 @@ describe("QuestionFlow", () => {
       ok: true,
       json: async () => ({
         writeResult: {},
-        state: buildQuestionnaireState({ visibleQuestions: [question], progress: buildProgress() }),
+        state: buildQuestionnaireState({
+          visibleQuestions: [question],
+          progress: buildProgress({ nextQuestionId: null }),
+        }),
       }),
     } as Response);
     render(
@@ -218,7 +227,8 @@ describe("QuestionFlow", () => {
           writeResult: {},
           state: buildQuestionnaireState({
             visibleQuestions: [question],
-            progress: buildProgress(),
+            // Fix 7: nextQuestionId bewusst null (keine weitere sichtbare Frage in diesem Ein-Fragen-Fixture), damit dieser Test weiterhin die unveraenderte activeQuestionId prueft statt Auto-Advance.
+            progress: buildProgress({ nextQuestionId: null }),
           }),
         }),
       } as Response);
@@ -324,7 +334,11 @@ describe("QuestionFlow", () => {
       ok: true,
       json: async () => ({
         writeResult: {},
-        state: buildQuestionnaireState({ visibleQuestions: [question], progress: buildProgress() }),
+        state: buildQuestionnaireState({
+          visibleQuestions: [question],
+          // Fix 7: nextQuestionId bewusst null (keine weitere sichtbare Frage in diesem Ein-Fragen-Fixture), damit dieser Test weiterhin die unveraenderte activeQuestionId prueft statt Auto-Advance.
+          progress: buildProgress({ nextQuestionId: null }),
+        }),
       }),
     } as Response);
     render(
@@ -339,5 +353,274 @@ describe("QuestionFlow", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: /Wie viele Personen/ })).toHaveFocus(),
     );
+  });
+});
+
+/**
+ * Fix 7 (ChatGPT-Konsultation 2026-08-11): Auto-Weiterspringen zur naechsten
+ * Frage nach erfolgreichem Speichern. Testmatrix laut ChatGPT-GO: BOOLEAN/
+ * SINGLE_CHOICE/DATE springen automatisch weiter (nutzen dazu bewusst das
+ * bereits vom Server berechnete `progress.nextQuestionId`, siehe
+ * Modulkommentar in `QuestionFlow.tsx`); MULTIPLE_CHOICE und die debounceten
+ * Freitext-/Zahlenfelder springen NICHT automatisch weiter, da ein einzelner
+ * Commit dort keine abgeschlossene Entscheidung darstellt; die letzte Frage
+ * (kein `nextQuestionId`) bleibt unveraendert aktiv; wird durch die gerade
+ * gespeicherte Antwort eine Folgefrage unsichtbar, springt Auto-Advance zur
+ * tatsaechlich naechsten sichtbaren Frage laut Server, nicht zu einer
+ * inzwischen unsichtbaren.
+ */
+describe("QuestionFlow -- Fix 7 Auto-Advance", () => {
+  it("BOOLEAN: springt nach erfolgreichem Speichern automatisch zur naechsten Frage", async () => {
+    const user = userEvent.setup();
+    const question1 = buildQuestion({
+      questionId: "question-1",
+      label: "Frage eins",
+      answerType: "BOOLEAN",
+    });
+    const question2 = buildQuestion({ questionId: "question-2", label: "Frage zwei" });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        writeResult: {},
+        state: buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-2" }),
+        }),
+      }),
+    } as Response);
+    render(
+      <QuestionFlow
+        initialState={buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-1" }),
+        })}
+      />,
+    );
+    await user.click(screen.getByLabelText("Ja"));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: /Frage zwei/ })).toBeInTheDocument(),
+    );
+  });
+
+  it("SINGLE_CHOICE: springt nach erfolgreichem Speichern automatisch zur naechsten Frage", async () => {
+    const user = userEvent.setup();
+    const question1 = buildQuestion({ questionId: "question-1", label: "Frage eins" });
+    const question2 = buildQuestion({ questionId: "question-2", label: "Frage zwei" });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        writeResult: {},
+        state: buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-2" }),
+        }),
+      }),
+    } as Response);
+    render(
+      <QuestionFlow
+        initialState={buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-1" }),
+        })}
+      />,
+    );
+    await user.click(screen.getByLabelText("Familie"));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: /Frage zwei/ })).toBeInTheDocument(),
+    );
+  });
+
+  it("DATE: springt nach erfolgreichem Speichern automatisch zur naechsten Frage", async () => {
+    const user = userEvent.setup();
+    const question1 = buildQuestion({
+      questionId: "question-1",
+      label: "Frage eins",
+      answerType: "DATE",
+    });
+    const question2 = buildQuestion({ questionId: "question-2", label: "Frage zwei" });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        writeResult: {},
+        state: buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-2" }),
+        }),
+      }),
+    } as Response);
+    render(
+      <QuestionFlow
+        initialState={buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-1" }),
+        })}
+      />,
+    );
+    await user.type(screen.getByDisplayValue(""), "2026-08-01");
+    await waitFor(
+      () => expect(screen.getByRole("heading", { name: /Frage zwei/ })).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+  });
+
+  it("MULTIPLE_CHOICE: bleibt nach der ersten Checkbox-Auswahl auf derselben Frage", async () => {
+    const user = userEvent.setup();
+    const question1 = buildQuestion({
+      questionId: "question-1",
+      label: "Frage eins",
+      answerType: "MULTIPLE_CHOICE",
+      minSelections: 1,
+      maxSelections: 3,
+    });
+    const question2 = buildQuestion({ questionId: "question-2", label: "Frage zwei" });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        writeResult: {},
+        state: buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-2" }),
+        }),
+      }),
+    } as Response);
+    render(
+      <QuestionFlow
+        initialState={buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-1" }),
+        })}
+      />,
+    );
+    await user.click(screen.getByLabelText("Eine Person"));
+    await waitFor(() => expect(screen.getByText("Gespeichert")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: /Frage eins/ })).toBeInTheDocument();
+  });
+
+  it("MULTIPLE_CHOICE: bleibt auch nach der zweiten Checkbox-Auswahl auf derselben Frage", async () => {
+    const user = userEvent.setup();
+    const question1 = buildQuestion({
+      questionId: "question-1",
+      label: "Frage eins",
+      answerType: "MULTIPLE_CHOICE",
+      minSelections: 1,
+      maxSelections: 3,
+      currentAnswer: { choiceValues: ["one"] },
+      currentAnswerVersion: 1,
+    });
+    const question2 = buildQuestion({ questionId: "question-2", label: "Frage zwei" });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        writeResult: {},
+        state: buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-2" }),
+        }),
+      }),
+    } as Response);
+    render(
+      <QuestionFlow
+        initialState={buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-1" }),
+        })}
+      />,
+    );
+    await user.click(screen.getByLabelText("Familie"));
+    await waitFor(() => expect(screen.getByText("Gespeichert")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: /Frage eins/ })).toBeInTheDocument();
+  });
+
+  it("SHORT_TEXT: bleibt nach dem debounceten Speichern auf derselben Frage", async () => {
+    const user = userEvent.setup();
+    const question1 = buildQuestion({
+      questionId: "question-1",
+      label: "Frage eins",
+      answerType: "SHORT_TEXT",
+      answerOptions: [],
+    });
+    const question2 = buildQuestion({ questionId: "question-2", label: "Frage zwei" });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        writeResult: {},
+        state: buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-2" }),
+        }),
+      }),
+    } as Response);
+    render(
+      <QuestionFlow
+        initialState={buildQuestionnaireState({
+          visibleQuestions: [question1, question2],
+          progress: buildProgress({ nextQuestionId: "question-1" }),
+        })}
+      />,
+    );
+    await user.type(screen.getByLabelText("Frage eins"), "Notiz");
+    await waitFor(() => expect(screen.getByText("Gespeichert")).toBeInTheDocument(), {
+      timeout: 2000,
+    });
+    expect(screen.getByRole("heading", { name: /Frage eins/ })).toBeInTheDocument();
+  });
+
+  it("letzte Frage (kein nextQuestionId): bleibt nach dem Speichern unveraendert aktiv", async () => {
+    const user = userEvent.setup();
+    const question = buildQuestion({ questionId: "question-1", label: "Frage eins" });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        writeResult: {},
+        state: buildQuestionnaireState({
+          visibleQuestions: [question],
+          progress: buildProgress({ nextQuestionId: null }),
+        }),
+      }),
+    } as Response);
+    render(
+      <QuestionFlow
+        initialState={buildQuestionnaireState({
+          visibleQuestions: [question],
+          progress: buildProgress({ nextQuestionId: "question-1" }),
+        })}
+      />,
+    );
+    await user.click(screen.getByLabelText("Familie"));
+    await waitFor(() => expect(screen.getByText("Gespeichert")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: /Frage eins/ })).toBeInTheDocument();
+  });
+
+  it("springt bei einer durch die Antwort unsichtbar gewordenen Folgefrage zur tatsaechlich naechsten sichtbaren Frage", async () => {
+    const user = userEvent.setup();
+    const question1 = buildQuestion({ questionId: "question-1", label: "Frage eins" });
+    const question2 = buildQuestion({ questionId: "question-2", label: "Frage zwei" });
+    const question3 = buildQuestion({ questionId: "question-3", label: "Frage drei" });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        writeResult: {},
+        // question-2 ist nach der gerade gespeicherten Antwort nicht mehr
+        // sichtbar (z. B. durch eine Sichtbarkeitsbedingung deaktiviert) --
+        // question-3 ist die tatsaechlich naechste sichtbare Frage.
+        state: buildQuestionnaireState({
+          visibleQuestions: [question1, question3],
+          progress: buildProgress({ nextQuestionId: "question-3" }),
+        }),
+      }),
+    } as Response);
+    render(
+      <QuestionFlow
+        initialState={buildQuestionnaireState({
+          visibleQuestions: [question1, question2, question3],
+          progress: buildProgress({ nextQuestionId: "question-1" }),
+        })}
+      />,
+    );
+    await user.click(screen.getByLabelText("Familie"));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: /Frage drei/ })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("heading", { name: /Frage zwei/ })).not.toBeInTheDocument();
   });
 });
