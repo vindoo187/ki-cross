@@ -8,6 +8,9 @@ dist
 src/generated
 coverage
 *.tsbuildinfo
+next-env.d.ts
+*.bak
+_rmtest.txt
 
 # Funktionslose Altlasten, die aufgrund einer Sandbox-Dateisystemrestriktion
 # ("Operation not permitted") nicht gelöscht werden konnten (siehe
