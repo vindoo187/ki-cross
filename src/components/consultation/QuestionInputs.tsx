@@ -62,7 +62,15 @@ export interface QuestionInputProps {
   disabled: boolean;
 }
 
-const DEBOUNCE_MS = 500;
+// Fix 8 (ChatGPT-Konsultation 2026-08-11): 500ms -> 1000ms. Nutzerfeedback aus
+// dem Testing: 500ms Denk-/Tippschreibpause reichten aus, um vorzeitig
+// gefuehlt zu werden ("speichert zu frueh"), obwohl kein Datenverlust auftrat
+// (siehe lastSentRawRef-Schutz oben). 1000ms bleibt weiterhin spuerbar
+// reaktionsschnell, gibt aber mehr Luft fuer normale Pausen. Reine
+// Konstantenaenderung, keine Architekturaenderung -- betrifft
+// ShortTextInput/IntegerInput/DecimalInput; SingleChoiceInput/BooleanInput/
+// DateInput/MultipleChoiceInput committen weiterhin ohne Debounce.
+const DEBOUNCE_MS = 1000;
 
 /**
  * Gemeinsamer Debounce-Hook fuer Freitext-/Zahlenfelder. `onFire` wird genau

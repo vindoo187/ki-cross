@@ -559,11 +559,12 @@ describe("QuestionFlow -- Fix 7 Auto-Advance", () => {
       />,
     );
     await user.type(screen.getByLabelText("Frage eins"), "Notiz");
+    // Fix 8 (ChatGPT-Konsultation 2026-08-11): DEBOUNCE_MS 500 -> 1000ms, Timeout entsprechend erhoeht.
     await waitFor(() => expect(screen.getByText("Gespeichert")).toBeInTheDocument(), {
-      timeout: 2000,
+      timeout: 3000,
     });
     expect(screen.getByRole("heading", { name: /Frage eins/ })).toBeInTheDocument();
-  });
+  }, 10000);
 
   it("letzte Frage (kein nextQuestionId): bleibt nach dem Speichern unveraendert aktiv", async () => {
     const user = userEvent.setup();

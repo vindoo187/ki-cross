@@ -26,7 +26,8 @@ import { buildQuestion } from "./fixtures";
  * `@testing-library/user-event`s internem Event-Scheduling fuehrt in dieser
  * Konstellation (Vitest 3.2.7 / user-event 14.6.1 / React 19) zu haengenden
  * Tests (`await user.type()` loest nie auf). `waitFor` mit erhoehtem Timeout
- * ist die robustere Variante fuer den ~500ms-Debounce.
+ * ist die robustere Variante fuer den Debounce (Fix 8, ChatGPT-Konsultation
+ * 2026-08-11: DEBOUNCE_MS 500 -> 1000ms, Timeouts hier entsprechend erhoeht).
  */
 
 describe("SingleChoiceInput", () => {
@@ -125,7 +126,7 @@ describe("BooleanInput", () => {
 });
 
 describe("IntegerInput", () => {
-  it("hat type=number, min/max aus der Frage, und debouncet den Commit (~500ms)", async () => {
+  it("hat type=number, min/max aus der Frage, und debouncet den Commit (~1000ms)", async () => {
     const user = userEvent.setup();
     const onCommit = vi.fn();
     const onLocalEdit = vi.fn();
@@ -148,9 +149,9 @@ describe("IntegerInput", () => {
     expect(onLocalEdit).toHaveBeenCalled();
     expect(onCommit).not.toHaveBeenCalled();
     await waitFor(() => expect(onCommit).toHaveBeenCalledWith({ integerValue: 4 }), {
-      timeout: 2000,
+      timeout: 3000,
     });
-  }, 10000);
+  }, 15000);
 });
 
 describe("DecimalInput", () => {
@@ -169,9 +170,9 @@ describe("DecimalInput", () => {
     const input = screen.getByRole("spinbutton");
     await user.type(input, "12.5");
     await waitFor(() => expect(onCommit).toHaveBeenCalledWith({ decimalValue: "12.5" }), {
-      timeout: 2000,
+      timeout: 3000,
     });
-  }, 10000);
+  }, 15000);
 });
 
 describe("ShortTextInput", () => {
@@ -191,9 +192,9 @@ describe("ShortTextInput", () => {
     expect(input).toHaveAttribute("maxLength", "5");
     await user.type(input, "Hallo");
     await waitFor(() => expect(onCommit).toHaveBeenCalledWith({ freeTextValue: "Hallo" }), {
-      timeout: 2000,
+      timeout: 3000,
     });
-  }, 10000);
+  }, 15000);
 });
 
 describe("DateInput", () => {
