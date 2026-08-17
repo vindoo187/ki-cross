@@ -171,7 +171,8 @@ code {
 .complete-consultation button,
 .abandon-consultation button,
 .outcome-dialog button,
-.evaluate-recommendation button {
+.evaluate-recommendation button,
+.deal-closure button {
   min-height: 44px;
   padding: 10px 18px;
   border: 1px solid #1a1a1a;
@@ -188,14 +189,16 @@ code {
 .complete-consultation button:disabled,
 .abandon-consultation button:disabled,
 .outcome-dialog button:disabled,
-.evaluate-recommendation button:disabled {
+.evaluate-recommendation button:disabled,
+.deal-closure button:disabled {
   opacity: 0.6;
   cursor: default;
 }
 
 .start-consultation-form__error,
 .complete-consultation__error,
-.abandon-consultation__error {
+.abandon-consultation__error,
+.deal-closure__error {
   color: #b3261e;
   font-size: 13px;
 }
@@ -948,4 +951,230 @@ code {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px 32px;
   }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Deal-Erfassung (Phase 6 AP5) -- siehe PHASE_6_IMPLEMENTATION_PLAN.md    */
+/* Abschnitt 3.1.                                                          */
+/* ---------------------------------------------------------------------- */
+
+.deal-closure {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 560px;
+}
+
+.deal-closure__intro {
+  margin: 0;
+  font-size: 14px;
+  color: #444;
+}
+
+.deal-closure__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.deal-closure__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid #eceef2;
+  border-radius: 8px;
+  background: #f5f6f8;
+}
+
+.deal-closure__item-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  min-height: 44px;
+}
+
+.deal-closure__item-price {
+  font-size: 13px;
+  color: #666;
+}
+
+.deal-closure__item-quantity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #444;
+  margin-left: auto;
+}
+
+.deal-closure__item-quantity input {
+  width: 64px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 1px solid #d9dbe0;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.deal-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  border: 1px solid #eceef2;
+  border-radius: 8px;
+  background: #f5f6f8;
+}
+
+.deal-summary__closed-at {
+  margin: 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.deal-summary__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.deal-summary__totals {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+}
+
+.deal-summary__totals dt {
+  font-size: 13px;
+  color: #666;
+}
+
+.deal-summary__totals dd {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.consultation-entry__analytics-link {
+  margin-top: 24px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Analytics-Dashboard (Phase 6 AP8) -- siehe PHASE_6_IMPLEMENTATION_PLAN.md */
+/* Abschnitt 3.4.                                                          */
+/* ---------------------------------------------------------------------- */
+
+.analytics-dashboard {
+  padding: 24px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.analytics-dashboard__hint {
+  color: #444;
+  font-size: 14px;
+}
+
+.analytics-dashboard__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+  margin: 16px 0 32px;
+}
+
+.analytics-dashboard__filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #444;
+}
+
+.analytics-dashboard__filters select {
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid #d9dbe0;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.analytics-dashboard__filters button {
+  min-height: 40px;
+  padding: 8px 16px;
+  border: 1px solid #1a1a1a;
+  border-radius: 6px;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.analytics-dashboard__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+}
+
+.analytics-dashboard__card {
+  padding: 16px 20px;
+  border: 1px solid #eceef2;
+  border-radius: 8px;
+  background: #f5f6f8;
+}
+
+.analytics-dashboard__card h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.analytics-dashboard__card-value {
+  margin: 0 0 12px;
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.analytics-dashboard__card-details {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.analytics-dashboard__card-details div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.analytics-dashboard__card-details dt {
+  color: #666;
+}
+
+.analytics-dashboard__card-details dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.analytics-dashboard__card-empty {
+  margin: 0;
+  color: #666;
+  font-size: 13px;
+}
+
+.analytics-dashboard__back {
+  margin-top: 32px;
 }

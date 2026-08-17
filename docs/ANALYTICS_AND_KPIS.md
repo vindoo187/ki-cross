@@ -57,3 +57,39 @@ Jede KPI wird pro Filiale, Mitarbeiter und Zeitraum (Tag/Woche/Monat) aggregiert
 ## Darstellungsprinzip im Dashboard
 
 Jede KPI zeigt: Wert, Zeitraum, Vergleichswert (Vorperiode), Datenquelle/Berechnungshinweis auf Anfrage (Tooltip) – keine Kennzahl ohne erkennbare Grundlage.
+
+## Implementierungsstatus (Phase 6)
+
+Die obige Tabelle ist die ursprüngliche, aspirationale KPI-Vision aus Phase 2.
+Phase 6 implementiert davon einen von ChatGPT priorisierten Kern-Ausschnitt
+("Kern-KPIs") — Details zur konkreten Umsetzung, den tatsächlichen
+Datenquellen und Implementierungsannahmen siehe
+[DEAL_CAPTURE.md](DEAL_CAPTURE.md) Abschnitt 5.
+
+**Tatsächlich implementiert (live aggregiert, `src/server/analytics/kpis.ts`):**
+Beratungen (Anzahl), Completion-/Abbruchquote, Empfehlungen generiert,
+Annahme-/Ablehnungsquote, Abschlüsse (Anzahl), Umsatz (einmalig +
+monatlich wiederkehrend), Provision/Marge (Daten vorhanden, Anzeige im
+Dashboard-UI noch offen — siehe DEAL_CAPTURE.md Abschnitt 5).
+
+**Bewusst zurückgestellt** (nicht Kern-KPI laut ChatGPT-Priorisierung, kein
+Phase-6-Blocker): Cross-Selling-Quote, Ø Produkte pro Verkauf, Häufige
+Kundenbedürfnisse, Häufig angebotene Produkte, Gründe für Ablehnung,
+Zeitersparnis-Vergleich (Baseline-Problem weiterhin ungelöst, siehe
+Abschnitt oben), Datenqualität/Vollständigkeit, Ergebnisse pro
+Filiale/Mitarbeiter (nur Filiale ist im Dashboard-UI filterbar, nicht
+Mitarbeiter), `KpiSnapshot`-basierte Zeitreihen (Phase 6 aggregiert
+ausschließlich live, kein Snapshot-Mechanismus, ChatGPT-Vorgabe).
+
+**Event-Tabelle oben vs. tatsächliche `AnalyticsEventType`-Werte:** die
+Event-Namen in der Tabelle (`session_started`, `deal_closed`, …) sind die
+ursprüngliche Namenskonvention aus Phase 2; die tatsächlich implementierten
+Event-Typen (`CONSULTATION_STARTED`, `DEAL_CLOSED`, `CONSULTATION_COMPLETED`,
+`CONSULTATION_ABANDONED`, `OPPORTUNITY_OFFERED`/`OPPORTUNITY_DECLINED`, …)
+folgen der `AnalyticsEventType`-Enum-Konvention aus dem Prisma-Schema
+(`SCREAMING_SNAKE_CASE`). Nicht jeder in Phase 2 vorgesehene Event-Typ wurde
+umgesetzt — verbindliche Regel seit Phase 6 AP1/AP2: kein Analytics-Event
+ohne echten fachlichen Auslöser im Produkt (siehe
+PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 3.2/8.1 für die vollständige
+Analyse, welche der ursprünglich vorgesehenen Events einen echten Trigger
+haben und welche nicht).

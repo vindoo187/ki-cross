@@ -732,4 +732,30 @@ describe.skipIf(!hasDatabaseUrl)("Fragen-Engine (Integrationstest, echte Postgre
       }),
     ).rejects.toThrow();
   });
+
+  // --- 38: Phase 6 AP2 - CONSULTATION_STARTED wird zusaetzlich zu QUESTIONNAIRE_STARTED geschrieben ---
+  it("38: startQuestionnaire schreibt genau ein CONSULTATION_STARTED-Event pro Sitzung, getrennt von QUESTIONNAIRE_STARTED", async () => {
+    const state = await startSessionInV1();
+
+    const consultationStartedEvents = await rawClient.analyticsEvent.findMany({
+      where: { eventType: "CONSULTATION_STARTED" },
+    });
+    const matching = consultationStartedEvents.filter(
+      (e) =>
+        (e.payload as { consultationSessionId?: string })?.consultationSessionId ===
+        state.consultationSessionId,
+    );
+    expect(matching).toHaveLength(1);
+    expect(matching[0]!.storeId).toBe(storeAId);
+
+    const questionnaireStartedEvents = await rawClient.analyticsEvent.findMany({
+      where: { eventType: "QUESTIONNAIRE_STARTED" },
+    });
+    const matchingQuestionnaire = questionnaireStartedEvents.filter(
+      (e) =>
+        (e.payload as { consultationSessionId?: string })?.consultationSessionId ===
+        state.consultationSessionId,
+    );
+    expect(matchingQuestionnaire).toHaveLength(1);
+  });
 });

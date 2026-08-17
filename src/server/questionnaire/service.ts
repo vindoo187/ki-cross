@@ -590,6 +590,26 @@ export async function startQuestionnaire(
       },
     });
 
+    // Phase 6 AP2: eigenstaendiges CONSULTATION_STARTED-Event, zu unterscheiden
+    // von QUESTIONNAIRE_STARTED (siehe PHASE_6_IMPLEMENTATION_PLAN.md
+    // Abschnitt 8.1) -- QUESTIONNAIRE_STARTED markiert den Start des
+    // Fragebogens, dieses hier markiert laut AnalyticsEventType-Enum den
+    // Start der GESAMTEN Beratungssitzung. Beide Events entstehen am selben
+    // Zeitpunkt (Session-Anlage ist der einzige, eindeutige Ausloeser fuer
+    // beide), werden aber bewusst als zwei separate Events geschrieben,
+    // analog zur bestehenden Trennung CONSULTATION_COMPLETED vs.
+    // QUESTIONNAIRE_COMPLETED (siehe consultation-ui/completion.ts).
+    await tx.analyticsEvent.create({
+      data: {
+        tenantId,
+        storeId: input.storeId,
+        employeeId: input.employeeId,
+        eventType: "CONSULTATION_STARTED",
+        occurredAt: atTime,
+        payload: { consultationSessionId: session.id },
+      },
+    });
+
     return buildState(tx, session);
   });
 }

@@ -170,6 +170,8 @@ export function buildSessionSummary(
       },
     ],
     recommendation: buildRecommendationView(),
+    deal: null,
+    dealClosureCandidates: [],
     ...overrides,
   };
 }

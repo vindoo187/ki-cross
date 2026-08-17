@@ -37,6 +37,14 @@ import {
 } from "../recommendation/errors";
 import { AuthenticationError } from "../auth/errors";
 import { MissingTenantContextError } from "../tenant/context";
+import {
+  DealEngineError,
+  DealConsultationSessionNotFoundError,
+  DealSessionNotClosableError,
+  DealRequiresItemsError,
+  DealProductVersionNotFoundError,
+  DealAlreadyExistsForSessionError,
+} from "../deals/errors";
 
 interface ErrorBody {
   error: string;
@@ -163,6 +171,31 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   }
 
   if (error instanceof RecommendationEngineError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 400 });
+  }
+
+  // Deal-Erfassung (Phase 6 AP3/AP4): 404 -- referenzierte Session/ProductVersion existiert nicht.
+  if (
+    error instanceof DealConsultationSessionNotFoundError ||
+    error instanceof DealProductVersionNotFoundError
+  ) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 404 });
+  }
+
+  // Deal-Erfassung: 409 -- Zustandskonflikt (Session nicht abschlussfaehig, oder bereits ein Deal vorhanden).
+  if (
+    error instanceof DealSessionNotClosableError ||
+    error instanceof DealAlreadyExistsForSessionError
+  ) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Deal-Erfassung: 422 -- fachlich ungueltige Eingabe (keine DealItems).
+  if (error instanceof DealRequiresItemsError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 422 });
+  }
+
+  if (error instanceof DealEngineError) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 400 });
   }
 

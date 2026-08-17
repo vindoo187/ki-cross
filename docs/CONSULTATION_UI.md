@@ -187,6 +187,20 @@ Lesekomposition.
 zweites `CONSULTATION_COMPLETED`-Analytics-Event) und navigiert danach zur
 Übersicht.
 
+**Deal-Erfassung (`DealClosureForm`/`DealSummaryCard`, Phase 6 AP5):** ein
+eigener Abschnitt "Abschluss" auf derselben Seite — solange noch kein Deal
+existiert und mindestens eine Empfehlung angenommen wurde, zeigt
+`DealClosureForm` eine Vorauswahl aus den `RecommendationOutcome = ACCEPTED`
+-Empfehlungen (Checkbox je Produkt, Mengeneingabe) und schließt den Deal
+über `POST /api/consultation/sessions/[id]/deals` ab (`closeDeal()`, siehe
+[DEAL_CAPTURE.md](DEAL_CAPTURE.md)). Ein Deal ist ein Einmalvorgang pro
+Sitzung — danach zeigt `DealSummaryCard` nur noch die kundenbezogenen
+Umsatzzahlen (bewusst **keine** Provisions-/Margendaten, siehe
+DEAL_CAPTURE.md). Für `status === "ABANDONED"` wird das Formular gar nicht
+erst gerendert (Sichtbarkeits-Gate analog `AbandonConsultationButton`), da
+`closeDeal()` das ohnehin mit 409 (`DealSessionNotClosableError`) ablehnen
+würde.
+
 ## 7. Manueller Abbruch (AP10, `AbandonConsultationButton`)
 
 Verfügbar sowohl im Fragebogen-Arbeitsplatz als auch auf der Empfehlungs-
@@ -283,6 +297,11 @@ ausstehend" — nicht als "getestet" oder "erfolgreich".
 - Nach Abschluss einer Beratung ist kein Wiederöffnen derselben Sitzung
   vorgesehen; eine gewünschte Änderung bedeutet organisatorisch eine neue
   Beratung (Plan Abschnitt 8, Stop-Punkt 2).
+- **Deal-Erfassung (Phase 6 AP5) hat noch keine Component-/E2E-Tests**
+  (nur Unit-/Integrationstests der Service-Schicht, siehe
+  PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 12.6a) — bewusste,
+  dokumentierte Scope-Reduktion, wird vor dem Phase-6-Abschluss mit
+  ChatGPT besprochen.
 
 ## 12. Relevante Dateien
 
@@ -313,17 +332,36 @@ src/components/consultation/OpportunityCard.tsx
 src/components/consultation/SessionSummaryView.tsx
 src/components/consultation/CompleteConsultationButton.tsx
 src/components/consultation/AbandonConsultationButton.tsx
+src/components/consultation/DealClosureForm.tsx
+
+src/app/analytics/page.tsx
 
 src/server/consultation-ui/view-models.ts
 src/server/consultation-ui/completion.ts
 src/server/consultation-ui/abandonment.ts
+
+src/server/deals/service.ts
+src/server/deals/financial-snapshot.ts
+src/server/deals/errors.ts
+src/server/pricing/commission.ts
+src/server/analytics/kpis.ts
+src/server/analytics/dashboard-view.ts
 
 tests/component/*.test.tsx (18 Dateien, 92 Tests)
 tests/e2e/happy-path.spec.ts
 tests/e2e/abandonment.spec.ts
 tests/e2e/customer-situations.spec.ts
 tests/e2e/tenant-isolation.spec.ts
+
+tests/unit/pricing/commission.test.ts
+tests/unit/deals/financial-snapshot.test.ts
+tests/integration/deals-service.test.ts
+tests/integration/analytics-kpis.test.ts
 ```
+
+Siehe auch [DEAL_CAPTURE.md](DEAL_CAPTURE.md) (Deal-Erfassung/Formel v1) und
+[ANALYTICS_AND_KPIS.md](ANALYTICS_AND_KPIS.md) (Implementierungsstatus der
+KPIs, Phase 6).
 
 Siehe auch [ARCHITECTURE.md](ARCHITECTURE.md) (Tech-Stack),
 [QUESTION_ENGINE.md](QUESTION_ENGINE.md) und

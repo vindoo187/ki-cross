@@ -186,7 +186,7 @@ AnalyticsEvent            -- append-only Ereignisprotokoll, Basis aller KPI-Bere
 BaselineMeasurement       -- Referenzwerte vor Rollout, fuer Vorher/Nachher-Vergleiche (siehe ANALYTICS_AND_KPIS.md)
 ```
 
-**Noch nicht implementiert (späterer Ausbau, kein Bestandteil von Phase 2/2B):** `Goal` (Ziel-Objekt) und `KpiSnapshot` (periodisch aggregierte KPI-Snapshots) sind Phase-1-Konzepte aus [ANALYTICS_AND_KPIS.md](ANALYTICS_AND_KPIS.md), aber (noch) keine Modelle in `schema.prisma`. KPIs werden aktuell konzeptionell direkt aus `AnalyticsEvent`/`ConsultationSession`/`Deal` berechnet, ohne vorab persistierte Snapshots.
+**Noch nicht implementiert (späterer Ausbau, kein Bestandteil von Phase 2/2B):** `Goal` (Ziel-Objekt) und `KpiSnapshot` (periodisch aggregierte KPI-Snapshots) sind Phase-1-Konzepte aus [ANALYTICS_AND_KPIS.md](ANALYTICS_AND_KPIS.md), aber (noch) keine Modelle in `schema.prisma`. Seit Phase 6 werden die priorisierten Kern-KPIs tatsächlich live direkt aus `AnalyticsEvent`/`ConsultationSession`/`Recommendation`/`Deal` berechnet (`src/server/analytics/kpis.ts`, kein persistierter Snapshot) – siehe [DEAL_CAPTURE.md](DEAL_CAPTURE.md) Abschnitt 5.
 
 ## Audit
 

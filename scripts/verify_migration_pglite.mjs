@@ -258,6 +258,52 @@ await expectRejected("append-only: DELETE auf recommendation_outcomes", () =>
   db.query(`DELETE FROM recommendation_outcomes WHERE id = $1`, [outcomeId]),
 );
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 6: Deal + DealItem + DealFinancialSnapshot end-to-end
+// anlegen und den append-only-Trigger auf deal_financial_snapshots pruefen
+// (Trigger existiert bereits seit der init-Migration, wurde aber vor
+// Phase 6 AP3 -- da bis dahin nie tatsaechlich beschrieben -- noch nie
+// tatsaechlich ausgeloest, siehe PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 5).
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-6-Deal-Erfassung end-to-end ==");
+
+const dealId = uuid();
+await db.query(
+  `INSERT INTO deals (id, tenant_id, consultation_session_id, store_id, employee_id, customer_reference_id, currency, closed_at)
+   VALUES ($1,$2,$3,$4,$5,$6,'EUR','2026-07-15T09:15:00Z')`,
+  [dealId, tenantId, sessionId, storeId, employeeId, customerReferenceId],
+);
+
+const dealItemId = uuid();
+await db.query(
+  `INSERT INTO deal_items (id, tenant_id, deal_id, product_version_id, quantity) VALUES ($1,$2,$3,$4,1)`,
+  [dealItemId, tenantId, dealId, productVersionId],
+);
+
+const dealFinancialSnapshotId = uuid();
+await db.query(
+  `INSERT INTO deal_financial_snapshots (id, tenant_id, deal_id, currency, monthly_recurring_revenue_minor, total_contract_value_minor, one_time_revenue_minor, commission_amount_minor, expected_recurring_commission_minor, hardware_purchase_cost_minor, subsidy_cost_minor, discount_cost_minor, other_direct_cost_minor, contribution_margin_minor, contribution_margin_formula_version, captured_at)
+   VALUES ($1,$2,$3,'EUR',1000,6000,5000,300,0,2000,0,0,0,3000,'v1','2026-07-15T09:15:00Z')`,
+  [dealFinancialSnapshotId, tenantId, dealId],
+);
+
+console.log("OK: Deal + DealItem + DealFinancialSnapshot end-to-end angelegt.");
+
+await expectRejected("append-only: UPDATE auf deal_financial_snapshots", () =>
+  db.query(`UPDATE deal_financial_snapshots SET contribution_margin_minor = 0 WHERE id = $1`, [
+    dealFinancialSnapshotId,
+  ]),
+);
+await expectRejected("append-only: DELETE auf deal_financial_snapshots", () =>
+  db.query(`DELETE FROM deal_financial_snapshots WHERE id = $1`, [dealFinancialSnapshotId]),
+);
+
+// deals/deal_items bleiben bewusst mutabel (kein append-only-Trigger, siehe
+// Schema) -- nur der Finanz-Snapshot selbst ist unveraenderlich.
+await db.query(`UPDATE deal_items SET quantity = 2 WHERE id = $1`, [dealItemId]);
+console.log("OK: deal_items bleibt mutabel (UPDATE erfolgreich, kein append-only-Trigger).");
+
 // sales_opportunities bleibt bewusst mutabel (kein append-only-Trigger).
 await db.query(`UPDATE sales_opportunities SET status = 'OFFERED' WHERE trigger_signal_id = $1`, [
   signalId,
@@ -287,6 +333,6 @@ if (failures > 0) {
   process.exit(1);
 }
 
-console.log("\nALLE PHASE-3B-MIGRATIONSPRUEFUNGEN ERFOLGREICH.");
+console.log("\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6) ERFOLGREICH.");
 
 await db.close();

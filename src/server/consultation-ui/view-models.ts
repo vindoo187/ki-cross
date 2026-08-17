@@ -486,12 +486,93 @@ export interface AnsweredQuestionSummary {
   formattedValue: string;
 }
 
+export interface DealItemSummary {
+  productVersionId: string;
+  productName: string;
+  quantity: number;
+}
+
+/**
+ * Read-Model eines bereits abgeschlossenen Deals (Phase 6 AP5). Enthaelt
+ * BEWUSST NICHT `commissionAmountMinor`/`contributionMarginMinor` (interne
+ * Provisions-/Margendaten) -- analog zur bestehenden Regel "businessPriorityScore
+ * und Provisions-/Margendaten werden NICHT in der Mitarbeiter-UI angezeigt"
+ * (siehe Modulkommentar zu `buildConsultationRecommendationView()`). Nur
+ * kundenbezogene Umsatzzahlen sind fuer den Mitarbeiter relevant/sichtbar.
+ */
+export interface DealSummary {
+  id: string;
+  /** ISO-8601 (UTC). */
+  closedAt: string;
+  currency: string;
+  items: DealItemSummary[];
+  monthlyRecurringRevenueMinor: number;
+  oneTimeRevenueMinor: number;
+  totalContractValueMinor: number;
+}
+
+/**
+ * Kandidat fuer die Deal-Erfassungsmaske: ein ProductVersion aus einer
+ * ANGENOMMENEN (`RecommendationOutcome.outcome === "ACCEPTED"`) Empfehlung
+ * dieser Sitzung (Plan Abschnitt 3.1: "Vorauswahl aus RecommendationOutcome-
+ * Eintraegen mit ACCEPTED"). Reine Vorschlagsliste -- der Mitarbeiter
+ * bestaetigt Menge/Produkt im Formular, `closeDeal()` selbst validiert die
+ * tatsaechlich gesendeten `productVersionId`s unabhaengig davon erneut.
+ */
+export interface DealClosureCandidateItem {
+  productVersionId: string;
+  productName: string;
+  currency: string;
+  monthlyPriceMinor: number | null;
+  oneTimePriceMinor: number | null;
+}
+
+/**
+ * Laedt den (hoechstens einen, siehe `DealAlreadyExistsForSessionError`)
+ * Deal einer Sitzung samt Positionen. Reiner lesender Adapter, analog
+ * `loadOutcomesByItemIds()`/`loadSalesOpportunitiesBySignalIds()`.
+ */
+async function loadDealForSession(consultationSessionId: string): Promise<DealSummary | null> {
+  const deal = await db.deal.findFirst({
+    where: { consultationSessionId },
+    include: {
+      items: { include: { productVersion: { include: { product: { select: { name: true } } } } } },
+      financialSnapshot: true,
+    },
+  });
+  if (!deal || !deal.financialSnapshot) {
+    return null;
+  }
+  return {
+    id: deal.id,
+    closedAt: deal.closedAt.toISOString(),
+    currency: deal.currency,
+    items: deal.items.map((item) => ({
+      productVersionId: item.productVersionId,
+      productName: item.productVersion.product.name,
+      quantity: item.quantity,
+    })),
+    monthlyRecurringRevenueMinor: deal.financialSnapshot.monthlyRecurringRevenueMinor,
+    oneTimeRevenueMinor: deal.financialSnapshot.oneTimeRevenueMinor,
+    totalContractValueMinor: deal.financialSnapshot.totalContractValueMinor,
+  };
+}
+
 export interface ConsultationSessionSummaryView {
   consultationSessionId: string;
   status: QuestionnaireRunStatus;
   answeredQuestions: AnsweredQuestionSummary[];
   /** `null`, solange fuer diese Sitzung noch keine Recommendation erzeugt wurde. */
   recommendation: ConsultationRecommendationView | null;
+  /** `null`, solange fuer diese Sitzung noch kein Deal erfasst wurde (Phase 6 AP5). */
+  deal: DealSummary | null;
+  /**
+   * Vorschlagsliste fuer die Deal-Erfassungsmaske (Phase 6 AP5) -- leer,
+   * solange `deal` bereits gesetzt ist (ein zweiter Abschluss ist in Phase 6
+   * nicht vorgesehen, siehe `DealAlreadyExistsForSessionError`) oder noch
+   * keine ANGENOMMENEN Empfehlungen vorliegen.
+   */
+  dealClosureCandidates: DealClosureCandidateItem[];
 }
 
 /**
@@ -518,14 +599,31 @@ export interface ConsultationSessionSummaryView {
 export async function buildConsultationSessionSummaryView(
   consultationSessionId: string,
 ): Promise<ConsultationSessionSummaryView> {
-  const [questionnaireState, recommendation] = await Promise.all([
+  const [questionnaireState, recommendation, deal] = await Promise.all([
     loadQuestionnaireState(consultationSessionId),
     getLatestRecommendation(consultationSessionId),
+    loadDealForSession(consultationSessionId),
   ]);
 
   const recommendationView = recommendation
     ? await buildConsultationRecommendationView(recommendation)
     : null;
+
+  // Phase 6 AP5: Vorauswahl fuer die Deal-Erfassungsmaske aus angenommenen
+  // Empfehlungen -- nur relevant, solange noch kein Deal existiert (siehe
+  // Modulkommentar zu `dealClosureCandidates`).
+  const dealClosureCandidates: DealClosureCandidateItem[] =
+    deal || !recommendationView
+      ? []
+      : recommendationView.items
+          .filter((item) => item.outcome?.outcome === "ACCEPTED")
+          .map((item) => ({
+            productVersionId: item.product.id,
+            productName: item.product.productName,
+            currency: item.product.currency,
+            monthlyPriceMinor: item.product.monthlyPriceMinor,
+            oneTimePriceMinor: item.product.oneTimePriceMinor,
+          }));
 
   return {
     consultationSessionId,
@@ -536,5 +634,7 @@ export async function buildConsultationSessionSummaryView(
       formattedValue: formatAnswerValue(question),
     })),
     recommendation: recommendationView,
+    deal,
+    dealClosureCandidates,
   };
 }

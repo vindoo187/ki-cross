@@ -106,3 +106,29 @@ export const abandonConsultationBodySchema = z
   .strict()
   .nullable()
   .optional();
+
+/**
+ * Body von `POST /api/consultation/sessions/[id]/deals` (Phase 6 AP4, siehe
+ * PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 3.1). Spiegelt `CloseDealInput`
+ * (`src/server/deals/service.ts`) 1:1 -- `consultationSessionId` selbst kommt
+ * aus dem Routen-Parameter `[id]`, nicht aus dem Body. `items.min(1)` ist
+ * bewusste Fruehvalidierung (schnelles 400 statt Rundreise durch den
+ * Service); `closeDeal()` prueft dieselbe Regel eigenstaendig noch einmal
+ * (`DealRequiresItemsError`) als Sicherheitsnetz fuer alle Aufrufer, nicht
+ * nur diese Route.
+ */
+export const closeDealBodySchema = z
+  .object({
+    items: z
+      .array(
+        z
+          .object({
+            productVersionId: z.string().uuid(),
+            quantity: z.number().int().positive(),
+          })
+          .strict(),
+      )
+      .min(1),
+    customerReferenceId: z.string().uuid().nullable().optional(),
+  })
+  .strict();

@@ -95,11 +95,16 @@ import {
   RuleSetNotConfiguredError,
   SessionNotEvaluableError,
 } from "./errors";
+// Phase 6 AP3: loadActiveCommissionModelVersions()/buildResolveCommission()
+// wurden nach src/server/pricing/commission.ts VERSCHOBEN (Verhalten
+// unveraendert), damit die Deal-Erfassung (Phase 6) dieselbe
+// Aufloesungsquelle nutzt statt sie zu duplizieren. Siehe dortigen
+// Modulkommentar sowie PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 8.1 Punkt 2.
+import { loadActiveCommissionModelVersions, buildResolveCommission } from "../pricing/commission";
 import {
   RECOMMENDATION_ALGORITHM_VERSION,
   type ConditionInput,
   type ConditionSourceType,
-  type CommissionResolution,
   type CrossSellingRuleInput,
   type EligibilityRuleInput,
   type ExclusionRuleInput,
@@ -387,64 +392,6 @@ async function loadProductCandidates(
     monthlyPriceMinor: v.monthlyPriceMinor ?? null,
     attributes: new Map(v.tariffAttributes.map((a) => [a.attributeKey, a.attributeValue])),
   }));
-}
-
-interface CommissionModelVersionRow {
-  id: string;
-  productId: string;
-  commissionType: string;
-  commissionAmountMinor: number | null;
-  recurringCommissionAmountMinor: number | null;
-}
-
-async function loadActiveCommissionModelVersions(
-  client: QueryClient,
-  atTime: Date,
-): Promise<CommissionModelVersionRow[]> {
-  const rows = await client.commissionModelVersion.findMany({
-    where: {
-      status: "ACTIVE",
-      validFrom: { lte: atTime },
-      OR: [{ validTo: null }, { validTo: { gt: atTime } }],
-    },
-    include: { commissionModel: { select: { productId: true } } },
-  });
-  return rows.map((r) => ({
-    id: r.id,
-    productId: r.commissionModel.productId,
-    commissionType: r.commissionType as string,
-    commissionAmountMinor: r.commissionAmountMinor,
-    recurringCommissionAmountMinor: r.recurringCommissionAmountMinor,
-  }));
-}
-
-/**
- * Baut die Provisions-Aufloesungsfunktion fuer prioritization.ts. Existieren
- * fuer ein Produkt mehrere gleichzeitig gueltige CommissionModelVersion-Zeilen
- * (schema-seitig nicht ausgeschlossen, da CommissionModel keinen
- * Unique-Constraint auf productId hat), wird deterministisch die Version mit
- * der lexikographisch kleinsten `id` gewaehlt (siehe Modulkommentar).
- */
-function buildResolveCommission(
-  rows: CommissionModelVersionRow[],
-): (productId: string) => CommissionResolution | null {
-  const byProduct = new Map<string, CommissionModelVersionRow>();
-  for (const row of rows) {
-    const existing = byProduct.get(row.productId);
-    if (!existing || row.id.localeCompare(existing.id) < 0) {
-      byProduct.set(row.productId, row);
-    }
-  }
-
-  return (productId: string): CommissionResolution | null => {
-    const row = byProduct.get(productId);
-    if (!row) return null;
-    const commissionValueMinor =
-      row.commissionType === "PERCENTAGE"
-        ? null
-        : (row.commissionAmountMinor ?? row.recurringCommissionAmountMinor ?? null);
-    return { commissionModelVersionId: row.id, commissionValueMinor };
-  };
 }
 
 // ---------------------------------------------------------------------------

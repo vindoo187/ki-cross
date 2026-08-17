@@ -61,6 +61,11 @@ export default async function ConsultationEntryPage() {
         <h2>Neue Beratung starten</h2>
         <StartConsultationForm questionnaires={questionnaires} />
       </section>
+
+      {/* Phase 6 AP8: Einstiegspunkt zum Analytics-Dashboard. */}
+      <p className="consultation-entry__analytics-link">
+        <Link href="/analytics">Analytics-Dashboard ansehen</Link>
+      </p>
     </main>
   );
 }

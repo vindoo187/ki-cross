@@ -35,12 +35,60 @@
  * erhaelt.
  */
 
-import type { ConsultationSessionSummaryView as SessionSummaryData } from "@/server/consultation-ui/view-models";
+import type {
+  ConsultationSessionSummaryView as SessionSummaryData,
+  DealSummary,
+} from "@/server/consultation-ui/view-models";
 import { RecommendationList } from "./RecommendationList";
 import { CrossSellingBanner } from "./CrossSellingBanner";
+import { DealClosureForm } from "./DealClosureForm";
 
 interface SessionSummaryViewProps {
   summary: SessionSummaryData;
+}
+
+function formatMinorAmount(amountMinor: number, currency: string): string {
+  return new Intl.NumberFormat("de-DE", { style: "currency", currency }).format(amountMinor / 100);
+}
+
+function formatDateTime(iso: string): string {
+  return new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short" }).format(
+    new Date(iso),
+  );
+}
+
+/**
+ * Read-only Anzeige eines bereits abgeschlossenen Deals (Phase 6 AP5). Zeigt
+ * bewusst nur kundenbezogene Umsatzzahlen -- keine Provisions-/Margendaten
+ * (siehe `DealSummary`-Modulkommentar in `view-models.ts`).
+ */
+function DealSummaryCard({ deal }: { deal: DealSummary }) {
+  return (
+    <div className="deal-summary">
+      <p className="deal-summary__closed-at">Abgeschlossen am {formatDateTime(deal.closedAt)}</p>
+      <ul className="deal-summary__items">
+        {deal.items.map((item) => (
+          <li key={item.productVersionId}>
+            {item.productName} (Menge: {item.quantity})
+          </li>
+        ))}
+      </ul>
+      <dl className="deal-summary__totals">
+        <div>
+          <dt>Monatlicher Umsatz</dt>
+          <dd>{formatMinorAmount(deal.monthlyRecurringRevenueMinor, deal.currency)}</dd>
+        </div>
+        <div>
+          <dt>Einmaliger Umsatz</dt>
+          <dd>{formatMinorAmount(deal.oneTimeRevenueMinor, deal.currency)}</dd>
+        </div>
+        <div>
+          <dt>Gesamtvertragswert</dt>
+          <dd>{formatMinorAmount(deal.totalContractValueMinor, deal.currency)}</dd>
+        </div>
+      </dl>
+    </div>
+  );
 }
 
 function ReadOnlyNotice({ status }: { status: SessionSummaryData["status"] }) {
@@ -95,6 +143,31 @@ export function SessionSummaryView({ summary }: SessionSummaryViewProps) {
         ) : (
           <p className="session-summary__empty">
             Fuer diese Sitzung liegt noch keine Empfehlung vor.
+          </p>
+        )}
+      </section>
+
+      <section className="session-summary__section">
+        <h3 className="session-summary__heading">Abschluss</h3>
+        {summary.deal ? (
+          <DealSummaryCard deal={summary.deal} />
+        ) : summary.status === "ABANDONED" ? (
+          // closeDeal() erlaubt nur IN_PROGRESS/COMPLETED (siehe assertSessionClosable()
+          // in deals/service.ts) -- das Formular wird daher fuer abgebrochene Sitzungen
+          // erst gar nicht angezeigt (analog zum Sichtbarkeits-Gate bei
+          // AbandonConsultationButton), statt einen unvermeidbaren 409 zu riskieren.
+          <p className="session-summary__empty">
+            Beratung abgebrochen -- fuer diese Sitzung kann kein Abschluss mehr erfasst werden.
+          </p>
+        ) : summary.dealClosureCandidates.length > 0 ? (
+          <DealClosureForm
+            consultationSessionId={summary.consultationSessionId}
+            candidates={summary.dealClosureCandidates}
+          />
+        ) : (
+          <p className="session-summary__empty">
+            Noch keine angenommene Empfehlung -- ein Abschluss kann erst erfasst werden, wenn
+            mindestens eine Empfehlung angenommen wurde.
           </p>
         )}
       </section>
