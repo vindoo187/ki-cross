@@ -69,8 +69,9 @@ Datenquellen und Implementierungsannahmen siehe
 **Tatsächlich implementiert (live aggregiert, `src/server/analytics/kpis.ts`):**
 Beratungen (Anzahl), Completion-/Abbruchquote, Empfehlungen generiert,
 Annahme-/Ablehnungsquote, Abschlüsse (Anzahl), Umsatz (einmalig +
-monatlich wiederkehrend), Provision/Marge (Daten vorhanden, Anzeige im
-Dashboard-UI noch offen — siehe DEAL_CAPTURE.md Abschnitt 5).
+monatlich wiederkehrend), Provision/Marge (intern berechnet, im aktuellen
+RBAC-losen `/analytics`-Dashboard bewusst NICHT angezeigt — endgültige
+ChatGPT-Entscheidung AP12, siehe DEAL_CAPTURE.md Abschnitt 5).
 
 **Bewusst zurückgestellt** (nicht Kern-KPI laut ChatGPT-Priorisierung, kein
 Phase-6-Blocker): Cross-Selling-Quote, Ø Produkte pro Verkauf, Häufige

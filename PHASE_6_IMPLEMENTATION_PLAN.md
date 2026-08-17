@@ -787,6 +787,33 @@ Ergebnis der von ChatGPT vorgegebenen Pruefpunkte (siehe Abschnitt 12.8):
 sauber; `scripts/verify_migration_pglite.mjs` inkl. neuem Unique-Constraint-
 Test erfolgreich. `vitest run`/Playwright bleiben CI-abhaengig (siehe AP11).
 
+### 12.12 AP12.7-Ergebnis (CI-Fix, Push, finale CI-Pruefung) -- AP12 abgeschlossen
+
+Commit `b905c2e` (AP12-Haertung) fuehrte in CI #31 zu einem echten
+Testfehler (nicht sandbox-bedingt): `tests/integration/analytics-kpis.test.ts`
+legte in seiner `beforeAll()`-Fixture drei Deals fuer dieselbe
+`consultationSessionId` an -- das verletzt den in AP12.1 neu eingefuehrten
+DB-Unique-Constraint `deals_tenant_id_consultation_session_id_key`
+(Postgres-Integrationstest, daher lokal ohne DB nicht reproduzierbar,
+CI-Log via Claude-in-Chrome ausgelesen).
+
+**Fix (Commit `350d5d5`):** Jeder der drei Test-Deals bekommt jetzt eine
+eigene `ConsultationSession`. Die beiden zusaetzlichen Sessions liegen
+bewusst in einem Datumsfenster (`2026-02-15`), das von keinem der in
+diesem Testfile geprueften Zeitraum-Assertions (`PERIOD_FROM`/`PERIOD_TO`,
+"vor dem Zeitraum"-Testfall) erfasst wird -- die bestehenden
+`getConsultationVolumeKpi()`-Erwartungswerte (`totalSessions`, `inProgress`
+usw.) bleiben dadurch unveraendert. `getDealKpi()` filtert ohnehin ueber
+`closedAt`, nicht ueber die Session, daher keine Auswirkung auf die
+Deal-KPI-Testfaelle. Lokal verifiziert: `tsc --noEmit`, `eslint`,
+`prettier --check` sauber (Postgres-Integrationstest selbst bleibt
+CI-abhaengig, siehe wiederkehrender Sandbox-Hinweis).
+
+**CI #32** (Commit `350d5d5`) **gruen**, Laufzeit 3m 24s. Damit ist AP12
+("Security/UI Hardening & Abnahme", siehe 12.8-12.11) vollstaendig
+abgeschlossen und CI wieder durchgehend gruen. Naechster Schritt: AP13
+(Abschlussbericht Phase 6).
+
 ### 12.7 AP8-Ergebnis (Dashboard-UI, Code-Review)
 
 `src/server/analytics/dashboard-view.ts` (Zeitraum-Auflösung Woche/

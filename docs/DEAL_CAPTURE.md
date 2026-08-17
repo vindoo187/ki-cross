@@ -116,18 +116,35 @@ Modulkommentar in `kpis.ts`): "Abschlussquote" ist ein Perioden-Verhältnis
 
 `src/server/analytics/dashboard-view.ts` löst den Zeitraum-Filter
 (Woche/Kalendermonat) auf und komponiert die drei KPI-Funktionen zum
-Dashboard-View-Model — zeigt **nur** die Umsatz-KPIs (1–7) an. Ob
-Provision/Marge (KPI 8) im UI angezeigt werden darf, ist eine offene, noch
-mit ChatGPT zu klärende Frage (siehe PHASE_6_IMPLEMENTATION_PLAN.md
-Abschnitt 12.6): die bestehende Regel "keine Provisions-/Margendaten in der
-Mitarbeiter-UI" war ursprünglich für die Pro-Sitzung-Empfehlungsansicht
-begründet, nicht für ein aggregiertes, RBAC-loses Dashboard.
+Dashboard-View-Model — zeigt **nur** die Umsatz-KPIs (1–7) an. **Endgültig
+entschieden (ChatGPT, AP12/AP13):** Provision/Marge (KPI 8) werden im
+`/analytics`-Dashboard bewusst NICHT angezeigt, weil das Dashboard aktuell
+RBAC-los ist (jeder authentifizierte Mitarbeiter des Mandanten erreicht es).
+`commissionAmountMinor`/`contributionMarginMinor` werden intern weiter in
+`kpis.ts` berechnet und stehen für einen späteren, RBAC-geschützten
+Management-Analytics-Bereich zur Verfügung, sind aber nirgends im
+Mitarbeiter-UI gerendert (verifiziert durch
+`tests/component/AnalyticsDashboardContent.test.tsx`).
 
 Dashboard-Route: `/analytics` (`src/app/analytics/page.tsx`), Server
 Component mit GET-Formular für Zeitraum/Filiale, Kachel-Layout ohne Charts
 (analog der bewusst schlichten `/review`-Prüfansicht).
 
-## 6. Bekannte Einschränkungen
+## 6. Absicherung gegen Doppelabschluss (AP12-Härtung)
+
+`Deal` trägt zusätzlich zu `@@unique([tenantId, id])` den Constraint
+`@@unique([tenantId, consultationSessionId])`
+(Migration `20260817170000_deal_unique_consultation_session`). Der
+App-Level-Precheck in `closeDeal()` allein war race-anfällig (zwei nahezu
+gleichzeitige Aufrufe könnten beide den Precheck vor Transaktionsende
+passieren); der DB-Constraint verhindert das strukturell. `closeDeal()`
+fängt die resultierende `PrismaClientKnownRequestError` (Code `P2002`) ab
+und übersetzt sie in dieselbe `DealAlreadyExistsForSessionError` wie der
+Precheck (Defense-in-Depth, analog `recommendation/outcome.ts`). Regressionstest:
+`tests/integration/deals-service.test.ts` (`Promise.allSettled()` mit zwei
+gleichzeitigen `closeDeal()`-Aufrufen für dieselbe Session, genau ein Erfolg).
+
+## 7. Bekannte Einschränkungen
 
 - Kein RBAC: `/analytics` ist wie `/consultation` für jeden authentifizierten
   Mitarbeiter des Mandanten erreichbar (bestehender, in Phase 5 dokumentierter
@@ -135,5 +152,3 @@ Component mit GET-Formular für Zeitraum/Filiale, Kachel-Layout ohne Charts
 - Kein Mitarbeiterfilter im Dashboard-UI (nur Zeitraum + Filiale, wie in
   PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 3.4 vorgegeben) — `kpis.ts`
   unterstützt `employeeId` bereits, ist aber noch nicht ans UI angebunden.
-- Component-/E2E-Tests für Deal-Erfassung/Dashboard stehen noch aus (siehe
-  PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 12.6a).
