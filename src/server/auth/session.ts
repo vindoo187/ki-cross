@@ -12,6 +12,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
+import type { ManagementScope, ManagementScopeLevel } from "../authz/management-scope";
 
 export const SESSION_COOKIE_NAME = "ki_cross_dev_session";
 
@@ -25,8 +26,42 @@ export interface SessionPayload {
   storeId: string;
   displayName: string;
   roles: string[];
+  /**
+   * Beim Login serverseitig aus den `RoleAssignment`-Zeilen aufgeloester
+   * Management-Analytics-Scope (Phase 7 AP1), `null` falls keine
+   * Management-Berechtigung besteht. Ausschliesslich serverseitig gesetzt
+   * (`src/server/auth/dev-users.ts::resolveManagementScopeForUser()`) --
+   * der Client liest dieses Feld nur, definiert es nie. Wie `roles` gilt
+   * dieser Wert bis zum naechsten Login/Session-Refresh als massgeblich
+   * (kein DB-Reabgleich pro Analytics-Anfrage, siehe
+   * PHASE_7_IMPLEMENTATION_PLAN.md Abschnitt 3.2 fuer die akzeptierte
+   * Freshness-Eigenschaft bei Rollenentzug).
+   */
+  managementScope: ManagementScope | null;
   /** Unix-Timestamp (Sekunden), zu dem die Session ausgestellt wurde. */
   issuedAt: number;
+}
+
+const MANAGEMENT_SCOPE_LEVELS: ReadonlySet<ManagementScopeLevel> = new Set([
+  "STORE",
+  "COMPANY",
+  "TENANT",
+]);
+
+function isValidManagementScope(value: unknown): value is ManagementScope | null {
+  if (value === null) {
+    return true;
+  }
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.level === "string" &&
+    MANAGEMENT_SCOPE_LEVELS.has(candidate.level as ManagementScopeLevel) &&
+    Array.isArray(candidate.storeIds) &&
+    candidate.storeIds.every((id) => typeof id === "string")
+  );
 }
 
 function getDevAuthSecret(): string {
@@ -112,6 +147,7 @@ export function verifySessionToken(token: string | undefined | null): SessionPay
     typeof payload.storeId !== "string" ||
     typeof payload.displayName !== "string" ||
     !Array.isArray(payload.roles) ||
+    !isValidManagementScope(payload.managementScope) ||
     typeof payload.issuedAt !== "number"
   ) {
     return null;

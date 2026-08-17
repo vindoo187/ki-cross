@@ -43,6 +43,7 @@ export function sessionToTenantContext(session: SessionPayload): TenantContext {
     userId: session.userId,
     employeeId: session.employeeId,
     roles: session.roles,
+    managementScope: session.managementScope,
   };
 }
 

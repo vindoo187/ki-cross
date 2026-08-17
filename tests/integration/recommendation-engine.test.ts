@@ -275,7 +275,10 @@ describe.skipIf(!hasDatabaseUrl)("Empfehlungs-Engine (Integrationstest, echte Po
   }
 
   function asTenant<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
-    return runWithTenantContext({ tenantId, userId: randomUUID(), roles: [] }, fn);
+    return runWithTenantContext(
+      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      fn,
+    );
   }
 
   // -------------------------------------------------------------------------

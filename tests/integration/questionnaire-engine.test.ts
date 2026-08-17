@@ -275,11 +275,17 @@ describe.skipIf(!hasDatabaseUrl)("Fragen-Engine (Integrationstest, echte Postgre
   });
 
   function asTenantA<T>(fn: () => Promise<T>): Promise<T> {
-    return runWithTenantContext({ tenantId: tenantAId, userId: randomUUID(), roles: [] }, fn);
+    return runWithTenantContext(
+      { tenantId: tenantAId, userId: randomUUID(), roles: [], managementScope: null },
+      fn,
+    );
   }
 
   function asTenantB<T>(fn: () => Promise<T>): Promise<T> {
-    return runWithTenantContext({ tenantId: tenantBId, userId: randomUUID(), roles: [] }, fn);
+    return runWithTenantContext(
+      { tenantId: tenantBId, userId: randomUUID(), roles: [], managementScope: null },
+      fn,
+    );
   }
 
   async function startSessionInV1() {

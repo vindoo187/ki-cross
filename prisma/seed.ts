@@ -32,6 +32,11 @@
 
 import { createHash } from "node:crypto";
 import { PrismaClient, ProductType, CommissionType, AnswerType, NeedType } from "@prisma/client";
+import {
+  SEED_ROLE_KEYS,
+  permissionKeysForSeedRole,
+  type SeedRoleKey,
+} from "../src/server/authz/seed-role-permissions";
 
 const prisma = new PrismaClient();
 
@@ -138,6 +143,20 @@ async function seedTenant(
   );
 
   // --- Rollen & Zuweisung ---
+  //
+  // Phase 7 AP1 (Bugfix, ChatGPT-GO 2026-08-17): die drei
+  // Management-Analytics-Permissions (analytics.view_store/_company/_tenant)
+  // wurden zuvor pauschal an sales_employee vergeben (jeder normale
+  // Verkaufsberater haette dadurch die neue Management-Autorisierung
+  // bestanden) und store_admin bekam gar keine Permission. Die verbindliche
+  // Rollentabelle (sales_employee -> keine Management-Analytics, store_admin
+  // -> STORE, company_management -> COMPANY, executive_management -> TENANT)
+  // ist in `src/server/authz/seed-role-permissions.ts::permissionKeysForSeedRole()`
+  // ausgelagert -- rein, ohne DB-Zugriff, damit
+  // `tests/unit/authz/seed-role-permissions.test.ts` ein erneutes
+  // Falsch-Seeden verhindert (ChatGPT-Auflage, siehe
+  // PHASE_7_IMPLEMENTATION_PLAN.md Abschnitt 3.1/4).
+
   const adminRole = await prisma.role.upsert({
     where: { tenantId_key: { tenantId: tenant.id, key: "store_admin" } },
     update: {},
@@ -158,14 +177,51 @@ async function seedTenant(
       isSystemDefined: true,
     },
   });
-  for (const perm of permissions) {
-    await prisma.rolePermission
-      .upsert({
-        where: { roleId_permissionId: { roleId: salesRole.id, permissionId: perm.id } },
-        update: {},
-        create: { roleId: salesRole.id, permissionId: perm.id },
-      })
-      .catch(() => undefined);
+  const companyManagementRole = await prisma.role.upsert({
+    where: { tenantId_key: { tenantId: tenant.id, key: "company_management" } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      key: "company_management",
+      name: "Prokurist/Regionalleitung",
+      isSystemDefined: true,
+    },
+  });
+  const executiveManagementRole = await prisma.role.upsert({
+    where: { tenantId_key: { tenantId: tenant.id, key: "executive_management" } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      key: "executive_management",
+      name: "Geschaeftsfuehrung",
+      isSystemDefined: true,
+    },
+  });
+
+  const allPermissionKeys = permissions.map((p) => p.key);
+  const roleByKey: Record<SeedRoleKey, { id: string }> = {
+    sales_employee: salesRole,
+    store_admin: adminRole,
+    company_management: companyManagementRole,
+    executive_management: executiveManagementRole,
+  };
+
+  for (const roleKey of SEED_ROLE_KEYS) {
+    const role = roleByKey[roleKey];
+    const grantedKeys = permissionKeysForSeedRole(roleKey, allPermissionKeys);
+    for (const key of grantedKeys) {
+      const permission = permissions.find((p) => p.key === key);
+      if (!permission) {
+        throw new Error(`Seed-Fehler: Permission "${key}" nicht im globalen Katalog gefunden.`);
+      }
+      await prisma.rolePermission
+        .upsert({
+          where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+          update: {},
+          create: { roleId: role.id, permissionId: permission.id },
+        })
+        .catch(() => undefined);
+    }
   }
 
   // --- Mitarbeitende ---
@@ -207,6 +263,84 @@ async function seedTenant(
         scopeType: "STORE",
         companyId: company.id,
         storeId: stores[0]!.id,
+      },
+    })
+    .catch(() => undefined);
+
+  // --- Management-Testnutzer (Phase 7 AP1) ---
+  // Eigene synthetische Mitarbeiter fuer COMPANY-/TENANT-Scope, damit beide
+  // Stufen ueber den Dev-Login tatsaechlich testbar sind (die bestehenden
+  // zwei Verkaufsberater:innen oben decken nur STORE/keine Berechtigung ab).
+  const companyManagerUser = await prisma.user.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenant.id,
+        email: `${config.key}-prokurist@example-synthetic.test`,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      email: `${config.key}-prokurist@example-synthetic.test`,
+      isSynthetic: true,
+    },
+  });
+  const companyManagerEmployee = await prisma.employee.upsert({
+    where: { tenantId_userId: { tenantId: tenant.id, userId: companyManagerUser.id } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      storeId: stores[0]!.id,
+      userId: companyManagerUser.id,
+      displayName: `Synthetische:r Prokurist:in (${config.key})`,
+    },
+  });
+  await prisma.roleAssignment
+    .create({
+      data: {
+        tenantId: tenant.id,
+        userId: companyManagerEmployee.userId!,
+        roleId: companyManagementRole.id,
+        scopeType: "COMPANY",
+        companyId: company.id,
+        storeId: null,
+      },
+    })
+    .catch(() => undefined);
+
+  const executiveUser = await prisma.user.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenant.id,
+        email: `${config.key}-geschaeftsfuehrung@example-synthetic.test`,
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      email: `${config.key}-geschaeftsfuehrung@example-synthetic.test`,
+      isSynthetic: true,
+    },
+  });
+  const executiveEmployee = await prisma.employee.upsert({
+    where: { tenantId_userId: { tenantId: tenant.id, userId: executiveUser.id } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      storeId: stores[0]!.id,
+      userId: executiveUser.id,
+      displayName: `Synthetische Geschaeftsfuehrung (${config.key})`,
+    },
+  });
+  await prisma.roleAssignment
+    .create({
+      data: {
+        tenantId: tenant.id,
+        userId: executiveEmployee.userId!,
+        roleId: executiveManagementRole.id,
+        scopeType: "TENANT",
+        companyId: null,
+        storeId: null,
       },
     })
     .catch(() => undefined);

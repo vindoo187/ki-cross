@@ -93,7 +93,7 @@ describe.skipIf(!hasDatabaseUrl)("Tenant-Isolation (Integrationstest, echte Post
 
   it("Anwendungsebene: findUnique liefert null statt eines fremden Datensatzes", async () => {
     await runWithTenantContext(
-      { tenantId: tenantBId, userId: randomUUID(), roles: [] },
+      { tenantId: tenantBId, userId: randomUUID(), roles: [], managementScope: null },
       async () => {
         const found = await db.store.findUnique({ where: { id: storeAId } });
         expect(found).toBeNull();
@@ -103,7 +103,7 @@ describe.skipIf(!hasDatabaseUrl)("Tenant-Isolation (Integrationstest, echte Post
 
   it("Anwendungsebene: findMany liefert nur Datensaetze des aktiven Mandanten", async () => {
     await runWithTenantContext(
-      { tenantId: tenantAId, userId: randomUUID(), roles: [] },
+      { tenantId: tenantAId, userId: randomUUID(), roles: [], managementScope: null },
       async () => {
         const stores = await db.store.findMany({ where: { key: { contains: suffix } } });
         expect(stores.map((s) => s.id)).toEqual([storeAId]);
@@ -113,7 +113,7 @@ describe.skipIf(!hasDatabaseUrl)("Tenant-Isolation (Integrationstest, echte Post
 
   it("Anwendungsebene: create injiziert automatisch die tenantId aus dem Kontext", async () => {
     await runWithTenantContext(
-      { tenantId: tenantAId, userId: randomUUID(), roles: [] },
+      { tenantId: tenantAId, userId: randomUUID(), roles: [], managementScope: null },
       async () => {
         // `tenantId` wird von `withTenantScope()` zur Laufzeit aus dem aktiven
         // TenantContext injiziert (siehe assertOrInjectTenantId in
@@ -137,7 +137,7 @@ describe.skipIf(!hasDatabaseUrl)("Tenant-Isolation (Integrationstest, echte Post
 
   it("Anwendungsebene: create wirft TenantMismatchError bei expliziter Fremd-tenantId", async () => {
     await runWithTenantContext(
-      { tenantId: tenantAId, userId: randomUUID(), roles: [] },
+      { tenantId: tenantAId, userId: randomUUID(), roles: [], managementScope: null },
       async () => {
         await expect(
           db.company.create({

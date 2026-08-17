@@ -131,7 +131,7 @@ erforderlich/nicht gewünscht für Phase 7").
 - `managementScope` wird **ausschließlich serverseitig** aus den
   autoritativen `RoleAssignment`-Zeilen der DB abgeleitet — niemals vom
   Client übernommen oder beeinflusst. Fluss: `RoleAssignment (DB) →
-  serverseitige Scope-Auflösung → managementScope → signierte Session`.
+serverseitige Scope-Auflösung → managementScope → signierte Session`.
 - `COMPANY`/`TENANT`-Level werden beim Login bereits auf die konkrete Menge
   zulässiger `storeIds` **aufgelöst** (nicht erst zur Anfragezeit) — bei
   `COMPANY` alle Stores der autorisierten Company, bei `TENANT` alle Stores

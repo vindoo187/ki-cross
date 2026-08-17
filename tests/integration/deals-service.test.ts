@@ -207,7 +207,10 @@ describe.skipIf(!hasDatabaseUrl)("closeDeal() (Integrationstest, echte Postgres-
   }
 
   function asEmployee<T>(tenantId: string, employeeId: string, fn: () => Promise<T>): Promise<T> {
-    return runWithTenantContext({ tenantId, userId: randomUUID(), employeeId, roles: [] }, fn);
+    return runWithTenantContext(
+      { tenantId, userId: randomUUID(), employeeId, roles: [], managementScope: null },
+      fn,
+    );
   }
 
   let tenantAId: string;

@@ -15,6 +15,12 @@
 import { rawPrismaClient } from "../db/client";
 import { InvalidDevLoginCandidateError } from "./errors";
 import type { SessionPayload } from "./session";
+import {
+  deriveManagementScope,
+  type ManagementScope,
+  type ManagementScopeCandidate,
+  type ManagementScopeLevel,
+} from "../authz/management-scope";
 
 export interface DevLoginCandidate {
   tenantId: string;
@@ -74,6 +80,77 @@ export async function listDevLoginCandidates(): Promise<DevLoginCandidate[]> {
 }
 
 /**
+ * Bereits DB-seitig geladene RoleAssignment-Zeile mit den fuer die
+ * Management-Scope-Aufloesung noetigen Feldern (Scope-Ebene + gehaltene
+ * Permission-Keys der zugehoerigen Rolle). Locker typisiert statt des vollen
+ * generierten Prisma-Typs, damit dieses Modul nicht an eine konkrete
+ * `include`-Form gebunden ist.
+ */
+interface RoleAssignmentForScope {
+  scopeType: string;
+  companyId: string | null;
+  storeId: string | null;
+  revokedAt: Date | null;
+  role: { rolePermissions: { permission: { key: string } }[] };
+}
+
+function isManagementScopeLevel(value: string): value is ManagementScopeLevel {
+  return value === "STORE" || value === "COMPANY" || value === "TENANT";
+}
+
+/**
+ * Loest den Management-Analytics-Scope (Phase 7 AP1) fuer einen Nutzer aus
+ * dessen bereits geladenen `RoleAssignment`-Zeilen auf. Nimmt bewusst
+ * bereits geladene Zuweisungen entgegen (statt selbst zu fetchen), damit
+ * `buildSessionPayloadForEmployee()` keinen zweiten Roundtrip fuer dieselben
+ * Daten braucht -- fuehrt aber selbst EINEN zusaetzlichen Roundtrip aus, um
+ * COMPANY-/TENANT-Zuweisungen auf konkrete Store-IDs aufzuloesen (kleine,
+ * synthetische Datenmengen -- siehe PHASE_7_IMPLEMENTATION_PLAN.md
+ * Abschnitt 3.2/4).
+ *
+ * Reine Auswahllogik (deny-by-default, hoechste Stufe gewinnt) liegt in
+ * `src/server/authz/management-scope.ts::deriveManagementScope()` und ist
+ * dort ohne DB isoliert unit-testbar.
+ */
+export async function resolveManagementScopeForUser(
+  tenantId: string,
+  roleAssignments: RoleAssignmentForScope[],
+): Promise<ManagementScope | null> {
+  const activeAssignments = roleAssignments.filter(
+    (assignment) => assignment.revokedAt === null && isManagementScopeLevel(assignment.scopeType),
+  );
+
+  if (activeAssignments.length === 0) {
+    return null;
+  }
+
+  const stores = await rawPrismaClient.store.findMany({
+    where: { tenantId },
+    select: { id: true, companyId: true },
+  });
+
+  const candidates: ManagementScopeCandidate[] = activeAssignments.map((assignment) => {
+    const scopeType = assignment.scopeType as ManagementScopeLevel;
+    const permissionKeys = assignment.role.rolePermissions.map((rp) => rp.permission.key);
+
+    let storeIds: string[];
+    if (scopeType === "STORE") {
+      storeIds = assignment.storeId ? [assignment.storeId] : [];
+    } else if (scopeType === "COMPANY") {
+      storeIds = stores
+        .filter((store) => store.companyId === assignment.companyId)
+        .map((store) => store.id);
+    } else {
+      storeIds = stores.map((store) => store.id);
+    }
+
+    return { scopeType, permissionKeys, storeIds };
+  });
+
+  return deriveManagementScope(candidates);
+}
+
+/**
  * Prueft einen gewaehlten Login-Kandidaten (per `employeeId`) erneut gegen
  * die DB (nie ungeprueft dem Client vertrauen) und baut daraus den
  * Session-Payload.
@@ -87,7 +164,13 @@ export async function buildSessionPayloadForEmployee(
   const employee = await rawPrismaClient.employee.findUnique({
     where: { id: employeeId },
     include: {
-      user: { include: { roleAssignments: { include: { role: true } } } },
+      user: {
+        include: {
+          roleAssignments: {
+            include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
+          },
+        },
+      },
     },
   });
 
@@ -100,6 +183,11 @@ export async function buildSessionPayloadForEmployee(
     throw new InvalidDevLoginCandidateError();
   }
 
+  const managementScope = await resolveManagementScopeForUser(
+    employee.tenantId,
+    employee.user.roleAssignments,
+  );
+
   return {
     tenantId: employee.tenantId,
     userId: employee.user.id,
@@ -107,5 +195,6 @@ export async function buildSessionPayloadForEmployee(
     storeId: employee.storeId,
     displayName: employee.displayName,
     roles: roleKeysFromAssignments(employee.user.roleAssignments),
+    managementScope,
   };
 }

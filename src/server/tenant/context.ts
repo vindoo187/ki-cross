@@ -16,6 +16,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ManagementScope } from "../authz/management-scope";
 
 export interface TenantContext {
   /** UUID des Mandanten (Tenant), an den dieser Request gebunden ist. */
@@ -26,6 +27,14 @@ export interface TenantContext {
   employeeId?: string;
   /** Rollen des Benutzers (z. B. fuer zukuenftige Autorisierungspruefungen). */
   roles: string[];
+  /**
+   * Beim Login serverseitig aus den `RoleAssignment`-Zeilen aufgeloester
+   * Management-Analytics-Scope (Phase 7), `null` falls keine
+   * Management-Berechtigung besteht. Siehe
+   * `src/server/authz/management-scope.ts` und
+   * `src/server/analytics/management-authz.ts` (AP2) fuer die Durchsetzung.
+   */
+  managementScope: ManagementScope | null;
 }
 
 const storage = new AsyncLocalStorage<TenantContext>();

@@ -12,6 +12,7 @@ const baseContext: TenantContext = {
   tenantId: "11111111-1111-1111-1111-111111111111",
   userId: "22222222-2222-2222-2222-222222222222",
   roles: ["employee"],
+  managementScope: null,
 };
 
 describe("tenant-context", () => {
@@ -38,6 +39,7 @@ describe("tenant-context", () => {
       tenantId: "33333333-3333-3333-3333-333333333333",
       userId: "44444444-4444-4444-4444-444444444444",
       roles: ["owner"],
+      managementScope: null,
     };
 
     runWithTenantContext(baseContext, () => {

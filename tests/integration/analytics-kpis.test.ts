@@ -43,7 +43,10 @@ describe.skipIf(!hasDatabaseUrl)("analytics/kpis.ts (Integrationstest, echte Pos
   });
 
   function asEmployee<T>(tenantId: string, employeeId: string, fn: () => Promise<T>): Promise<T> {
-    return runWithTenantContext({ tenantId, userId: randomUUID(), employeeId, roles: [] }, fn);
+    return runWithTenantContext(
+      { tenantId, userId: randomUUID(), employeeId, roles: [], managementScope: null },
+      fn,
+    );
   }
 
   async function createTenant(key: string) {
