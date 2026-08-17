@@ -45,6 +45,7 @@ import {
   DealProductVersionNotFoundError,
   DealAlreadyExistsForSessionError,
 } from "../deals/errors";
+import { ManagementAccessDeniedError } from "../analytics/management-authz";
 
 interface ErrorBody {
   error: string;
@@ -197,6 +198,13 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
 
   if (error instanceof DealEngineError) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 400 });
+  }
+
+  // Management-Analytics-Autorisierung (Phase 7 AP2/AP3): 403 -- bewusst NICHT
+  // 404/leeres Ergebnis, damit ein echtes "0 Datensaetze im erlaubten Scope"
+  // nicht mit "kein Zugriff" verwechselt werden kann (siehe management-authz.ts).
+  if (error instanceof ManagementAccessDeniedError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 403 });
   }
 
   return null;

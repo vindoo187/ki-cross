@@ -38,7 +38,16 @@ export type AnalyticsPeriodKey = "week" | "month";
  * beide als dokumentierte Implementierungsannahme (Plan nennt nur die
  * beiden Granularitaeten, keine exakten Grenzen).
  */
-function resolvePeriodRange(period: AnalyticsPeriodKey, now: Date): { from: Date; to: Date } {
+/**
+ * Exportiert (Phase 7 AP3): `management-view.ts` verwendet dieselbe
+ * Zeitraum-Aufloesung fuer die Management-Sicht -- bewusst wiederverwendet
+ * statt dupliziert, damit "Diese Woche"/"Dieser Monat" fuer Mitarbeiter- und
+ * Management-Sicht garantiert identisch definiert sind.
+ */
+export function resolvePeriodRange(
+  period: AnalyticsPeriodKey,
+  now: Date,
+): { from: Date; to: Date } {
   if (period === "week") {
     const dayOfWeek = now.getDay(); // 0 = Sonntag
     const daysSinceMonday = (dayOfWeek + 6) % 7;
@@ -54,7 +63,8 @@ function resolvePeriodRange(period: AnalyticsPeriodKey, now: Date): { from: Date
   return { from, to };
 }
 
-const PERIOD_LABELS: Record<AnalyticsPeriodKey, string> = {
+/** Exportiert (Phase 7 AP3) fuer dieselbe Wiederverwendung wie {@link resolvePeriodRange}. */
+export const PERIOD_LABELS: Record<AnalyticsPeriodKey, string> = {
   week: "Diese Woche",
   month: "Dieser Monat",
 };
