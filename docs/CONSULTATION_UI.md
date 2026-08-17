@@ -92,8 +92,9 @@ Unterkomponenten in `QuestionInputs.tsx`: `SingleChoiceInput`,
 `MultipleChoiceInput`, `BooleanInput`, `IntegerInput`, `DecimalInput`,
 `ShortTextInput`, `DateInput`. Diskrete Eingaben (Single/Multiple/Boolean/
 Date) speichern sofort bei jeder Änderung; Freitext-/Zahlenfelder debouncen
-lokal (~500 ms) und lösen `onLocalEdit` (für den `dirty`-Zustand) bereits
-vor dem Debounce aus. Die Komponenten validieren bewusst nur einfache
+lokal (~1.000 ms, Fix 8/AP15-Vorbereitung, ursprünglich 500 ms) und lösen
+`onLocalEdit` (für den `dirty`-Zustand) bereits vor dem Debounce aus. Die
+Komponenten validieren bewusst nur einfache
 Eingabe-Constraints (`type="number"`, `maxLength`, …) — fachliche Prüfung
 (min/max, Pflichtfeld) bleibt serverseitig (`answer-validation.ts`).
 
