@@ -66,6 +66,17 @@ export default async function ConsultationEntryPage() {
       <p className="consultation-entry__analytics-link">
         <Link href="/analytics">Analytics-Dashboard ansehen</Link>
       </p>
+
+      {/* Phase 7 AP4: Einstiegspunkt zum Management-Dashboard -- nur sichtbar,
+          wenn die Session ueberhaupt einen managementScope traegt (reine
+          UI-Bequemlichkeit, KEINE Sicherheitsgrenze: der eigentliche Zugriff
+          wird ausschliesslich serverseitig in buildManagementAnalyticsView()
+          durchgesetzt). */}
+      {session.managementScope && (
+        <p className="consultation-entry__analytics-link">
+          <Link href="/analytics/management">Management-Analytics ansehen</Link>
+        </p>
+      )}
     </main>
   );
 }

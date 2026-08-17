@@ -1178,3 +1178,18 @@ code {
 .analytics-dashboard__back {
   margin-top: 32px;
 }
+
+/* Phase 7 AP4: Management-Analytics (Scope-Hinweis in .analytics-dashboard__hint
+   wiederverwendet, hier nur die zusaetzliche "Kein Zugriff"-Variante). */
+.management-dashboard--denied {
+  max-width: 640px;
+}
+
+.management-dashboard--denied h1 {
+  margin-bottom: 8px;
+}
+
+.management-dashboard--denied p {
+  color: #444;
+  font-size: 14px;
+}
