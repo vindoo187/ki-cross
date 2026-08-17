@@ -703,6 +703,26 @@ describe.skipIf(!hasDatabaseUrl)(
           ),
         ).rejects.toThrow(ManagementAccessDeniedError);
       });
+
+      // Positiver Gegenpart zu den obigen Ablehnungsfaellen (von ChatGPT als
+      // ergaenzender Check angeregt): ein TENANT-Scope-User, der eine
+      // storeId INNERHALB des eigenen Tenants angibt, bekommt den Scope
+      // korrekt auf GENAU diese eine Filiale eingeschraenkt -- nicht auf
+      // den vollen TENANT-Scope und nicht abgelehnt.
+      it("TENANT-Scope + storeId = eigene Filiale: schraenkt korrekt auf GENAU diese eine Filiale ein", async () => {
+        const scope = { level: "TENANT" as const, storeIds: [storeA1a, storeA1b, storeA2a] };
+        const result = await runWithTenantContext(
+          {
+            tenantId: tenantA,
+            userId: managerTenantA.userId,
+            employeeId: managerTenantA.employeeId,
+            roles: [],
+            managementScope: scope,
+          },
+          () => resolveAuthorizedStoreFilter(scope, storeA1b),
+        );
+        expect(result).toEqual({ storeIds: [storeA1b] });
+      });
     });
 
     // ===================================================================
