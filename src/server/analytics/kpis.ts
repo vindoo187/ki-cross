@@ -33,13 +33,26 @@ import type { ConsultationStatus, RecommendationOutcomeType } from "@prisma/clie
 export interface KpiPeriodFilter {
   from: Date;
   to: Date;
+  /** Einzel-Filialfilter der Mitarbeitersicht (`/analytics`) -- unveraendert seit Phase 6. */
   storeId?: string;
+  /**
+   * Mengen-Filialfilter der Management-Sicht (Phase 7 AP2/AP3): eine
+   * COMPANY-/TENANT-Berechtigung umfasst typischerweise mehrere Filialen.
+   * Wird ausschliesslich von `resolveAuthorizedStoreFilter()`
+   * (`src/server/analytics/management-authz.ts`) befuellt, niemals direkt
+   * aus ungeprueften Request-Parametern. `storeId` und `storeIds` schliessen
+   * sich in der Praxis gegenseitig aus (Mitarbeiter- vs. Management-Sicht),
+   * werden hier aber unabhaengig behandelt (beide als zusaetzliche
+   * UND-Bedingung), falls beide gesetzt sind.
+   */
+  storeIds?: string[];
   employeeId?: string;
 }
 
 function storeEmployeeWhere(filter: KpiPeriodFilter) {
   return {
     ...(filter.storeId ? { storeId: filter.storeId } : {}),
+    ...(filter.storeIds ? { storeId: { in: filter.storeIds } } : {}),
     ...(filter.employeeId ? { employeeId: filter.employeeId } : {}),
   };
 }
