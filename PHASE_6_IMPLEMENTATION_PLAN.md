@@ -640,9 +640,13 @@ tatsächlich aus:
 
 **Commit:** `3e45b5b` ("feat(deals,analytics): Phase 6 AP1-AP10 – Deal-
 Erfassung + Analytics-KPI-Dashboard"), 29 Dateien, +4013/-66 Zeilen, direkt
-auf `main` aufsetzend auf `a1a43c9` (Phase-5-Abschlussbericht). Push und
-CI-Beobachtung stehen noch aus (Nutzer pusht über GitHub Desktop, wie in
-allen vorherigen Phasen).
+auf `main` aufsetzend auf `a1a43c9` (Phase-5-Abschlussbericht).
+
+**Push/CI:** Nutzer hat über GitHub Desktop gepusht (inkl. Folgecommit
+`6ce63f3`, Doku-Update dieses Plans). CI #30 (Commit `6ce63f3`, deckt beide
+Commits ab) **grün**, Laufzeit 3m 48s. Damit ist `vitest run` (in der
+Sandbox nicht ausführbar, siehe oben) jetzt über CI verifiziert. AP11 damit
+abgeschlossen.
 
 ### 12.6b AP10-Ergebnis (Dokumentation)
 
@@ -661,6 +665,127 @@ allen vorherigen Phasen).
 - `README.md` bewusst NICHT aktualisiert – der Status-Banner ist bereits seit
   Phase 3B veraltet (zeigt "Phase 3A"), das ist ein vorbestehender Zustand
   unabhängig von Phase 6 und außerhalb des AP10-Umfangs.
+
+### 12.8 ChatGPT-Rückmeldung nach AP11 (CI grün) – AP12 neu definiert
+
+Nach CI #30 (grün) habe ich ChatGPT die beiden offenen Punkte aus 12.6/12.6a
+vorgelegt (Provisions-/Margen-Sichtbarkeit im Dashboard; zurückgestellte
+Component-/E2E-Tests). ChatGPTs verbindliche Entscheidung:
+
+| Punkt                                              | Entscheidung                                                                                                      |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Provision/Marge intern berechnen                   | Ja (bereits so umgesetzt)                                                                                         |
+| Provision/Marge im aktuellen `/analytics` anzeigen | **Nein** – RBAC-los, daher bewusst nicht anzeigen                                                                 |
+| Umsatz-KPIs anzeigen                               | Ja (bereits so umgesetzt)                                                                                         |
+| RBAC für Management-Analytics jetzt bauen          | Nein (spätere Phase, eigener Management-Bereich)                                                                  |
+| Component-Tests (DealClosureForm, Dashboard)       | **Ja, in AP12 nachziehen**                                                                                        |
+| Vollständige E2E-Suite                             | Nein                                                                                                              |
+| Gezielter Deal-E2E-Test                            | Ja, sofern mit bestehender Infrastruktur ohne unverhältnismäßigen Aufwand machbar; sonst dokumentiertes Follow-up |
+
+Zusätzlich hat ChatGPT **AP12 neu definiert** – nicht als Abschlussbericht,
+sondern als **"Security/UI Hardening & Abnahme"**, bevor der Bericht
+geschrieben wird:
+
+- Deal-Atomizität (Rollback bei Fehlern zwischen Deal/Items/Snapshot/Event)
+- Schutz gegen doppelte Abschlüsse (bereits durch `DealAlreadyExistsForSessionError`
+  abgedeckt – im AP12 explizit gegenprüfen)
+- Financial-Snapshot-Verifikation gegen Formel v1 (discountCostMinor=0, keine
+  Laufzeitberechnung, monatlicher Umsatz separat, keine nachträgliche Änderung)
+- Provisions-/Margen-Berechnung verifizieren (versionierte Commission-Logik,
+  keine zweite Berechnungslogik)
+- Tenant-Isolation (Deal/DealItems/FinancialSnapshot/Analytics-Aggregationen)
+- KPI-Korrektheit gegen bekannte Werte
+- Event-Konsistenz (semantisch korrekte Events, nicht nur mehr Events)
+- UI-Robustheit (kein Doppel-Submit, verständliche Fehlerbehandlung, kein
+  irreführender Dashboard-Leerstand)
+- Component-Tests für `DealClosureForm` und Analytics-Dashboard
+- Gezielter E2E-Test für den Deal-Abschluss-Flow, falls machbar
+- CI muss danach wieder vollständig grün sein
+
+Erst nach diesem AP12 folgt der eigentliche Abschlussbericht (jetzt AP13).
+Damit ist Phase 6 aktuell: **Umsetzung GO, noch kein Final-GO.**
+
+### 12.9 AP12.1-Ergebnis: echter Befund -- Doppelabschluss-Race-Condition behoben
+
+Bei der von ChatGPT angeforderten Verifikation "Doppelte Abschluesse: Kann
+derselbe Abschluss versehentlich zweimal angelegt werden?" habe ich einen
+echten Befund gemacht: Das Invariant "ein Deal pro ConsultationSession" wurde
+ausschliesslich durch einen App-Level-Precheck in `closeDeal()`
+(`deals/service.ts`, der `existingDeal`-Check VOR der Transaktion)
+durchgesetzt -- **kein** DB-seitiger Unique-Constraint auf
+`(tenantId, consultationSessionId)`. Das ist race-anfaellig: zwei nahezu
+gleichzeitige Aufrufe (Doppel-Klick ueber zwei Tabs, Netzwerk-Retry) koennten
+beide den Precheck passieren, bevor eine der beiden Transaktionen committet,
+und zu zwei Deal-Zeilen fuer dieselbe Session fuehren.
+
+**Fix:**
+
+- `prisma/schema.prisma`: `@@unique([tenantId, consultationSessionId])` auf
+  `Deal` ergaenzt.
+- Migration `20260817170000_deal_unique_consultation_session` (additiv, mit
+  Bestandspruefung auf bereits vorhandene Duplikate vor dem Constraint).
+- `deals/service.ts`: `db.$transaction(...)` in try/catch gewickelt, faengt
+  `Prisma.PrismaClientKnownRequestError` mit Code `P2002` ab und uebersetzt
+  ihn in denselben `DealAlreadyExistsForSessionError` wie der Precheck
+  (Defense-in-Depth, analog dem bestehenden Muster in
+  `recommendation/outcome.ts`).
+- `scripts/verify_migration_pglite.mjs`: neue Migration in die Liste
+  aufgenommen, neuer Smoke-Test verifiziert die Constraint-Ablehnung.
+- `tests/integration/deals-service.test.ts`: neuer Regressionstest ruft
+  `closeDeal()` zweimal via `Promise.allSettled()` fuer dieselbe Session auf
+  und prueft, dass genau ein Aufruf gewinnt, der andere mit
+  `DealAlreadyExistsForSessionError` fehlschlaegt und am Ende genau ein Deal
+  existiert.
+
+`prisma generate` konnte in dieser Sandbox nicht ausgefuehrt werden (Engine-
+Binary-Download blockiert, 403 auf `binaries.prisma.sh`) -- unkritisch, da
+die Schema-Aenderung (Unique-Constraint) keine neuen Felder im generierten
+Client-Typ erzeugt, nur DB-seitige Metadaten. `npx tsc --noEmit` bleibt
+sauber.
+
+### 12.11 AP12-Ergebnis (Security/UI Hardening & Abnahme)
+
+Ergebnis der von ChatGPT vorgegebenen Pruefpunkte (siehe Abschnitt 12.8):
+
+- **Deal-Atomizitaet**: bestaetigt -- Deal + DealItems + DealFinancialSnapshot
+  - `DEAL_CLOSED`-Event laufen unveraendert in einer `db.$transaction(...)`.
+- **Doppelte Abschluesse**: echter Befund, behoben (siehe Abschnitt 12.9) --
+  DB-Unique-Constraint + Race-Condition-Regressionstest ergaenzt.
+- **Financial-Snapshot/Formel v1**: verifiziert, exakt wie mit ChatGPT
+  abgestimmt implementiert (`discountCostMinor` immer 0, keine
+  Laufzeitberechnung, monatlicher Umsatz separat ausgewiesen).
+- **Provision/Marge**: verifiziert -- einzige, geteilte Berechnungsquelle
+  (`pricing/commission.ts`), keine Duplikation, historische Stabilitaet durch
+  Vollauflösung zum Abschlusszeitpunkt gegeben.
+- **Tenant-Isolation**: verifiziert -- `ScopedPrismaClient` injiziert
+  `tenantId` auch fuer `groupBy`/`aggregate`/`count` (u. a. in `kpis.ts`
+  genutzt), bereits durch bestehende Mandantentrennungs-Tests abgedeckt.
+- **KPI-Korrektheit**: Code-Review von `kpis.ts`/`dashboard-view.ts`
+  bestaetigt korrekte Aggregation, Waehrungstrennung, Empty-State-Handling.
+- **Event-Konsistenz**: bereits in AP1/AP2 abschliessend geklaert (nur
+  `CONSULTATION_STARTED` echt nachgezogen).
+- **UI-Robustheit**: `DealClosureForm` verhindert bereits Doppel-Submit
+  (Button-Disable waehrend `submitting`), behandelt 409 graceful (stiller
+  Reload), zeigt Fehlertexte bei 4xx/Netzwerkfehlern. Analytics-Dashboard
+  zeigt explizite Empty-States (`Keine Abschluesse im Zeitraum.`, `--` bei
+  fehlenden Quoten) statt irrefuehrender Nullwerte.
+- **Component-Tests**: `tests/component/DealClosureForm.test.tsx` (9 Faelle:
+  Darstellung, erfolgreicher Abschluss, kein Doppel-Submit, 409-Stillreload,
+  Fehleranzeige bei 4xx/Netzwerkfehler, Mengenaenderung) und
+  `tests/component/AnalyticsDashboardContent.test.tsx` (5 Faelle: KPI-Werte,
+  Empty-States, Filialfilter-Sichtbarkeit, keine Provisions-/Margendaten
+  gerendert). Dashboard-Darstellung dafuer aus `analytics/page.tsx` in eine
+  reine `AnalyticsDashboardContent`-Komponente extrahiert (kein
+  Verhaltensunterschied, nur Testbarkeit).
+- **Gezielter E2E-Test**: `tests/e2e/deal-closure.spec.ts` -- Empfehlung
+  annehmen (Ergaenzung zu `happy-path.spec.ts`, das ablehnt), Deal auf der
+  Zusammenfassungsseite erfassen, read-only `DealSummaryCard` pruefen, Reload
+  bestaetigt keinen erneuten Abschluss ueber die UI. Mit bestehender
+  Playwright-Infrastruktur ohne zusaetzlichen Aufwand umsetzbar.
+
+**Lokale Verifikation:** `tsc --noEmit`, `eslint .`, `prettier --check .`
+sauber; `scripts/verify_migration_pglite.mjs` inkl. neuem Unique-Constraint-
+Test erfolgreich. `vitest run`/Playwright bleiben CI-abhaengig (siehe AP11).
 
 ### 12.7 AP8-Ergebnis (Dashboard-UI, Code-Review)
 

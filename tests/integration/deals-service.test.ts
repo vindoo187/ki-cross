@@ -415,6 +415,48 @@ describe.skipIf(!hasDatabaseUrl)("closeDeal() (Integrationstest, echte Postgres-
     ).rejects.toThrow(DealAlreadyExistsForSessionError);
   });
 
+  it("gleichzeitiger Doppelabschluss (Race Condition): genau ein Aufruf gewinnt, der andere schlaegt mit DealAlreadyExistsForSessionError fehl, es entsteht nie mehr als ein Deal (AP12-Regressionstest fuer den DB-Unique-Constraint)", async () => {
+    const sessionId = await createSession(
+      tenantAId,
+      storeAId,
+      employeeAId,
+      questionnaireVersionAId,
+    );
+
+    // Zwei nahezu gleichzeitige Aufrufe -- der App-Level-Precheck in
+    // closeDeal() (der "existingDeal"-Check vor der Transaktion) kann diese
+    // Race Condition allein nicht ausschliessen; erst der DB-Unique-
+    // Constraint (deals_tenant_id_consultation_session_id_key, Migration
+    // 20260817170000) garantiert, dass am Ende hoechstens ein Deal existiert.
+    const results = await Promise.allSettled([
+      asEmployee(tenantAId, employeeAId, () =>
+        closeDeal({
+          consultationSessionId: sessionId,
+          items: [{ productVersionId: productVersionAId, quantity: 1 }],
+        }),
+      ),
+      asEmployee(tenantAId, employeeAId, () =>
+        closeDeal({
+          consultationSessionId: sessionId,
+          items: [{ productVersionId: productVersionAId, quantity: 1 }],
+        }),
+      ),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+      DealAlreadyExistsForSessionError,
+    );
+
+    const deals = await rawClient.deal.findMany({
+      where: { consultationSessionId: sessionId },
+    });
+    expect(deals).toHaveLength(1);
+  });
+
   it("Mandantentrennung: eine ConsultationSession von Tenant A ist unter Tenant B nicht sichtbar", async () => {
     const sessionId = await createSession(
       tenantAId,

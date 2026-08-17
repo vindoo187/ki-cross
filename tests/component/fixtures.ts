@@ -16,6 +16,8 @@ import type {
   ConsultationRecommendationView,
   ConsultationCrossSellingSignalView,
   ConsultationSessionSummaryView,
+  DealClosureCandidateItem,
+  DealSummary,
   ProductVersionSummary,
   RejectionReasonOption,
   SalesOpportunityStatusSummary,
@@ -152,6 +154,32 @@ export function buildRecommendationView(
     items: [buildRecommendationItem()],
     rejectionReasons: [buildRejectionReason()],
     crossSellingSignals: [],
+    ...overrides,
+  };
+}
+
+export function buildDealClosureCandidate(
+  overrides: Partial<DealClosureCandidateItem> = {},
+): DealClosureCandidateItem {
+  return {
+    productVersionId: "product-version-1",
+    productName: "Fiber 250",
+    currency: "EUR",
+    monthlyPriceMinor: 3990,
+    oneTimePriceMinor: null,
+    ...overrides,
+  };
+}
+
+export function buildDealSummary(overrides: Partial<DealSummary> = {}): DealSummary {
+  return {
+    id: "deal-1",
+    closedAt: "2026-08-01T10:00:00.000Z",
+    currency: "EUR",
+    items: [{ productVersionId: "product-version-1", productName: "Fiber 250", quantity: 1 }],
+    monthlyRecurringRevenueMinor: 3990,
+    oneTimeRevenueMinor: 0,
+    totalContractValueMinor: 3990,
     ...overrides,
   };
 }

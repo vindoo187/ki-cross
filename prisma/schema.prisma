@@ -936,6 +936,12 @@ model Deal {
   financialSnapshot DealFinancialSnapshot?
 
   @@unique([tenantId, id])
+  // Phase 6 AP12 (Hardening): DB-seitige Durchsetzung von "ein Deal pro
+  // ConsultationSession", nicht nur der App-Level-Precheck in closeDeal()
+  // (der allein race-anfaellig waere: zwei gleichzeitige Aufrufe koennten
+  // beide den Precheck vor der Transaktion passieren). Siehe
+  // PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 12.9.
+  @@unique([tenantId, consultationSessionId])
   @@index([tenantId])
   @@index([storeId, closedAt])
   @@map("deals")

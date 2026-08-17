@@ -26,6 +26,7 @@
  * einen echten @prisma/client verifizierbar.
  */
 
+import { Prisma } from "@prisma/client";
 import { db } from "../db/client";
 import { getTenantId } from "../tenant/context";
 import {
@@ -181,69 +182,85 @@ export async function closeDeal(input: CloseDealInput): Promise<CloseDealResult>
 
   const currency = productVersions[0]?.currency ?? "EUR";
 
-  const deal = await db.$transaction(async (tx) => {
-    const createdDeal = await tx.deal.create({
-      data: {
-        tenantId,
-        consultationSessionId: session.id,
-        storeId: session.storeId,
-        employeeId: session.employeeId,
-        customerReferenceId:
-          input.customerReferenceId !== undefined
-            ? input.customerReferenceId
-            : (session.customerReferenceId ?? null),
-        currency,
-        closedAt,
-      },
-    });
-
-    await tx.dealItem.createMany({
-      data: input.items.map((item) => ({
-        tenantId,
-        dealId: createdDeal.id,
-        productVersionId: item.productVersionId,
-        quantity: item.quantity,
-      })),
-    });
-
-    await tx.dealFinancialSnapshot.create({
-      data: {
-        tenantId,
-        dealId: createdDeal.id,
-        currency,
-        monthlyRecurringRevenueMinor: snapshot.monthlyRecurringRevenueMinor,
-        totalContractValueMinor: snapshot.totalContractValueMinor,
-        oneTimeRevenueMinor: snapshot.oneTimeRevenueMinor,
-        commissionAmountMinor: snapshot.commissionAmountMinor,
-        expectedRecurringCommissionMinor: snapshot.expectedRecurringCommissionMinor,
-        hardwarePurchaseCostMinor: snapshot.hardwarePurchaseCostMinor,
-        subsidyCostMinor: snapshot.subsidyCostMinor,
-        discountCostMinor: snapshot.discountCostMinor,
-        otherDirectCostMinor: snapshot.otherDirectCostMinor,
-        contributionMarginMinor: snapshot.contributionMarginMinor,
-        contributionMarginFormulaVersion: snapshot.contributionMarginFormulaVersion,
-        capturedAt: closedAt,
-      },
-    });
-
-    await tx.analyticsEvent.create({
-      data: {
-        tenantId,
-        storeId: session.storeId,
-        employeeId: session.employeeId,
-        eventType: EVENT_TYPE,
-        occurredAt: closedAt,
-        payload: {
+  let deal;
+  try {
+    deal = await db.$transaction(async (tx) => {
+      const createdDeal = await tx.deal.create({
+        data: {
+          tenantId,
           consultationSessionId: session.id,
-          dealId: createdDeal.id,
-          productVersionIds: input.items.map((i) => i.productVersionId),
-          totalMonthlyValueMinor: snapshot.monthlyRecurringRevenueMinor,
+          storeId: session.storeId,
+          employeeId: session.employeeId,
+          customerReferenceId:
+            input.customerReferenceId !== undefined
+              ? input.customerReferenceId
+              : (session.customerReferenceId ?? null),
+          currency,
+          closedAt,
         },
-      },
-    });
+      });
 
-    return createdDeal;
-  });
+      await tx.dealItem.createMany({
+        data: input.items.map((item) => ({
+          tenantId,
+          dealId: createdDeal.id,
+          productVersionId: item.productVersionId,
+          quantity: item.quantity,
+        })),
+      });
+
+      await tx.dealFinancialSnapshot.create({
+        data: {
+          tenantId,
+          dealId: createdDeal.id,
+          currency,
+          monthlyRecurringRevenueMinor: snapshot.monthlyRecurringRevenueMinor,
+          totalContractValueMinor: snapshot.totalContractValueMinor,
+          oneTimeRevenueMinor: snapshot.oneTimeRevenueMinor,
+          commissionAmountMinor: snapshot.commissionAmountMinor,
+          expectedRecurringCommissionMinor: snapshot.expectedRecurringCommissionMinor,
+          hardwarePurchaseCostMinor: snapshot.hardwarePurchaseCostMinor,
+          subsidyCostMinor: snapshot.subsidyCostMinor,
+          discountCostMinor: snapshot.discountCostMinor,
+          otherDirectCostMinor: snapshot.otherDirectCostMinor,
+          contributionMarginMinor: snapshot.contributionMarginMinor,
+          contributionMarginFormulaVersion: snapshot.contributionMarginFormulaVersion,
+          capturedAt: closedAt,
+        },
+      });
+
+      await tx.analyticsEvent.create({
+        data: {
+          tenantId,
+          storeId: session.storeId,
+          employeeId: session.employeeId,
+          eventType: EVENT_TYPE,
+          occurredAt: closedAt,
+          payload: {
+            consultationSessionId: session.id,
+            dealId: createdDeal.id,
+            productVersionIds: input.items.map((i) => i.productVersionId),
+            totalMonthlyValueMinor: snapshot.monthlyRecurringRevenueMinor,
+          },
+        },
+      });
+
+      return createdDeal;
+    });
+  } catch (err) {
+    // Defense-in-depth gegen die Race Condition, die der App-Level-Precheck
+    // (oben, `existingDeal`) allein nicht ausschliessen kann: zwei nahezu
+    // gleichzeitige closeDeal()-Aufrufe fuer dieselbe Session koennten
+    // beide den Precheck passieren, bevor eine der beiden Transaktionen
+    // committet. Der DB-Unique-Constraint (tenantId, consultationSessionId,
+    // siehe Migration 20260817170000) faengt das ab; hier wird der daraus
+    // resultierende P2002 in denselben fachlichen Fehler wie der Precheck
+    // uebersetzt (analog outcome.ts).
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      throw new DealAlreadyExistsForSessionError(input.consultationSessionId);
+    }
+    throw err;
+  }
 
   return {
     dealId: deal.id,

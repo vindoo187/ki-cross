@@ -8,6 +8,7 @@ const MIGRATIONS = [
   "prisma/migrations/20260731000000_init/migration.sql",
   "prisma/migrations/20260801095926_analytics_events_employee_restrict/migration.sql",
   "prisma/migrations/20260801130000_recommendation_engine/migration.sql",
+  "prisma/migrations/20260817170000_deal_unique_consultation_session/migration.sql",
 ];
 
 const db = new PGlite({ extensions: { btree_gist } });
@@ -303,6 +304,21 @@ await expectRejected("append-only: DELETE auf deal_financial_snapshots", () =>
 // Schema) -- nur der Finanz-Snapshot selbst ist unveraenderlich.
 await db.query(`UPDATE deal_items SET quantity = 2 WHERE id = $1`, [dealItemId]);
 console.log("OK: deal_items bleibt mutabel (UPDATE erfolgreich, kein append-only-Trigger).");
+
+// AP12-Hardening: DB-seitiger Unique-Constraint gegen zwei Deals fuer
+// dieselbe ConsultationSession (Migration 20260817170000). Vorher wurde
+// dies ausschliesslich durch einen App-Level-Precheck in closeDeal()
+// durchgesetzt, der bei zwei nahezu gleichzeitigen Aufrufen race-anfaellig
+// waere -- siehe PHASE_6_IMPLEMENTATION_PLAN.md Abschnitt 12.9.
+await expectRejected(
+  "zweiter Deal fuer dieselbe ConsultationSession (deals_tenant_id_consultation_session_id_key)",
+  () =>
+    db.query(
+      `INSERT INTO deals (id, tenant_id, consultation_session_id, store_id, employee_id, currency, closed_at)
+       VALUES ($1,$2,$3,$4,$5,'EUR','2026-07-15T09:20:00Z')`,
+      [uuid(), tenantId, sessionId, storeId, employeeId],
+    ),
+);
 
 // sales_opportunities bleibt bewusst mutabel (kein append-only-Trigger).
 await db.query(`UPDATE sales_opportunities SET status = 'OFFERED' WHERE trigger_signal_id = $1`, [
