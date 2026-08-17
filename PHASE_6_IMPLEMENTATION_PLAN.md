@@ -614,6 +614,36 @@ Phase-6-Fixtures erweitert werden, was den Umfang dieses APs gesprengt hätte.
 Wird vor dem finalen Phase-6-Abschluss (AP11/AP12) mit ChatGPT als offener
 Punkt besprochen, nicht unilateral als "erledigt" markiert.
 
+### 12.6c AP11-Ergebnis (Lokale Verifikation, Commit)
+
+Überraschender Fund: `node_modules` ist in dieser Sandbox tatsächlich
+vorhanden (entgegen der bisherigen Annahme "kein tsc/vitest möglich") –
+`npx tsc --noEmit`, `npx eslint .` und `npx prettier --check .` liefen
+tatsächlich aus:
+
+- `tsc --noEmit`: 2 echte Fehler gefunden und behoben (`tests/component/fixtures.ts`
+  fehlten die neuen Pflichtfelder `deal`/`dealClosureCandidates`;
+  `tests/integration/questionnaire-engine.test.ts` fehlender
+  Non-Null-Assertion bei Array-Zugriff) – danach sauber.
+- `eslint`: 2 echte Fehler behoben (ungenutzter `CommissionResolution`-Import
+  in `recommendation/service.ts` nach der AP3-Extraktion, ungenutzte
+  Testvariable in `deals-service.test.ts`) – danach 0 Fehler (der einzige
+  verbleibende Treffer betraf `next-env.d.ts`, eine generierte, `.gitignore`d
+  Datei, kein echtes Problem).
+- `prettier --write .`: 10 Dateien automatisch formatiert.
+- `vitest run`: **nicht ausführbar** in dieser Sandbox – Rollup-Native-Binary-
+  Mismatch (`@rollup/rollup-linux-arm64-gnu` fehlt, bekannter npm-
+  Optional-Dependencies-Bug). Kein Code-Problem, sondern ein
+  Umgebungsproblem dieser Sandbox-Installation; `npm install` wurde
+  bewusst NICHT versucht (dokumentierte Standardregel dieses Projekts).
+  Vitest-Verifikation bleibt daher CI-abhängig.
+
+**Commit:** `3e45b5b` ("feat(deals,analytics): Phase 6 AP1-AP10 – Deal-
+Erfassung + Analytics-KPI-Dashboard"), 29 Dateien, +4013/-66 Zeilen, direkt
+auf `main` aufsetzend auf `a1a43c9` (Phase-5-Abschlussbericht). Push und
+CI-Beobachtung stehen noch aus (Nutzer pusht über GitHub Desktop, wie in
+allen vorherigen Phasen).
+
 ### 12.6b AP10-Ergebnis (Dokumentation)
 
 - `docs/DEAL_CAPTURE.md` (neu): Deal-Erfassung, Provisions-/Kosten-Auflösung,
