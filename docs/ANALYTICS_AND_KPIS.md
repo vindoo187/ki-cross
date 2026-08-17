@@ -69,9 +69,19 @@ Datenquellen und Implementierungsannahmen siehe
 **Tatsächlich implementiert (live aggregiert, `src/server/analytics/kpis.ts`):**
 Beratungen (Anzahl), Completion-/Abbruchquote, Empfehlungen generiert,
 Annahme-/Ablehnungsquote, Abschlüsse (Anzahl), Umsatz (einmalig +
-monatlich wiederkehrend), Provision/Marge (intern berechnet, im aktuellen
-RBAC-losen `/analytics`-Dashboard bewusst NICHT angezeigt — endgültige
-ChatGPT-Entscheidung AP12, siehe DEAL_CAPTURE.md Abschnitt 5).
+monatlich wiederkehrend), Provision/Marge (intern berechnet, im
+Mitarbeiter-Dashboard `/analytics` weiterhin bewusst NICHT angezeigt —
+ursprüngliche ChatGPT-Entscheidung AP12/Phase 6, siehe DEAL_CAPTURE.md
+Abschnitt 5).
+
+**Update Phase 7:** Provision (`commissionAmountMinor`) und
+Deckungsbeitrag (`contributionMarginMinor`) sind seit Phase 7 sichtbar —
+aber ausschließlich in der neuen, RBAC-geschützten Management-Sicht
+(`/analytics/management`, `GET /api/analytics/management`), nicht im
+weiterhin unveränderten Mitarbeiter-Dashboard. Siehe
+[MANAGEMENT_ANALYTICS.md](MANAGEMENT_ANALYTICS.md) für das vollständige
+Autorisierungsmodell (RoleAssignment-Scope, Authorization-vor-Aggregation,
+IDOR-Schutz) und die Testabdeckung.
 
 **Bewusst zurückgestellt** (nicht Kern-KPI laut ChatGPT-Priorisierung, kein
 Phase-6-Blocker): Cross-Selling-Quote, Ø Produkte pro Verkauf, Häufige

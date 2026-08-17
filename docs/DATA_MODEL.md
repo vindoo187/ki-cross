@@ -22,7 +22,7 @@ hier der Fall ist, ist es explizit vermerkt.
 ```
 Tenant (Mandant)
  └─ Company (Unternehmen)          -- z. B. das eigene Handelsunternehmen; später ggf. mehrere pro Mandant
-     └─ Store (Filiale)            -- 5 Filialen in den Demo-/Testdaten
+     └─ Store (Filiale)            -- 2 Filialen pro Tenant in den Demo-/Testdaten (1 Company, 2 Stores; siehe `prisma/seed.ts`)
          └─ Employee (Mitarbeiter)
 ```
 

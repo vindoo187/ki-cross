@@ -118,13 +118,19 @@ Modulkommentar in `kpis.ts`): "Abschlussquote" ist ein Perioden-Verhältnis
 (Woche/Kalendermonat) auf und komponiert die drei KPI-Funktionen zum
 Dashboard-View-Model — zeigt **nur** die Umsatz-KPIs (1–7) an. **Endgültig
 entschieden (ChatGPT, AP12/AP13):** Provision/Marge (KPI 8) werden im
-`/analytics`-Dashboard bewusst NICHT angezeigt, weil das Dashboard aktuell
+`/analytics`-Dashboard bewusst NICHT angezeigt, weil das Dashboard weiterhin
 RBAC-los ist (jeder authentifizierte Mitarbeiter des Mandanten erreicht es).
 `commissionAmountMinor`/`contributionMarginMinor` werden intern weiter in
-`kpis.ts` berechnet und stehen für einen späteren, RBAC-geschützten
-Management-Analytics-Bereich zur Verfügung, sind aber nirgends im
-Mitarbeiter-UI gerendert (verifiziert durch
-`tests/component/AnalyticsDashboardContent.test.tsx`).
+`kpis.ts` berechnet, sind aber nirgends im Mitarbeiter-UI gerendert
+(verifiziert durch `tests/component/AnalyticsDashboardContent.test.tsx`
+sowie den Integrationstest in Phase 7 AP7).
+
+**Update Phase 7:** Der damals in Aussicht gestellte RBAC-geschützte
+Management-Analytics-Bereich wurde gebaut (`/analytics/management`,
+`GET /api/analytics/management`) — dort sind `commissionAmountMinor`/
+`contributionMarginMinor` jetzt sichtbar, ausschließlich für Nutzer mit
+qualifizierendem `RoleAssignment`-Scope. Details zum Autorisierungsmodell
+siehe [MANAGEMENT_ANALYTICS.md](MANAGEMENT_ANALYTICS.md).
 
 Dashboard-Route: `/analytics` (`src/app/analytics/page.tsx`), Server
 Component mit GET-Formular für Zeitraum/Filiale, Kachel-Layout ohne Charts

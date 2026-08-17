@@ -46,3 +46,34 @@ Rollenbasierte Zugriffskontrolle (RBAC), Berechtigungen immer im Kontext eines S
 ## Mandantentrennung
 
 Über alle Rollen hinweg gilt: kein Zugriff über Mandantengrenzen hinweg, unabhängig von der Rolle. Ein "Systemadministrator" agiert scope-gebunden auf genau einen Mandanten; ein globaler Anbieter-Betreiber-Zugriff (falls das System später an mehrere Mandanten verkauft wird) ist eine eigene, separat zu definierende Betreiberrolle außerhalb der mandantenspezifischen Rollen – **offene Entscheidung**, ob und wie diese Betreiberrolle in Phase 1 überhaupt vorgesehen wird.
+
+## Implementierungsstatus (Phase 7)
+
+Die obige Tabelle ist der ursprüngliche, konzeptionelle Rollen-/Rechtekatalog
+aus Phase 1. **Tatsächlich durchgesetzt** ist bislang ausschließlich der
+Management-Analytics-Ausschnitt (Sichtbarkeit von Provision/Deckungsbeitrag
+in der Management-Sicht) — siehe [MANAGEMENT_ANALYTICS.md](MANAGEMENT_ANALYTICS.md)
+für das vollständige Modell. Kernpunkte:
+
+- Autorisierung baut ausschließlich auf dem bereits im Schema vorhandenen
+  `RoleAssignment`-System (Scope-Typen TENANT/COMPANY/STORE) auf — **kein**
+  einfaches `isManagement`-Flag.
+- Vier Seed-Rollen sind tatsächlich verdrahtet: `sales_employee` (kein
+  Management-Analytics-Zugriff), `store_admin` (STORE-Scope),
+  `company_management` (COMPANY-Scope), `executive_management`
+  (TENANT-Scope) — siehe `src/server/authz/seed-role-permissions.ts`.
+- Autorisierung erfolgt serverseitig vor jeder Aggregation
+  (`resolveAuthorizedStoreFilter()`), nicht nur durch UI-Ausblendung — wie
+  in Abschnitt "Technische Umsetzung" oben bereits konzeptionell gefordert.
+- `managementScope` wird einmalig beim Login aus den `RoleAssignment`-Daten
+  abgeleitet und im signierten Session-Token transportiert, nicht bei
+  jedem Request neu aus der DB gelesen (Session-Staleness bei
+  Rollenentzug ist eine bewusst akzeptierte, dokumentierte Eigenschaft).
+
+Die übrigen in der Tabelle oben skizzierten Rollen (Filialleitung,
+Regionalleitung, Fachadministrator, Systemadministrator, Mandanten-Owner)
+und die volle Berechtigungsmatrix bleiben weiterhin **konzeptionell**
+(Phase-1-Ausgangsvorschlag) und sind nicht Teil des implementierten
+Schemas — nur die drei Management-Analytics-Permission-Keys
+(`analytics.view_store`/`_company`/`_tenant`) existieren tatsächlich im
+Permission-Katalog.
