@@ -677,6 +677,14 @@ model ConsultationSession {
   @@index([tenantId])
   @@index([storeId, startedAt])
   @@index([employeeId, startedAt])
+  // Phase 7 AP6 (Analytics-KPI-Performance, siehe
+  // PHASE_7_IMPLEMENTATION_PLAN.md Abschnitt 8): getConsultationVolumeKpi()
+  // filtert IMMER nach tenantId + startedAt-Zeitraum, storeId/employeeId
+  // sind dagegen OPTIONAL (z. B. TENANT-Scope ohne Filialeinschraenkung,
+  // oder Mitarbeitersicht ohne gesetzten storeId-Filter) -- fuer diesen
+  // haeufigen Fall greift KEINER der beiden obigen Indizes, da deren
+  // fuehrende Spalte storeId/employeeId ist. Siehe kpis.ts.
+  @@index([tenantId, startedAt])
   @@map("consultation_sessions")
 }
 
@@ -805,6 +813,13 @@ model Recommendation {
   @@unique([tenantId, consultationSessionId, evaluationFingerprint])
   @@index([tenantId])
   @@index([consultationSessionId])
+  // Phase 7 AP6: getRecommendationOutcomeKpi() (itemsGenerated) filtert
+  // recommendation.generatedAt ueber einen Zeitraum, tenantId ist immer
+  // Teil des where (siehe scoped-client.ts) -- storeId/employeeId werden
+  // NICHT auf dieser Tabelle, sondern auf der verknuepften
+  // ConsultationSession gefiltert (dort bereits indiziert), daher genuegt
+  // hier ein reiner Zeitraum-Index.
+  @@index([tenantId, generatedAt])
   @@map("recommendations")
 }
 
@@ -894,6 +909,11 @@ model RecommendationOutcome {
 
   @@unique([tenantId, recommendationItemId])
   @@index([tenantId])
+  // Phase 7 AP6: getRecommendationOutcomeKpi() (accepted/rejected/deferred)
+  // filtert decidedAt ueber einen Zeitraum, tenantId immer im where -- die
+  // storeId/employeeId-Einschraenkung erfolgt ueber die verknuepfte
+  // ConsultationSession (dort bereits indiziert), nicht auf dieser Tabelle.
+  @@index([tenantId, decidedAt])
   @@map("recommendation_outcomes")
 }
 
@@ -944,6 +964,14 @@ model Deal {
   @@unique([tenantId, consultationSessionId])
   @@index([tenantId])
   @@index([storeId, closedAt])
+  // Phase 7 AP6: getDealKpi() filtert deal.closedAt ueber einen Zeitraum
+  // sowie optional storeId/storeId IN(...)/employeeId (storeEmployeeWhere()
+  // in kpis.ts). Zwei Luecken gegenueber den obigen Indizes: (1) kein Index
+  // fuer den Fall OHNE Filial-/Mitarbeitereinschraenkung (TENANT-Scope ohne
+  // storeId-Filter, oder Mitarbeitersicht ohne gesetzten storeId), (2) kein
+  // Index fuer die employeeId-Variante des Filters ueberhaupt.
+  @@index([tenantId, closedAt])
+  @@index([employeeId, closedAt])
   @@map("deals")
 }
 

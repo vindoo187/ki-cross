@@ -9,6 +9,7 @@ const MIGRATIONS = [
   "prisma/migrations/20260801095926_analytics_events_employee_restrict/migration.sql",
   "prisma/migrations/20260801130000_recommendation_engine/migration.sql",
   "prisma/migrations/20260817170000_deal_unique_consultation_session/migration.sql",
+  "prisma/migrations/20260817220000_analytics_kpi_indexes/migration.sql",
 ];
 
 const db = new PGlite({ extensions: { btree_gist } });
@@ -344,11 +345,40 @@ await expectRejected(
     ),
 );
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 7 AP6: die fuenf neuen Analytics-KPI-Indizes existieren
+// tatsaechlich (siehe PHASE_7_IMPLEMENTATION_PLAN.md Abschnitt 8).
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-7-AP6-Analytics-KPI-Indizes ==");
+
+const expectedIndexes = [
+  "consultation_sessions_tenant_id_started_at_idx",
+  "recommendations_tenant_id_generated_at_idx",
+  "recommendation_outcomes_tenant_id_decided_at_idx",
+  "deals_tenant_id_closed_at_idx",
+  "deals_employee_id_closed_at_idx",
+];
+
+const indexRows = await db.query(`
+  SELECT indexname FROM pg_indexes WHERE schemaname = 'public';
+`);
+const indexNames = new Set(indexRows.rows.map((r) => r.indexname));
+
+for (const name of expectedIndexes) {
+  if (indexNames.has(name)) {
+    console.log(`OK: Index "${name}" vorhanden.`);
+  } else {
+    console.error(`FEHLER: erwarteter Index "${name}" fehlt!`);
+    failures += 1;
+  }
+}
+
 if (failures > 0) {
   console.error(`\n${failures} Smoke-Test-Pruefung(en) FEHLGESCHLAGEN.`);
   process.exit(1);
 }
 
-console.log("\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6) ERFOLGREICH.");
+console.log("\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6) ERFOLGREICH.");
 
 await db.close();
