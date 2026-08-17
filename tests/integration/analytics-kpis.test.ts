@@ -33,6 +33,10 @@ describe.skipIf(!hasDatabaseUrl)("analytics/kpis.ts (Integrationstest, echte Pos
   const PERIOD_TO = new Date("2026-06-01T00:00:00Z");
   const IN_PERIOD = new Date("2026-05-15T10:00:00Z");
   const BEFORE_PERIOD = new Date("2026-04-15T10:00:00Z");
+  // Nur fuer Sessions, die ausschliesslich als Deal-Traeger dienen (AP12-Fix,
+  // siehe Kommentar bei den Deal-Fixtures unten) -- liegt bewusst ausserhalb
+  // aller in diesem File per Datumsfenster geprueften Zeitraeume.
+  const OTHER_PERIOD = new Date("2026-02-15T10:00:00Z");
 
   afterAll(async () => {
     await rawClient.$disconnect();
@@ -344,6 +348,32 @@ describe.skipIf(!hasDatabaseUrl)("analytics/kpis.ts (Integrationstest, echte Pos
     await createOutcome(tenantId, rejectedItemId, employeeId, "REJECTED", IN_PERIOD);
 
     // -- Deals: 2 EUR-Deals im Zeitraum, 1 EUR-Deal VOR dem Zeitraum (darf nicht zaehlen).
+    // Phase 6 AP12 (Hardening): seit dem DB-Unique-Constraint
+    // "deals_tenant_id_consultation_session_id_key" (ein Deal pro
+    // ConsultationSession) braucht jeder Deal seine EIGENE Session --
+    // vorher teilten sich alle 3 Deals hier `inProgressSessionId`, was den
+    // neuen Constraint verletzt. Die zusaetzlichen Sessions liegen bewusst
+    // AUSSERHALB von PERIOD_FROM/PERIOD_TO und des in der "vor dem Zeitraum"-
+    // Volumen-Testfalls geprueften BEFORE_PERIOD-Tagesfensters, damit sie
+    // keine der bestehenden getConsultationVolumeKpi()-Erwartungswerte
+    // (totalSessions/inProgress/completed etc.) veraendern -- getDealKpi()
+    // filtert ohnehin ueber `closedAt`, nicht ueber die Session.
+    const dealOnlySession1 = await createSession(
+      tenantId,
+      storeId,
+      employeeId,
+      questionnaireVersionId,
+      "COMPLETED",
+      OTHER_PERIOD,
+    );
+    const dealOnlySession2 = await createSession(
+      tenantId,
+      storeId,
+      employeeId,
+      questionnaireVersionId,
+      "COMPLETED",
+      OTHER_PERIOD,
+    );
     await createDealWithSnapshot(
       tenantId,
       inProgressSessionId,
@@ -355,7 +385,7 @@ describe.skipIf(!hasDatabaseUrl)("analytics/kpis.ts (Integrationstest, echte Pos
     );
     await createDealWithSnapshot(
       tenantId,
-      inProgressSessionId,
+      dealOnlySession1,
       storeId,
       employeeId,
       IN_PERIOD,
@@ -364,7 +394,7 @@ describe.skipIf(!hasDatabaseUrl)("analytics/kpis.ts (Integrationstest, echte Pos
     );
     await createDealWithSnapshot(
       tenantId,
-      inProgressSessionId,
+      dealOnlySession2,
       storeId,
       employeeId,
       BEFORE_PERIOD,
