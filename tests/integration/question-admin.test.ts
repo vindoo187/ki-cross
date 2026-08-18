@@ -25,8 +25,10 @@ import {
   createDraftVersion,
   getQuestionnaireVersionDetail,
   listQuestionnaires,
+  publishDraftVersion,
   removeQuestionFromDraft,
   updateQuestionInDraft,
+  validateDraftVersion,
 } from "@/server/admin/question-admin";
 import {
   AdminQuestionNotFoundError,
@@ -34,6 +36,7 @@ import {
   QuestionnaireVersionNotDraftError,
   QuestionnaireVersionNotFoundError,
 } from "@/server/admin/question-admin-errors";
+import { QuestionnaireVersionInvalidError } from "@/server/questionnaire/errors";
 import { GET as listQuestionnairesRoute } from "@/app/api/admin/questionnaires/route";
 import { POST as createDraftVersionRoute } from "@/app/api/admin/questionnaires/[id]/versions/route";
 import { GET as getVersionDetailRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/route";
@@ -42,6 +45,8 @@ import {
   DELETE as deleteQuestionRoute,
   PATCH as patchQuestionRoute,
 } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/questions/[questionId]/route";
+import { POST as validateVersionRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/validate/route";
+import { POST as publishVersionRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/publish/route";
 
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 process.env.DEV_AUTH_SECRET ??= "ap3-question-admin-test-secret-not-for-prod";
@@ -611,6 +616,208 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         routeParams({ id: questionnaireId }),
       );
       expect(response.status).toBe(201);
+    });
+
+    // -----------------------------------------------------------------
+    // AP4 -- Validate & Publish (siehe PHASE_8_IMPLEMENTATION_PLAN.md
+    // Abschnitt 7). Fixture-Helfer fuer einen publish-faehigen DRAFT
+    // (mit genau einer gueltigen BOOLEAN-Frage, damit
+    // validateQuestionnaireVersion() nicht wegen "keine Fragen" scheitert).
+    // -----------------------------------------------------------------
+
+    async function createPublishableDraft(tenantId: string, key: string) {
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        key,
+      );
+      await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          addQuestionToDraft(questionnaireId, draftVersionId, {
+            key: "q1",
+            sortOrder: 1,
+            label: "Frage 1",
+            answerType: "BOOLEAN",
+            isRequired: false,
+            answerOptions: [],
+            visibilityConditions: [],
+          }),
+      );
+      return { questionnaireId, draftVersionId };
+    }
+
+    it("validateDraftVersion() liefert {valid:true} fuer einen vollstaendigen Entwurf", async () => {
+      const tenantId = await createTenant("svc-validate-ok");
+      const { questionnaireId, draftVersionId } = await createPublishableDraft(
+        tenantId,
+        "qn-validate-ok",
+      );
+      const result = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => validateDraftVersion(questionnaireId, draftVersionId),
+      );
+      expect(result).toEqual({ valid: true });
+    });
+
+    it("validateDraftVersion() eines leeren Entwurfs (keine Fragen) -> QuestionnaireVersionInvalidError mit issues[]", async () => {
+      const tenantId = await createTenant("svc-validate-invalid");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn-validate-invalid",
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => validateDraftVersion(questionnaireId, draftVersionId),
+        ),
+      ).rejects.toThrow(QuestionnaireVersionInvalidError);
+    });
+
+    it("publishDraftVersion(): setzt bisherige ACTIVE-Version auf EXPIRED, neue auf ACTIVE, flippt QuestionVersions, schreibt AuditLog", async () => {
+      const tenantId = await createTenant("svc-publish-ok");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      // Entwurf DESSELBEN Questionnaire als Kopie der ACTIVE-Version (enthaelt
+      // dadurch bereits eine gueltige Frage -- validateQuestionnaireVersion()
+      // besteht ohne weitere Vorbereitung).
+      const copiedDraft = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          createDraftVersion(questionnaireId, { label: "v2", copyFromVersionId: activeVersionId }),
+      );
+
+      const result = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => publishDraftVersion(questionnaireId, copiedDraft.id),
+      );
+
+      expect(result.previousActiveVersionId).toBe(activeVersionId);
+      expect(result.version.status).toBe("ACTIVE");
+      expect(result.version.questions[0]?.status).toBe("ACTIVE");
+
+      const oldVersion = await rawClient.questionnaireVersion.findUniqueOrThrow({
+        where: { id: activeVersionId },
+      });
+      expect(oldVersion.status).toBe("EXPIRED");
+      expect(oldVersion.validTo).not.toBeNull();
+
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "QuestionnaireVersion", entityId: copiedDraft.id },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.action).toBe("ACTIVATE");
+    });
+
+    it("publishDraftVersion() auf einer bereits ACTIVE-Version -> QuestionnaireVersionNotDraftError (409)", async () => {
+      const tenantId = await createTenant("svc-publish-not-draft");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => publishDraftVersion(questionnaireId, activeVersionId),
+        ),
+      ).rejects.toThrow(QuestionnaireVersionNotDraftError);
+    });
+
+    it("publishDraftVersion() eines fachlich ungueltigen Entwurfs -> QuestionnaireVersionInvalidError, KEINE Statusaenderung (Atomaritaet)", async () => {
+      const tenantId = await createTenant("svc-publish-invalid");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn-publish-invalid",
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => publishDraftVersion(questionnaireId, draftVersionId),
+        ),
+      ).rejects.toThrow(QuestionnaireVersionInvalidError);
+
+      const version = await rawClient.questionnaireVersion.findUniqueOrThrow({
+        where: { id: draftVersionId },
+      });
+      expect(version.status).toBe("DRAFT");
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "QuestionnaireVersion", entityId: draftVersionId },
+      });
+      expect(auditEntries).toHaveLength(0);
+    });
+
+    it("HTTP: POST .../publish ohne config.questions.publish (nur edit) -> 403", async () => {
+      const tenantId = await createTenant("http-publish-denied");
+      const { questionnaireId, draftVersionId } = await createPublishableDraft(
+        tenantId,
+        "qn-http-publish-denied",
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const response = await publishVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${draftVersionId}/publish`,
+          token,
+          { method: "POST" },
+        ),
+        routeParams({ id: questionnaireId, versionId: draftVersionId }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it("HTTP: POST .../publish mit config.questions.publish -> 200, Version ACTIVE", async () => {
+      const tenantId = await createTenant("http-publish-ok");
+      const { questionnaireId, draftVersionId } = await createPublishableDraft(
+        tenantId,
+        "qn-http-publish-ok",
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: [
+          "config.questions.view",
+          "config.questions.edit",
+          "config.questions.publish",
+        ],
+      });
+      const response = await publishVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${draftVersionId}/publish`,
+          token,
+          { method: "POST" },
+        ),
+        routeParams({ id: questionnaireId, versionId: draftVersionId }),
+      );
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.version.status).toBe("ACTIVE");
+      expect(body.previousActiveVersionId).toBeNull();
+    });
+
+    it("HTTP: POST .../validate eines leeren Entwurfs -> 422 mit strukturierter issues-Liste", async () => {
+      const tenantId = await createTenant("http-validate-422");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn-http-validate-422",
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const response = await validateVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${draftVersionId}/validate`,
+          token,
+          { method: "POST" },
+        ),
+        routeParams({ id: questionnaireId, versionId: draftVersionId }),
+      );
+      expect(response.status).toBe(422);
+      const body = await response.json();
+      expect(Array.isArray(body.issues)).toBe(true);
+      expect(body.issues.length).toBeGreaterThan(0);
     });
   });
 });

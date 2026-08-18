@@ -20,6 +20,7 @@ import {
   AnswerAlreadyExistsError,
   NoActiveQuestionnaireVersionError,
   ConsultationAlreadyCompletedError,
+  QuestionnaireVersionInvalidError,
 } from "../questionnaire/errors";
 import {
   RecommendationEngineError,
@@ -240,6 +241,17 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
 
   // Question-Management-API: 422 -- fachlich ungueltige Eingabe.
   if (error instanceof InvalidQuestionInputError) {
+    return NextResponse.json(
+      { error: error.name, message: error.message, issues: error.issues },
+      { status: 422 },
+    );
+  }
+
+  // Question-Management-API (Phase 8 AP4): 422 -- validateQuestionnaireVersion()
+  // (seit Phase 3A, wiederverwendet fuer validate()/publish()) hat strukturelle
+  // Verstoesse gefunden. `issues` enthaelt ALLE gefundenen Verstoesse, nicht
+  // nur den ersten (siehe questionnaire/errors.ts).
+  if (error instanceof QuestionnaireVersionInvalidError) {
     return NextResponse.json(
       { error: error.name, message: error.message, issues: error.issues },
       { status: 422 },

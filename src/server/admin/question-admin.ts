@@ -46,8 +46,9 @@
 
 import { Prisma } from "@prisma/client";
 import { db } from "../db/client";
-import { getTenantId } from "../tenant/context";
+import { getTenantContext, getTenantId } from "../tenant/context";
 import type { ScopedPrismaClient } from "../tenant/scoped-client";
+import { validateQuestionnaireVersion } from "../questionnaire/service";
 import {
   AdminQuestionNotFoundError,
   QuestionnaireNotFoundError,
@@ -648,4 +649,160 @@ export async function removeQuestionFromDraft(
     await tx.questionVersion.deleteMany({ where: { questionId } });
     await tx.question.delete({ where: { id: questionId } });
   });
+}
+
+// ---------------------------------------------------------------------------
+// 7. Validate & Publish (Phase 8 AP4, siehe PHASE_8_IMPLEMENTATION_PLAN.md
+//    Abschnitt 7).
+// ---------------------------------------------------------------------------
+
+export interface PublishResult {
+  version: QuestionnaireVersionDetail;
+  /** ID der zuvor ACTIVE-Version, die durch diesen Publish auf EXPIRED gesetzt wurde -- `null` beim allerersten Publish eines Questionnaire. */
+  previousActiveVersionId: string | null;
+}
+
+/**
+ * Fuehrt die vollstaendige fachliche Validierung (`validateQuestionnaireVersion()`,
+ * bereits seit Phase 3A vorhanden, siehe Modulkommentar oben) gegen eine
+ * `QuestionnaireVersion` dieses Questionnaire aus. Rein lesend -- keine
+ * Statusbeschraenkung, damit auch bereits veroeffentlichte Versionen zu
+ * Regressionszwecken erneut geprueft werden koennen. Wirft
+ * `QuestionnaireVersionInvalidError` (aus `../questionnaire/errors`, dort
+ * bereits mit `issues: string[]`) bei fachlichen Verstoessen -- die
+ * Route-Schicht mappt dies auf 422 mit strukturierter Fehlerliste (siehe
+ * http-errors.ts).
+ */
+export async function validateDraftVersion(
+  questionnaireId: string,
+  versionId: string,
+): Promise<{ valid: true }> {
+  await requireQuestionnaire(db, questionnaireId);
+  await requireVersion(db, questionnaireId, versionId);
+  await validateQuestionnaireVersion(versionId);
+  return { valid: true };
+}
+
+/**
+ * Veroeffentlicht eine DRAFT-`QuestionnaireVersion` (Plan Abschnitt 7,
+ * Atomaritaets-Invariante aus Abschnitt 3.3/15, von ChatGPT als bindende
+ * Auflage bestaetigt 2026-08-18):
+ *
+ * 1. Serverseitige Revalidierung ueber `validateQuestionnaireVersion()` --
+ *    niemals nur auf eine vorherige Client-Validierung vertrauen. Laeuft
+ *    bewusst VOR der Transaktion (rein lesend, keine Mutation) -- ein
+ *    Validierungsfehler darf gar keine Transaktion eroeffnen.
+ * 2. Innerhalb EINER Transaktion (BEGIN/COMMIT/ROLLBACK):
+ *    a. Die bisherige ACTIVE-Version desselben Questionnaire (falls
+ *       vorhanden) zuerst auf EXPIRED setzen (`validTo = now`). Das MUSS vor
+ *       Schritt (b) passieren: die PostgreSQL-EXCLUDE-Constraint
+ *       `questionnaire_versions_no_overlap` (WHERE status IN
+ *       ('ACTIVE','EXPIRED')) verbietet zwei gleichzeitig offene
+ *       (validTo = null) ACTIVE-Zeitspannen fuer dasselbe Questionnaire --
+ *       wuerde zuerst aktiviert, schluege die Constraint sofort fehl (Plan
+ *       Abschnitt 14, Risiko "EXCLUDE-Constraint-Konflikt").
+ *    b. Die neue Version ueber `updateMany({where: {id, status: "DRAFT"}})`
+ *       (nicht `update()`) auf ACTIVE setzen -- schuetzt gegen einen
+ *       doppelten/parallelen Publish-Versuch (Race Condition zwischen der
+ *       Vorab-Pruefung oben und dem Transaktionsstart): `count !== 1` wirft,
+ *       wodurch die GESAMTE Transaktion inkl. Schritt (a) zurueckgerollt
+ *       wird -- der verbotene Zwischenzustand "alte Version EXPIRED + neue
+ *       Version nicht ACTIVE" kann dadurch nicht persistieren.
+ *    c. Alle DRAFT-`QuestionVersion`-Zeilen der neuen Version auf ACTIVE
+ *       flippen (jede `Question` dieser `QuestionnaireVersion` hat waehrend
+ *       der Draft-Phase genau eine DRAFT-`QuestionVersion`, siehe
+ *       Modulkommentar oben) -- KEINE EXPIRED-Markierung fuer alte
+ *       `QuestionVersion`-Zeilen noetig, da jede `Question`-Zeile durch die
+ *       Tiefkopie in `createDraftVersion()` neu und eindeutig ist (niemals
+ *       von einer frueheren `QuestionnaireVersion` wiederverwendet) und
+ *       daher waehrend ihrer gesamten Lebensdauer nur eine einzige
+ *       `QuestionVersion`-Zeile besitzt.
+ *    d. `AuditLog`-Eintrag in DERSELBEN Transaktion (ChatGPT-Auflage: kein
+ *       Publish ohne Audit, kein Audit ohne tatsaechlich veroeffentlichten
+ *       Stand).
+ *
+ * Bestandsschutz laufender Beratungen (Plan Abschnitt 3.4): unveraendert --
+ * `ConsultationSession.questionnaireVersionId` wird hier an keiner Stelle
+ * angefasst, weder fuer die alte noch die neue Version.
+ */
+export async function publishDraftVersion(
+  questionnaireId: string,
+  versionId: string,
+): Promise<PublishResult> {
+  await requireQuestionnaire(db, questionnaireId);
+  await requireDraftVersion(db, questionnaireId, versionId);
+
+  await validateQuestionnaireVersion(versionId);
+
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+  const now = new Date();
+
+  const questions = await db.question.findMany({
+    where: { questionnaireVersionId: versionId },
+    select: { id: true },
+  });
+  const questionIds = questions.map((q) => q.id);
+
+  const previousActiveVersionId = await db.$transaction(async (tx) => {
+    const draftQuestionVersions =
+      questionIds.length > 0
+        ? await tx.questionVersion.findMany({
+            where: { questionId: { in: questionIds }, status: "DRAFT" },
+            select: { id: true },
+          })
+        : [];
+
+    const previousActive = await tx.questionnaireVersion.findFirst({
+      where: { questionnaireId, status: "ACTIVE", id: { not: versionId } },
+    });
+    if (previousActive) {
+      await tx.questionnaireVersion.update({
+        where: { id: previousActive.id },
+        data: { status: "EXPIRED", validTo: now },
+      });
+    }
+
+    const activated = await tx.questionnaireVersion.updateMany({
+      where: { id: versionId, status: "DRAFT" },
+      data: { status: "ACTIVE", validFrom: now, validTo: null },
+    });
+    if (activated.count !== 1) {
+      // Wurde zwischen der Vorab-Pruefung oben und hier bereits von einem
+      // parallelen Request veroeffentlicht -- ROLLBACK macht Schritt (a)
+      // (EXPIRED-Setzen der alten Version) rueckgaengig, kein
+      // Zwischenzustand persistiert.
+      throw new QuestionnaireVersionNotDraftError(
+        versionId,
+        "bereits veroeffentlicht (paralleler Publish-Versuch)",
+      );
+    }
+
+    if (draftQuestionVersions.length > 0) {
+      await tx.questionVersion.updateMany({
+        where: { id: { in: draftQuestionVersions.map((v) => v.id) }, status: "DRAFT" },
+        data: { status: "ACTIVE", validFrom: now },
+      });
+    }
+
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "ACTIVATE",
+        entityType: "QuestionnaireVersion",
+        entityId: versionId,
+        metadata: {
+          questionnaireId,
+          previousActiveVersionId: previousActive ? previousActive.id : null,
+          questionCount: draftQuestionVersions.length,
+        },
+      },
+    });
+
+    return previousActive ? previousActive.id : null;
+  });
+
+  const version = await getQuestionnaireVersionDetail(questionnaireId, versionId);
+  return { version, previousActiveVersionId };
 }
