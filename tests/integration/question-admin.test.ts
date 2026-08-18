@@ -130,6 +130,21 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
     return { questionnaireId: questionnaire.id, activeVersionId: activeVersion.id };
   }
 
+  /**
+   * Legt einen ECHTEN `User`-Datensatz an. Fuer publishDraftVersion() noetig
+   * (schreibt `AuditLog.actorUserId` mit `tenant_id, actor_user_id`-FK auf
+   * `User` -- ein reiner `randomUUID()` ohne existierende User-Zeile verletzt
+   * die Fremdschluessel-Constraint, CI #41 Root Cause 2). Alle anderen
+   * Service-/HTTP-Aufrufe in dieser Suite, die keine AuditLog-Zeile
+   * schreiben, verwenden weiterhin `randomUUID()` als `userId` (unveraendert).
+   */
+  async function createUser(tenantId: string, key: string) {
+    const user = await rawClient.user.create({
+      data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+    });
+    return user.id;
+  }
+
   async function createDraftQuestionnaireVersion(tenantId: string, key: string) {
     const questionnaire = await rawClient.questionnaire.create({
       data: { tenantId, key: `${key}-${suffix}` },
@@ -688,8 +703,9 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
           createDraftVersion(questionnaireId, { label: "v2", copyFromVersionId: activeVersionId }),
       );
 
+      const actorUserId = await createUser(tenantId, "svc-publish-ok-actor");
       const result = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => publishDraftVersion(questionnaireId, copiedDraft.id),
       );
 
@@ -707,6 +723,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         where: { tenantId, entityType: "QuestionnaireVersion", entityId: copiedDraft.id },
       });
       expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
       expect(auditEntries[0]?.action).toBe("ACTIVATE");
     });
 
@@ -774,8 +791,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         tenantId,
         "qn-http-publish-ok",
       );
+      // Echter User() noetig: publishDraftVersion() schreibt AuditLog.actorUserId
+      // mit FK auf User -- ein session.userId ohne existierende User-Zeile
+      // verletzt die Fremdschluessel-Constraint (CI #41 Root Cause 2).
+      const actorUserId = await createUser(tenantId, "http-publish-ok-actor");
       const token = createSessionToken({
         ...baseSessionPayload(tenantId),
+        userId: actorUserId,
         configPermissions: [
           "config.questions.view",
           "config.questions.edit",

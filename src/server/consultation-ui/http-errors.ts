@@ -126,6 +126,20 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
     );
   }
 
+  // Question-Management-API (Phase 8 AP4): 422 -- validateQuestionnaireVersion()
+  // (seit Phase 3A, wiederverwendet fuer validate()/publish()) hat strukturelle
+  // Verstoesse gefunden. `issues` enthaelt ALLE gefundenen Verstoesse, nicht
+  // nur den ersten (siehe questionnaire/errors.ts). MUSS vor dem generischen
+  // `QuestionEngineError` -> 400-Fallback direkt darunter stehen, da
+  // `QuestionnaireVersionInvalidError` von `QuestionEngineError` erbt und
+  // sonst dort abgefangen wuerde (CI #41 Root Cause 1 -- 400 statt 422).
+  if (error instanceof QuestionnaireVersionInvalidError) {
+    return NextResponse.json(
+      { error: error.name, message: error.message, issues: error.issues },
+      { status: 422 },
+    );
+  }
+
   // Fragen-Engine: alle uebrigen bekannten Fehler -> 400
   if (error instanceof QuestionEngineError) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 400 });
@@ -241,17 +255,6 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
 
   // Question-Management-API: 422 -- fachlich ungueltige Eingabe.
   if (error instanceof InvalidQuestionInputError) {
-    return NextResponse.json(
-      { error: error.name, message: error.message, issues: error.issues },
-      { status: 422 },
-    );
-  }
-
-  // Question-Management-API (Phase 8 AP4): 422 -- validateQuestionnaireVersion()
-  // (seit Phase 3A, wiederverwendet fuer validate()/publish()) hat strukturelle
-  // Verstoesse gefunden. `issues` enthaelt ALLE gefundenen Verstoesse, nicht
-  // nur den ersten (siehe questionnaire/errors.ts).
-  if (error instanceof QuestionnaireVersionInvalidError) {
     return NextResponse.json(
       { error: error.name, message: error.message, issues: error.issues },
       { status: 422 },
