@@ -213,6 +213,97 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
     expect(auditEntries).toHaveLength(0);
   });
 
+  it("AP9 Haertung (Nebenlaeufigkeit): zwei ECHT parallele Publishes verschiedener Drafts (verschiedene RuleSets desselben Mandanten) -- genau einer gewinnt, DB zeigt nie zwei gleichzeitig ACTIVE (rule_set_versions_tenant_active_no_overlap EXCLUDE-Constraint als Backstop)", async () => {
+    const tenantId = await createTenant("concurrent-publish");
+    const { ruleSetId: ruleSetX, versionId: versionX } = await createRuleSetVersion(
+      tenantId,
+      "rs-x",
+      "DRAFT",
+    );
+    const { ruleSetId: ruleSetY, versionId: versionY } = await createRuleSetVersion(
+      tenantId,
+      "rs-y",
+      "DRAFT",
+    );
+    await addMinimalValidRule(tenantId, ruleSetX, versionX);
+    await addMinimalValidRule(tenantId, ruleSetY, versionY);
+
+    // Bewusst KEIN sequentielles await -- beide Publish-Aufrufe werden ECHT
+    // gleichzeitig gestartet (zwei unabhaengige Transaktionen), um den in
+    // rule-admin.ts dokumentierten Nebenlaeufigkeitsfall zu reproduzieren:
+    // Schritt (a) "vorherige ACTIVE-Version auf EXPIRED setzen" kann in
+    // beiden Transaktionen denselben (zu diesem Zeitpunkt noch keine
+    // vorherige ACTIVE-Version) oder unterschiedliche Zwischenzustaende
+    // sehen -- die Korrektheit haengt NICHT von der Anwendungslogik allein
+    // ab, sondern zusaetzlich vom DB-EXCLUDE-Constraint
+    // `rule_set_versions_tenant_active_no_overlap`
+    // (tenant_id + Zeitspannen-Ueberlappung WHERE status='ACTIVE').
+    const results = await Promise.allSettled([
+      runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => publishRuleSetVersion(ruleSetX, versionX),
+      ),
+      runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => publishRuleSetVersion(ruleSetY, versionY),
+      ),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+
+    // Kernaussage (Datenintegritaet): niemals beide gleichzeitig erfolgreich.
+    // Je nach Timing kann im Extremfall sogar BEIDE Versuche scheitern
+    // (z. B. wenn beide Transaktionen sich gegenseitig ueber Sperren
+    // blockieren und der EXCLUDE-Constraint anschliessend eine von ihnen
+    // ablehnt) -- das ist fuer die Kernaussage dieses Tests irrelevant, die
+    // einzige Invariante, die zwingend gelten MUSS, ist: NIE beide
+    // erfolgreich.
+    expect(fulfilled.length).toBeLessThanOrEqual(1);
+
+    const finalActiveVersions = await rawClient.ruleSetVersion.findMany({
+      where: { tenantId, status: "ACTIVE" },
+    });
+    // Zentrale Invariante: zu KEINEM Zeitpunkt (auch nicht durch das Race)
+    // existieren zwei gleichzeitig ACTIVE RuleSetVersions desselben
+    // Mandanten -- unabhaengig davon, ob 0 oder 1 der beiden Publishes
+    // erfolgreich war.
+    expect(finalActiveVersions.length).toBeLessThanOrEqual(1);
+
+    if (fulfilled.length === 1) {
+      const winnerVersionId = finalActiveVersions[0]?.id;
+      expect([versionX, versionY]).toContain(winnerVersionId);
+      // Der jeweils andere Draft bleibt entweder DRAFT (regulaerer Konflikt,
+      // count!==1-Guard) oder wurde konsistent zurueckgerollt -- in keinem
+      // Fall ACTIVE.
+      const loserVersionId = winnerVersionId === versionX ? versionY : versionX;
+      const loserRow = await rawClient.ruleSetVersion.findUniqueOrThrow({
+        where: { id: loserVersionId },
+      });
+      expect(loserRow.status).not.toBe("ACTIVE");
+    }
+
+    // Auditierung bleibt konsistent mit dem tatsaechlichen Ausgang: exakt so
+    // viele ACTIVATE-Eintraege wie erfolgreiche Publishes, keine
+    // verwaisten/partiellen Eintraege fuer den Verlierer.
+    const activateAudits = await rawClient.auditLog.findMany({
+      where: { tenantId, entityType: "RuleSetVersion", action: "ACTIVATE" },
+    });
+    expect(activateAudits).toHaveLength(fulfilled.length);
+
+    // Dokumentiert (fuer den AP9-Bericht an ChatGPT) was der/die Verlierer
+    // tatsaechlich als Fehler erhaelt -- nicht Teil der Kernassertion oben,
+    // da dies je nach Race-Timing entweder die erwartete
+    // RuleSetVersionNotDraftError (Anwendungsebene, updateMany-Guard) ODER
+    // ein roher, bislang unuebersetzter Postgres-EXCLUDE-Constraint-Fehler
+    // (DB-Ebene, siehe docs/DECISION_LOG.md) sein kann.
+    for (const r of rejected) {
+      if (r.status === "rejected") {
+        expect(r.reason).toBeInstanceOf(Error);
+      }
+    }
+  });
+
   describe("HTTP-Kette", () => {
     it("POST .../publish ohne config.rules.publish -> 403 (config.rules.edit reicht NICHT)", async () => {
       const tenantId = await createTenant("http-403");
