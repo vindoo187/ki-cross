@@ -11,6 +11,7 @@ const MIGRATIONS = [
   "prisma/migrations/20260817170000_deal_unique_consultation_session/migration.sql",
   "prisma/migrations/20260817220000_analytics_kpi_indexes/migration.sql",
   "prisma/migrations/20260818090000_user_password_hash/migration.sql",
+  "prisma/migrations/20260818140000_audit_action_delete/migration.sql",
 ];
 
 const db = new PGlite({ extensions: { btree_gist } });
@@ -408,13 +409,40 @@ console.log(
   "OK: bestehende Nutzer (userId oben) blieben mit password_hash = NULL funktionsfaehig.",
 );
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 8 AP7: neuer AuditAction-Wert DELETE (siehe
+// prisma/migrations/20260818140000_audit_action_delete) laesst sich in
+// audit_logs verwenden, und audit_logs bleibt append-only (bereits seit
+// Phase 2B per Trigger durchgesetzt, siehe oben) -- ein nachtraeglicher
+// UPDATE/DELETE eines Audit-Eintrags muss weiterhin abgelehnt werden.
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-8-AP7-AuditAction.DELETE ==");
+
+const deleteAuditId = uuid();
+await db.query(
+  `INSERT INTO audit_logs (id, tenant_id, actor_user_id, action, entity_type, entity_id, metadata) VALUES ($1,$2,$3,'DELETE','Question',$4,'{"reason":"removed_from_draft"}')`,
+  [deleteAuditId, tenantId, adminUserId, uuid()],
+);
+console.log("OK: AuditLog-Eintrag mit action=DELETE erfolgreich angelegt.");
+
+try {
+  await db.query(`UPDATE audit_logs SET action = 'CREATE' WHERE id = $1`, [deleteAuditId]);
+  console.error(
+    "FEHLER: UPDATE auf audit_logs (action=DELETE-Eintrag) haette abgelehnt werden muessen!",
+  );
+  failures += 1;
+} catch (err) {
+  console.log(`OK (erwartet abgelehnt) append-only: UPDATE auf audit_logs: ${err.message}`);
+}
+
 if (failures > 0) {
   console.error(`\n${failures} Smoke-Test-Pruefung(en) FEHLGESCHLAGEN.`);
   process.exit(1);
 }
 
 console.log(
-  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1) ERFOLGREICH.",
+  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7) ERFOLGREICH.",
 );
 
 await db.close();

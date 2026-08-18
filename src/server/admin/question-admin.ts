@@ -404,6 +404,7 @@ export async function createDraftVersion(
 ): Promise<QuestionnaireVersionDetail> {
   await requireQuestionnaire(db, questionnaireId);
   const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
 
   let sourceQuestions: QuestionRow[] = [];
   if (input.copyFromVersionId) {
@@ -427,6 +428,25 @@ export async function createDraftVersion(
 
     await copySourceQuestionsIntoVersion(tx, tenantId, sourceQuestions, newVersion.id, now);
 
+    // Phase 8 AP7 (ChatGPT-Auflage 2026-08-18): jeder Config-Write muss
+    // auditiert sein, im selben Transaktionsschritt wie die Mutation --
+    // schlaegt die Transaktion spaeter fehl, wird auch dieser Eintrag
+    // zurueckgerollt.
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "CREATE",
+        entityType: "QuestionnaireVersion",
+        entityId: newVersion.id,
+        metadata: {
+          questionnaireId,
+          copyFromVersionId: input.copyFromVersionId ?? null,
+          questionCount: sourceQuestions.length,
+        },
+      },
+    });
+
     return newVersion.id;
   });
 
@@ -445,6 +465,7 @@ export async function addQuestionToDraft(
   await requireQuestionnaire(db, questionnaireId);
   await requireDraftVersion(db, questionnaireId, versionId);
   const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
 
   const questionId = await db.$transaction(async (tx) => {
     const question = await tx.question.create({
@@ -508,6 +529,23 @@ export async function addQuestionToDraft(
       });
     }
 
+    // Phase 8 AP7 (ChatGPT-Auflage 2026-08-18): Audit im selben
+    // Transaktionsschritt wie die Mutation.
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "CREATE",
+        entityType: "Question",
+        entityId: question.id,
+        metadata: {
+          questionnaireId,
+          questionnaireVersionId: versionId,
+          key: input.key,
+        },
+      },
+    });
+
     return question.id;
   });
 
@@ -541,6 +579,7 @@ export async function updateQuestionInDraft(
   await requireQuestionnaire(db, questionnaireId);
   await requireDraftVersion(db, questionnaireId, versionId);
   const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
 
   const question = await db.question.findUnique({
     where: { id: questionId },
@@ -622,6 +661,25 @@ export async function updateQuestionInDraft(
         });
       }
     }
+
+    // Phase 8 AP7 (ChatGPT-Auflage 2026-08-18): Audit im selben
+    // Transaktionsschritt wie die Mutation. Metadata enthaelt bewusst nur
+    // die NAMEN der geaenderten Felder, keine vollstaendige Kopie der neuen
+    // Inhalte (analog zur DELETE-Auflage fuer removeQuestionFromDraft()).
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "UPDATE",
+        entityType: "Question",
+        entityId: questionId,
+        metadata: {
+          questionnaireId,
+          questionnaireVersionId: versionId,
+          changedFields: Object.keys(patch),
+        },
+      },
+    });
   });
 
   const row = (await db.question.findUnique({
@@ -651,11 +709,14 @@ export async function removeQuestionFromDraft(
 ): Promise<void> {
   await requireQuestionnaire(db, questionnaireId);
   await requireDraftVersion(db, questionnaireId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
 
   const question = await db.question.findUnique({ where: { id: questionId } });
   if (!question || question.questionnaireVersionId !== versionId) {
     throw new AdminQuestionNotFoundError(questionId, versionId);
   }
+  const questionKey = question.key;
 
   await db.$transaction(async (tx) => {
     // VisibilityConditions, die AUF diese Frage zeigen (aus anderen Fragen
@@ -669,6 +730,28 @@ export async function removeQuestionFromDraft(
     }
     await tx.questionVersion.deleteMany({ where: { questionId } });
     await tx.question.delete({ where: { id: questionId } });
+
+    // Phase 8 AP7 (ChatGPT-Auflage 2026-08-18, "Option A"): eigener
+    // AuditAction-Wert DELETE statt Zweckentfremdung von DEACTIVATE/
+    // DELETION_REQUESTED. Metadata macht explizit kenntlich, dass es sich
+    // um das Entfernen einer Frage aus einem DRAFT handelt (keine
+    // vollstaendige Kopie des Frageinhalts).
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "DELETE",
+        entityType: "Question",
+        entityId: questionId,
+        metadata: {
+          questionnaireId,
+          questionnaireVersionId: versionId,
+          draftVersionId: versionId,
+          key: questionKey,
+          reason: "removed_from_draft",
+        },
+      },
+    });
   });
 }
 

@@ -202,6 +202,11 @@ enum AuditAction {
   DEACTIVATE
   ROLLBACK
   DELETION_REQUESTED
+  // Phase 8 AP7: entfernen einer Frage aus einem DRAFT (removeQuestionFromDraft()).
+  // Bewusst eigener Wert statt Zweckentfremdung von DEACTIVATE (Gegenstueck zu
+  // ACTIVATE, nicht "loeschen") oder DELETION_REQUESTED (DSGVO-Loeschantrag) --
+  // ChatGPT-Entscheidung 2026-08-18 ("Option A").
+  DELETE
 }
 
 enum AnalyticsEventType {

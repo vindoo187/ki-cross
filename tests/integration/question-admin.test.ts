@@ -284,8 +284,9 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
     it("createDraftVersion() ohne copyFromVersionId legt eine leere DRAFT-Version an", async () => {
       const tenantId = await createTenant("svc-create-empty");
       const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const actorUserId = await createUser(tenantId, "svc-create-empty-actor");
       const version = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => createDraftVersion(questionnaireId, { label: "v2" }),
       );
       expect(version.status).toBe("DRAFT");
@@ -298,8 +299,9 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         tenantId,
         "qn",
       );
+      const actorUserId = await createUser(tenantId, "svc-create-copy-actor");
       const version = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           createDraftVersion(questionnaireId, { label: "v2", copyFromVersionId: activeVersionId }),
       );
@@ -330,8 +332,9 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         tenantId,
         "qn",
       );
+      const actorUserId = await createUser(tenantId, "svc-add-actor");
       const question = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           addQuestionToDraft(questionnaireId, draftVersionId, {
             key: "neue-frage",
@@ -376,8 +379,9 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         tenantId,
         "qn",
       );
+      const actorUserId = await createUser(tenantId, "svc-update-actor");
       const question = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           addQuestionToDraft(questionnaireId, draftVersionId, {
             key: "q",
@@ -390,7 +394,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
           }),
       );
       const updated = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           updateQuestionInDraft(questionnaireId, draftVersionId, question.id, {
             label: "Neu",
@@ -427,8 +431,9 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         tenantId,
         "qn",
       );
+      const actorUserId = await createUser(tenantId, "svc-remove-actor");
       const question = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           addQuestionToDraft(questionnaireId, draftVersionId, {
             key: "q",
@@ -441,7 +446,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
           }),
       );
       await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => removeQuestionFromDraft(questionnaireId, draftVersionId, question.id),
       );
       const detail = await runWithTenantContext(
@@ -525,8 +530,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
     it("POST .../versions mit config.questions.edit -> 201, neue DRAFT-Version", async () => {
       const tenantId = await createTenant("http-edit-ok");
       const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      // Echter User() noetig: createDraftVersion() schreibt seit AP7 AuditLog.actorUserId
+      // mit FK auf User -- ein session.userId ohne existierende User-Zeile
+      // verletzt die Fremdschluessel-Constraint (analog CI #41 Root Cause 2).
+      const actorUserId = await createUser(tenantId, "http-edit-ok-actor");
       const token = createSessionToken({
         ...baseSessionPayload(tenantId),
+        userId: actorUserId,
         configPermissions: ["config.questions.view", "config.questions.edit"],
       });
       const response = await createDraftVersionRoute(
@@ -619,8 +629,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         tenantId,
         "qn",
       );
+      // Echter User() noetig: addQuestionToDraft()/removeQuestionFromDraft()
+      // schreiben seit AP7 AuditLog.actorUserId mit FK auf User.
+      const actorUserId = await createUser(tenantId, "http-delete-actor");
       const editorToken = createSessionToken({
         ...baseSessionPayload(tenantId),
+        userId: actorUserId,
         configPermissions: ["config.questions.view", "config.questions.edit"],
       });
       const created = await addQuestionRoute(
@@ -666,8 +680,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
     it("config_editor (view+edit, kein publish) darf mutieren -- publish-Berechtigung ist nicht Voraussetzung fuer AP3-Routen", async () => {
       const tenantId = await createTenant("http-editor-role");
       const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      // Echter User() noetig: createDraftVersion() schreibt seit AP7 AuditLog.actorUserId.
+      const actorUserId = await createUser(tenantId, "http-editor-role-actor");
       const editorToken = createSessionToken({
         ...baseSessionPayload(tenantId),
+        userId: actorUserId,
         configPermissions: ["config.questions.view", "config.questions.edit"],
       });
       const response = await createDraftVersionRoute(
@@ -693,8 +710,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         tenantId,
         key,
       );
+      // Echter User() noetig: addQuestionToDraft() schreibt seit AP7
+      // AuditLog.actorUserId mit FK auf User.
+      const actorUserId = await createUser(tenantId, `${key}-fixture-actor`);
       await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           addQuestionToDraft(questionnaireId, draftVersionId, {
             key: "q1",
@@ -745,13 +765,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
       // Entwurf DESSELBEN Questionnaire als Kopie der ACTIVE-Version (enthaelt
       // dadurch bereits eine gueltige Frage -- validateQuestionnaireVersion()
       // besteht ohne weitere Vorbereitung).
+      const actorUserId = await createUser(tenantId, "svc-publish-ok-actor");
       const copiedDraft = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           createDraftVersion(questionnaireId, { label: "v2", copyFromVersionId: activeVersionId }),
       );
 
-      const actorUserId = await createUser(tenantId, "svc-publish-ok-actor");
       const result = await runWithTenantContext(
         { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => publishDraftVersion(questionnaireId, copiedDraft.id),
@@ -907,8 +927,9 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         tenantId,
         "qn",
       );
+      const actorUserId = await createUser(tenantId, "svc-history-actor");
       await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => createDraftVersion(questionnaireId, { label: "v2-draft" }),
       );
       const history = await runWithTenantContext(
@@ -966,11 +987,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
         "qn",
       );
       // Zweite Version veroeffentlichen -> v1 wird EXPIRED.
+      const actorUserId = await createUser(tenantId, "svc-rollback-expired-actor");
       const v2Draft = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => createDraftVersion(questionnaireId, { label: "v2", copyFromVersionId: v1Id }),
       );
-      const actorUserId = await createUser(tenantId, "svc-rollback-expired-actor");
       await runWithTenantContext(
         { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => publishDraftVersion(questionnaireId, v2Draft.id),
@@ -1188,6 +1209,179 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
           () => rollbackToVersion(qA, vA),
         ),
       ).rejects.toThrow(QuestionnaireNotFoundError);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // 4. AP7 -- Audit-Vollstaendigkeit (siehe PHASE_8_IMPLEMENTATION_PLAN.md
+  //    Abschnitt 9). ChatGPT-Befund: createDraftVersion()/addQuestionToDraft()/
+  //    updateQuestionInDraft()/removeQuestionFromDraft() schrieben bislang
+  //    KEIN AuditLog (im Gegensatz zu publishDraftVersion()/rollbackToVersion(),
+  //    bereits durch AP4/AP5-Tests abgedeckt). Diese Suite prueft fuer jede
+  //    der vier Funktionen: genau EIN erwarteter Audit-Eintrag mit korrekter
+  //    action/entityType/entityId/actorUserId, sowie Atomaritaet (schlaegt
+  //    ein spaeterer Schritt DERSELBEN Transaktion fehl, existiert auch der
+  //    Audit-Eintrag nicht -- die Postgres-Transaktion rollt beides gemeinsam
+  //    zurueck, da tx.auditLog.create() als letzter Schritt in derselben
+  //    Transaktion wie die fachliche Mutation liegt).
+  // -------------------------------------------------------------------
+  describe("4. AP7: Audit-Vollstaendigkeit (Draft-CRUD)", () => {
+    it("createDraftVersion() schreibt genau 1 AuditLog(CREATE, QuestionnaireVersion)", async () => {
+      const tenantId = await createTenant("audit-create-version");
+      const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const actorUserId = await createUser(tenantId, "audit-create-version-actor");
+      const version = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => createDraftVersion(questionnaireId, { label: "v2" }),
+      );
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "QuestionnaireVersion", entityId: version.id },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.action).toBe("CREATE");
+      expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
+      const metadata = auditEntries[0]?.metadata as Record<string, unknown>;
+      expect(metadata.questionnaireId).toBe(questionnaireId);
+    });
+
+    it("addQuestionToDraft() schreibt genau 1 AuditLog(CREATE, Question)", async () => {
+      const tenantId = await createTenant("audit-create-question");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const actorUserId = await createUser(tenantId, "audit-create-question-actor");
+      const question = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          addQuestionToDraft(questionnaireId, draftVersionId, {
+            key: "neue-frage",
+            sortOrder: 1,
+            label: "Neue Frage",
+            answerType: "BOOLEAN",
+            isRequired: false,
+            answerOptions: [],
+            visibilityConditions: [],
+          }),
+      );
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "Question", entityId: question.id },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.action).toBe("CREATE");
+      expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
+    });
+
+    it("updateQuestionInDraft() schreibt genau 1 AuditLog(UPDATE, Question) mit geaenderten Feldern in metadata", async () => {
+      const tenantId = await createTenant("audit-update-question");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const actorUserId = await createUser(tenantId, "audit-update-question-actor");
+      const question = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          addQuestionToDraft(questionnaireId, draftVersionId, {
+            key: "q",
+            sortOrder: 1,
+            label: "Alt",
+            answerType: "BOOLEAN",
+            isRequired: false,
+            answerOptions: [],
+            visibilityConditions: [],
+          }),
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => updateQuestionInDraft(questionnaireId, draftVersionId, question.id, { label: "Neu" }),
+      );
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "Question", entityId: question.id, action: "UPDATE" },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
+      const metadata = auditEntries[0]?.metadata as Record<string, unknown>;
+      expect(metadata.changedFields).toEqual(["label"]);
+    });
+
+    it("removeQuestionFromDraft() schreibt genau 1 AuditLog(DELETE, Question) -- neuer AuditAction-Wert (ChatGPT-Entscheidung 'Option A')", async () => {
+      const tenantId = await createTenant("audit-delete-question");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const actorUserId = await createUser(tenantId, "audit-delete-question-actor");
+      const question = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          addQuestionToDraft(questionnaireId, draftVersionId, {
+            key: "q",
+            sortOrder: 1,
+            label: "Frage",
+            answerType: "BOOLEAN",
+            isRequired: false,
+            answerOptions: [],
+            visibilityConditions: [],
+          }),
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => removeQuestionFromDraft(questionnaireId, draftVersionId, question.id),
+      );
+      // Question-Zeile existiert nicht mehr, aber der Audit-Eintrag bleibt
+      // (append-only, kein FK von AuditLog.entityId auf Question -- siehe
+      // Modulkommentar audit_logs_append_only-Trigger, Phase 2B).
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "Question", entityId: question.id, action: "DELETE" },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
+      const metadata = auditEntries[0]?.metadata as Record<string, unknown>;
+      expect(metadata.key).toBe("q");
+      expect(metadata.reason).toBe("removed_from_draft");
+    });
+
+    it("Atomaritaet: addQuestionToDraft() mit ungueltiger VisibilityCondition (unbekannte targetQuestionId) -> FK-Fehler, KEINE Frage angelegt, KEIN Audit-Eintrag", async () => {
+      const tenantId = await createTenant("audit-atomic-fk");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const actorUserId = await createUser(tenantId, "audit-atomic-fk-actor");
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            addQuestionToDraft(questionnaireId, draftVersionId, {
+              key: "kaputte-frage",
+              sortOrder: 1,
+              label: "Kaputte Frage",
+              answerType: "BOOLEAN",
+              isRequired: false,
+              answerOptions: [],
+              visibilityConditions: [
+                {
+                  targetQuestionId: randomUUID(),
+                  operator: "EQUALS",
+                  comparisonValue: "true",
+                  combinator: "AND",
+                },
+              ],
+            }),
+        ),
+      ).rejects.toThrow();
+
+      // Weder die Frage noch ein Audit-Eintrag duerfen die fehlgeschlagene
+      // Transaktion ueberleben -- beides liegt in derselben tx.$transaction().
+      const orphanedQuestions = await rawClient.question.findMany({
+        where: { tenantId, questionnaireVersionId: draftVersionId, key: "kaputte-frage" },
+      });
+      expect(orphanedQuestions).toHaveLength(0);
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "Question", action: "CREATE" },
+      });
+      expect(auditEntries).toHaveLength(0);
     });
   });
 });

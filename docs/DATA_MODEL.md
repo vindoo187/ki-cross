@@ -193,7 +193,7 @@ BaselineMeasurement       -- Referenzwerte vor Rollout, fuer Vorher/Nachher-Verg
 ```
 AuditLog
  ├─ tenant_id, actor_user_id (optional)
- ├─ entity_type, entity_id, action (CREATE/UPDATE/ACTIVATE/DEACTIVATE/ROLLBACK/DELETION_REQUESTED)
+ ├─ entity_type, entity_id, action (CREATE/UPDATE/ACTIVATE/DEACTIVATE/ROLLBACK/DELETION_REQUESTED/DELETE)
  ├─ metadata (strukturiertes JSON, ohne Kontaktdaten/Freitext – technisch per Zod erzwungen, siehe DECISION_LOG.md)
  └─ occurred_at
 
