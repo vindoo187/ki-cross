@@ -93,6 +93,15 @@ async function seedGlobalCatalog() {
     "config.questions.view",
     "config.questions.edit",
     "config.questions.publish",
+    // Phase 9 AP1 (ChatGPT-GO 2026-08-18): Configuration-RBAC fuer den
+    // Regel-Editor, siehe src/server/authz/config-permissions.ts
+    // (CONFIG_RULES_PERMISSION_KEYS). Additive Erweiterung derselben
+    // config_editor/config_publisher-Rollen wie bei den Fragen-Keys oben
+    // (keine neuen Rollen, siehe PHASE_9_IMPLEMENTATION_PLAN.md
+    // Abschnitt 2.1).
+    "config.rules.view",
+    "config.rules.edit",
+    "config.rules.publish",
   ];
   const permissions = await Promise.all(
     permissionKeys.map((key) =>
@@ -416,7 +425,8 @@ async function seedTenant(
   });
 
   // config_editor-Testnutzer: darf Entwuerfe erstellen/aendern, aber NICHT
-  // veroeffentlichen (config.questions.view + .edit, kein .publish).
+  // veroeffentlichen (config.questions.view+.edit UND seit Phase 9 AP1
+  // config.rules.view+.edit, kein .publish in beiden Bereichen).
   const configEditorUser = await prisma.user.upsert({
     where: {
       tenantId_email: {
@@ -456,7 +466,8 @@ async function seedTenant(
     .catch(() => undefined);
 
   // config_publisher-Testnutzer: darf zusaetzlich veroeffentlichen
-  // (config.questions.view + .edit + .publish).
+  // (alle sechs config.questions.*/config.rules.*-Permissions, siehe
+  // ALL_CONFIG_PERMISSION_KEYS).
   const configPublisherUser = await prisma.user.upsert({
     where: {
       tenantId_email: {

@@ -3,7 +3,11 @@ import {
   MANAGEMENT_ANALYTICS_PERMISSION_KEYS,
   permissionKeysForSeedRole,
 } from "@/server/authz/seed-role-permissions";
-import { CONFIG_QUESTIONS_PERMISSION_KEYS } from "@/server/authz/config-permissions";
+import {
+  ALL_CONFIG_PERMISSION_KEYS,
+  CONFIG_QUESTIONS_PERMISSION_KEYS,
+  CONFIG_RULES_PERMISSION_KEYS,
+} from "@/server/authz/config-permissions";
 
 /**
  * Regressionstest fuer den Phase-7-AP1-Bugfix (ChatGPT-GO 2026-08-17):
@@ -19,6 +23,10 @@ import { CONFIG_QUESTIONS_PERMISSION_KEYS } from "@/server/authz/config-permissi
  * config.questions.*-Permissions NICHT automatisch ueber die "alle
  * Permissions AUSSER ..."-Regel erhalten (derselbe Fehlertyp wie der
  * urspruengliche Phase-7-AP1-Bug).
+ *
+ * Weiter erweitert um Phase 9 AP1 (ChatGPT-GO 2026-08-18): dieselbe
+ * Absicherung fuer die neuen `config.rules.*`-Keys, additiv auf denselben
+ * config_editor/config_publisher-Rollen (keine neuen Rollen).
  */
 describe("permissionKeysForSeedRole", () => {
   const allPermissionKeys = [
@@ -36,6 +44,9 @@ describe("permissionKeysForSeedRole", () => {
     "config.questions.view",
     "config.questions.edit",
     "config.questions.publish",
+    "config.rules.view",
+    "config.rules.edit",
+    "config.rules.publish",
   ];
 
   it("sales_employee erhaelt KEINE der drei Management-Analytics-Permissions", () => {
@@ -52,11 +63,18 @@ describe("permissionKeysForSeedRole", () => {
     }
   });
 
+  it("sales_employee erhaelt KEINE der drei config.rules.*-Permissions (Phase 9 AP1)", () => {
+    const granted = permissionKeysForSeedRole("sales_employee", allPermissionKeys);
+    for (const rulesKey of CONFIG_RULES_PERMISSION_KEYS) {
+      expect(granted).not.toContain(rulesKey);
+    }
+  });
+
   it("sales_employee erhaelt weiterhin alle anderen Permissions", () => {
     const granted = permissionKeysForSeedRole("sales_employee", allPermissionKeys);
     const excludedKeys: readonly string[] = [
       ...MANAGEMENT_ANALYTICS_PERMISSION_KEYS,
-      ...CONFIG_QUESTIONS_PERMISSION_KEYS,
+      ...ALL_CONFIG_PERMISSION_KEYS,
     ];
     const expectedKeys = allPermissionKeys.filter((key) => !excludedKeys.includes(key));
     expect(granted.sort()).toEqual(expectedKeys.sort());
@@ -82,13 +100,34 @@ describe("permissionKeysForSeedRole", () => {
 
   it("config_editor erhaelt genau config.questions.view und .edit, NICHT .publish", () => {
     const granted = permissionKeysForSeedRole("config_editor", allPermissionKeys);
-    expect(granted.sort()).toEqual(["config.questions.edit", "config.questions.view"]);
+    expect(granted).toContain("config.questions.edit");
+    expect(granted).toContain("config.questions.view");
     expect(granted).not.toContain("config.questions.publish");
+  });
+
+  it("config_editor erhaelt zusaetzlich genau config.rules.view und .edit, NICHT .publish (Phase 9 AP1)", () => {
+    const granted = permissionKeysForSeedRole("config_editor", allPermissionKeys);
+    expect(granted.sort()).toEqual(
+      [
+        "config.questions.edit",
+        "config.questions.view",
+        "config.rules.edit",
+        "config.rules.view",
+      ].sort(),
+    );
+    expect(granted).not.toContain("config.rules.publish");
   });
 
   it("config_publisher erhaelt alle drei config.questions.*-Permissions", () => {
     const granted = permissionKeysForSeedRole("config_publisher", allPermissionKeys);
-    expect(granted.sort()).toEqual([...CONFIG_QUESTIONS_PERMISSION_KEYS].sort());
+    for (const key of CONFIG_QUESTIONS_PERMISSION_KEYS) {
+      expect(granted).toContain(key);
+    }
+  });
+
+  it("config_publisher erhaelt alle sechs config.questions.*/config.rules.*-Permissions (Phase 9 AP1)", () => {
+    const granted = permissionKeysForSeedRole("config_publisher", allPermissionKeys);
+    expect(granted.sort()).toEqual([...ALL_CONFIG_PERMISSION_KEYS].sort());
   });
 
   it("liefert eine leere Liste, falls die relevante Permission im Katalog fehlt (kein Absturz)", () => {
@@ -98,7 +137,7 @@ describe("permissionKeysForSeedRole", () => {
 
   it("config_editor liefert eine leere Liste, falls die relevanten Permissions im Katalog fehlen", () => {
     const reducedKeys = allPermissionKeys.filter(
-      (key) => !(CONFIG_QUESTIONS_PERMISSION_KEYS as readonly string[]).includes(key),
+      (key) => !(ALL_CONFIG_PERMISSION_KEYS as readonly string[]).includes(key),
     );
     expect(permissionKeysForSeedRole("config_editor", reducedKeys)).toEqual([]);
   });

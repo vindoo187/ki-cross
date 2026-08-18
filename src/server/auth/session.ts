@@ -13,10 +13,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import type { ManagementScope, ManagementScopeLevel } from "../authz/management-scope";
-import {
-  CONFIG_QUESTIONS_PERMISSION_KEYS,
-  type ConfigPermissionKey,
-} from "../authz/config-permissions";
+import { ALL_CONFIG_PERMISSION_KEYS, type ConfigPermissionKey } from "../authz/config-permissions";
 
 export const SESSION_COOKIE_NAME = "ki_cross_dev_session";
 
@@ -44,8 +41,8 @@ export interface SessionPayload {
   managementScope: ManagementScope | null;
   /**
    * Beim Login serverseitig aus den `RoleAssignment`-Zeilen aufgeloeste
-   * `config.questions.*`-Permissions (Phase 8 AP2), ausschliesslich aus
-   * TENANT-scoped Zuweisungen (siehe
+   * `config.questions.*`- UND (seit Phase 9 AP1) `config.rules.*`-
+   * Permissions, ausschliesslich aus TENANT-scoped Zuweisungen (siehe
    * `src/server/authz/config-permissions.ts::deriveConfigPermissions()`).
    * Getrennt von `managementScope` (eigene, unabhaengige RBAC-Architektur,
    * siehe PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 3.2). Leeres Array =
@@ -68,8 +65,7 @@ function isValidConfigPermissions(value: unknown): value is ConfigPermissionKey[
     Array.isArray(value) &&
     value.every(
       (key) =>
-        typeof key === "string" &&
-        (CONFIG_QUESTIONS_PERMISSION_KEYS as readonly string[]).includes(key),
+        typeof key === "string" && (ALL_CONFIG_PERMISSION_KEYS as readonly string[]).includes(key),
     )
   );
 }

@@ -1,4 +1,4 @@
-import { CONFIG_QUESTIONS_PERMISSION_KEYS } from "./config-permissions";
+import { ALL_CONFIG_PERMISSION_KEYS } from "./config-permissions";
 
 /**
  * Zentrale, reine (kein DB-Zugriff) Zuordnung: welche Permission-Keys
@@ -23,6 +23,14 @@ import { CONFIG_QUESTIONS_PERMISSION_KEYS } from "./config-permissions";
  * wuerde ein einfacher Verkaufsberater automatisch Config-Rechte bekommen,
  * sobald die Keys im globalen Katalog auftauchen -- derselbe Fehlertyp wie
  * der urspruengliche Phase-7-AP1-Bug, hier praeventiv vermieden.
+ *
+ * Phase 9 AP1 (ChatGPT-GO 2026-08-18) erweitert config_editor/
+ * config_publisher additiv um die neuen `config.rules.*`-Keys (keine neuen
+ * Rollen, siehe PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 2.1):
+ * config_editor -> zusaetzlich config.rules.view+edit, config_publisher ->
+ * zusaetzlich config.rules.view+edit+publish. Dieselbe
+ * `sales_employee`-Ausschlussregel gilt fuer `config.rules.*` genauso wie
+ * fuer `config.questions.*`.
  */
 
 export const SEED_ROLE_KEYS = [
@@ -56,13 +64,13 @@ export function permissionKeysForSeedRole(
   switch (roleKey) {
     case "sales_employee":
       // Alle Permissions AUSSER den drei Management-Analytics-Rechten UND
-      // den drei config.questions.*-Rechten -- ein normaler
+      // allen config.questions.*/config.rules.*-Rechten -- ein normaler
       // Verkaufsberater darf weder die Management-Sicht noch die
-      // Fragen-Administration sehen.
+      // Fragen-/Regel-Administration sehen.
       return allPermissionKeys.filter(
         (key) =>
           !(MANAGEMENT_ANALYTICS_PERMISSION_KEYS as readonly string[]).includes(key) &&
-          !(CONFIG_QUESTIONS_PERMISSION_KEYS as readonly string[]).includes(key),
+          !(ALL_CONFIG_PERMISSION_KEYS as readonly string[]).includes(key),
       );
     case "store_admin":
       return allPermissionKeys.filter((key) => key === "analytics.view_store");
@@ -72,11 +80,15 @@ export function permissionKeysForSeedRole(
       return allPermissionKeys.filter((key) => key === "analytics.view_tenant");
     case "config_editor":
       return allPermissionKeys.filter(
-        (key) => key === "config.questions.view" || key === "config.questions.edit",
+        (key) =>
+          key === "config.questions.view" ||
+          key === "config.questions.edit" ||
+          key === "config.rules.view" ||
+          key === "config.rules.edit",
       );
     case "config_publisher":
       return allPermissionKeys.filter((key) =>
-        (CONFIG_QUESTIONS_PERMISSION_KEYS as readonly string[]).includes(key),
+        (ALL_CONFIG_PERMISSION_KEYS as readonly string[]).includes(key),
       );
     default: {
       const exhaustiveCheck: never = roleKey;
