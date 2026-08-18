@@ -49,11 +49,23 @@ import { db } from "../db/client";
 import { getTenantContext, getTenantId } from "../tenant/context";
 import type { ScopedPrismaClient } from "../tenant/scoped-client";
 import {
+  AdminRuleNotFoundError,
   CopySourceRuleSetVersionNotFoundError,
   RuleSetNotFoundError,
+  RuleSetVersionNotDraftError,
   RuleSetVersionNotFoundError,
 } from "./rule-admin-errors";
-import type { CreateDraftRuleSetVersionInput } from "./rule-schemas";
+import type {
+  CreateCrossSellingRuleInput,
+  CreateDraftRuleSetVersionInput,
+  CreateEligibilityRuleInput,
+  CreateExclusionRuleInput,
+  CreatePrioritizationRuleInput,
+  UpdateCrossSellingRuleInput,
+  UpdateEligibilityRuleInput,
+  UpdateExclusionRuleInput,
+  UpdatePrioritizationRuleInput,
+} from "./rule-schemas";
 
 type ScopedTransactionClient = Parameters<Parameters<ScopedPrismaClient["$transaction"]>[0]>[0];
 type QueryClient = ScopedTransactionClient;
@@ -177,6 +189,23 @@ async function requireRuleSetVersion(client: QueryClient, ruleSetId: string, ver
   const version = await client.ruleSetVersion.findUnique({ where: { id: versionId } });
   if (!version || version.ruleSetId !== ruleSetId) {
     throw new RuleSetVersionNotFoundError(ruleSetId, versionId);
+  }
+  return version;
+}
+
+/**
+ * Wie `requireRuleSetVersion()`, prueft zusaetzlich Status DRAFT (409 sonst)
+ * -- fuer alle mutierenden Rule-CRUD-Operationen (AP3, ChatGPT-Auflage
+ * 2026-08-18: "DRAFT-only fuer saemtliche Mutationen").
+ */
+async function requireDraftRuleSetVersion(
+  client: QueryClient,
+  ruleSetId: string,
+  versionId: string,
+) {
+  const version = await requireRuleSetVersion(client, ruleSetId, versionId);
+  if (version.status !== "DRAFT") {
+    throw new RuleSetVersionNotDraftError(versionId, version.status);
   }
   return version;
 }
@@ -532,4 +561,743 @@ export async function createDraftRuleSetVersion(
   });
 
   return getRuleSetVersionDetail(ruleSetId, newVersionId);
+}
+
+// ---------------------------------------------------------------------------
+// 4. Rule-CRUD fuer den flachen Condition-Baum (Phase 9 AP3, siehe
+//    PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 5). Vier fast identische
+//    Bloecke -- ein Block je Regeltyp, analog `addQuestionToDraft()`/
+//    `updateQuestionInDraft()`/`removeQuestionFromDraft()` aus Phase 8
+//    `question-admin.ts`. DRAFT-only (`requireDraftRuleSetVersion()`),
+//    Audit im selben Transaktionsschritt wie jede Mutation, Conditions
+//    werden bei Update vollstaendig ersetzt (delete+recreate, identisches
+//    Prinzip wie AnswerOptions/VisibilityConditions in Phase 8).
+// ---------------------------------------------------------------------------
+
+// --- 4.1 EligibilityRule ----------------------------------------------------
+
+export async function addEligibilityRuleToDraft(
+  ruleSetId: string,
+  versionId: string,
+  input: CreateEligibilityRuleInput,
+): Promise<EligibilityRuleDetail> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const ruleId = await db.$transaction(async (tx) => {
+    const rule = await tx.eligibilityRule.create({
+      data: {
+        tenantId,
+        ruleSetVersionId: versionId,
+        key: input.key,
+        description: input.description,
+        isRequired: input.isRequired,
+        fitWeight: input.fitWeight,
+        isActive: input.isActive,
+      },
+    });
+    if (input.conditions.length > 0) {
+      await tx.eligibilityRuleCondition.createMany({
+        data: input.conditions.map((c) => ({
+          tenantId,
+          eligibilityRuleId: rule.id,
+          groupIndex: c.groupIndex,
+          sourceType: c.sourceType,
+          questionId: c.questionId ?? null,
+          attributeKey: c.attributeKey ?? null,
+          operator: c.operator,
+          comparisonValue: c.comparisonValue,
+        })),
+      });
+    }
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "CREATE",
+        entityType: "EligibilityRule",
+        entityId: rule.id,
+        metadata: { ruleSetId, ruleSetVersionId: versionId, key: input.key },
+      },
+    });
+    return rule.id;
+  });
+
+  return loadEligibilityRuleDetail(ruleId, versionId);
+}
+
+export async function updateEligibilityRuleInDraft(
+  ruleSetId: string,
+  versionId: string,
+  ruleId: string,
+  patch: UpdateEligibilityRuleInput,
+): Promise<EligibilityRuleDetail> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const existing = await db.eligibilityRule.findUnique({ where: { id: ruleId } });
+  if (!existing || existing.ruleSetVersionId !== versionId) {
+    throw new AdminRuleNotFoundError("EligibilityRule", ruleId, versionId);
+  }
+
+  await db.$transaction(async (tx) => {
+    const fieldsChanged =
+      patch.key !== undefined ||
+      patch.description !== undefined ||
+      patch.isRequired !== undefined ||
+      patch.fitWeight !== undefined ||
+      patch.isActive !== undefined;
+    if (fieldsChanged) {
+      await tx.eligibilityRule.update({
+        where: { id: ruleId },
+        data: {
+          ...(patch.key !== undefined ? { key: patch.key } : {}),
+          ...(patch.description !== undefined ? { description: patch.description } : {}),
+          ...(patch.isRequired !== undefined ? { isRequired: patch.isRequired } : {}),
+          ...(patch.fitWeight !== undefined ? { fitWeight: patch.fitWeight } : {}),
+          ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+        },
+      });
+    }
+    if (patch.conditions !== undefined) {
+      await tx.eligibilityRuleCondition.deleteMany({ where: { eligibilityRuleId: ruleId } });
+      if (patch.conditions.length > 0) {
+        await tx.eligibilityRuleCondition.createMany({
+          data: patch.conditions.map((c) => ({
+            tenantId,
+            eligibilityRuleId: ruleId,
+            groupIndex: c.groupIndex,
+            sourceType: c.sourceType,
+            questionId: c.questionId ?? null,
+            attributeKey: c.attributeKey ?? null,
+            operator: c.operator,
+            comparisonValue: c.comparisonValue,
+          })),
+        });
+      }
+    }
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "UPDATE",
+        entityType: "EligibilityRule",
+        entityId: ruleId,
+        metadata: { ruleSetId, ruleSetVersionId: versionId, changedFields: Object.keys(patch) },
+      },
+    });
+  });
+
+  return loadEligibilityRuleDetail(ruleId, versionId);
+}
+
+export async function removeEligibilityRuleFromDraft(
+  ruleSetId: string,
+  versionId: string,
+  ruleId: string,
+): Promise<void> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const existing = await db.eligibilityRule.findUnique({ where: { id: ruleId } });
+  if (!existing || existing.ruleSetVersionId !== versionId) {
+    throw new AdminRuleNotFoundError("EligibilityRule", ruleId, versionId);
+  }
+  const ruleKey = existing.key;
+
+  await db.$transaction(async (tx) => {
+    await tx.eligibilityRuleCondition.deleteMany({ where: { eligibilityRuleId: ruleId } });
+    await tx.eligibilityRule.delete({ where: { id: ruleId } });
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "DELETE",
+        entityType: "EligibilityRule",
+        entityId: ruleId,
+        metadata: {
+          ruleSetId,
+          ruleSetVersionId: versionId,
+          key: ruleKey,
+          reason: "removed_from_draft",
+        },
+      },
+    });
+  });
+}
+
+async function loadEligibilityRuleDetail(
+  ruleId: string,
+  versionId: string,
+): Promise<EligibilityRuleDetail> {
+  const row = await db.eligibilityRule.findUnique({
+    where: { id: ruleId },
+    include: { conditions: true },
+  });
+  if (!row) {
+    throw new AdminRuleNotFoundError("EligibilityRule", ruleId, versionId);
+  }
+  return {
+    id: row.id,
+    key: row.key,
+    description: row.description,
+    isRequired: row.isRequired,
+    fitWeight: row.fitWeight,
+    isActive: row.isActive,
+    conditions: row.conditions.map(toConditionDetail),
+  };
+}
+
+// --- 4.2 ExclusionRule -------------------------------------------------------
+
+export async function addExclusionRuleToDraft(
+  ruleSetId: string,
+  versionId: string,
+  input: CreateExclusionRuleInput,
+): Promise<ExclusionRuleDetail> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const ruleId = await db.$transaction(async (tx) => {
+    const rule = await tx.exclusionRule.create({
+      data: {
+        tenantId,
+        ruleSetVersionId: versionId,
+        key: input.key,
+        reasonCode: input.reasonCode,
+        description: input.description,
+        isActive: input.isActive,
+      },
+    });
+    if (input.conditions.length > 0) {
+      await tx.exclusionRuleCondition.createMany({
+        data: input.conditions.map((c) => ({
+          tenantId,
+          exclusionRuleId: rule.id,
+          groupIndex: c.groupIndex,
+          sourceType: c.sourceType,
+          questionId: c.questionId ?? null,
+          attributeKey: c.attributeKey ?? null,
+          operator: c.operator,
+          comparisonValue: c.comparisonValue,
+        })),
+      });
+    }
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "CREATE",
+        entityType: "ExclusionRule",
+        entityId: rule.id,
+        metadata: { ruleSetId, ruleSetVersionId: versionId, key: input.key },
+      },
+    });
+    return rule.id;
+  });
+
+  return loadExclusionRuleDetail(ruleId, versionId);
+}
+
+export async function updateExclusionRuleInDraft(
+  ruleSetId: string,
+  versionId: string,
+  ruleId: string,
+  patch: UpdateExclusionRuleInput,
+): Promise<ExclusionRuleDetail> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const existing = await db.exclusionRule.findUnique({ where: { id: ruleId } });
+  if (!existing || existing.ruleSetVersionId !== versionId) {
+    throw new AdminRuleNotFoundError("ExclusionRule", ruleId, versionId);
+  }
+
+  await db.$transaction(async (tx) => {
+    const fieldsChanged =
+      patch.key !== undefined ||
+      patch.reasonCode !== undefined ||
+      patch.description !== undefined ||
+      patch.isActive !== undefined;
+    if (fieldsChanged) {
+      await tx.exclusionRule.update({
+        where: { id: ruleId },
+        data: {
+          ...(patch.key !== undefined ? { key: patch.key } : {}),
+          ...(patch.reasonCode !== undefined ? { reasonCode: patch.reasonCode } : {}),
+          ...(patch.description !== undefined ? { description: patch.description } : {}),
+          ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+        },
+      });
+    }
+    if (patch.conditions !== undefined) {
+      await tx.exclusionRuleCondition.deleteMany({ where: { exclusionRuleId: ruleId } });
+      if (patch.conditions.length > 0) {
+        await tx.exclusionRuleCondition.createMany({
+          data: patch.conditions.map((c) => ({
+            tenantId,
+            exclusionRuleId: ruleId,
+            groupIndex: c.groupIndex,
+            sourceType: c.sourceType,
+            questionId: c.questionId ?? null,
+            attributeKey: c.attributeKey ?? null,
+            operator: c.operator,
+            comparisonValue: c.comparisonValue,
+          })),
+        });
+      }
+    }
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "UPDATE",
+        entityType: "ExclusionRule",
+        entityId: ruleId,
+        metadata: { ruleSetId, ruleSetVersionId: versionId, changedFields: Object.keys(patch) },
+      },
+    });
+  });
+
+  return loadExclusionRuleDetail(ruleId, versionId);
+}
+
+export async function removeExclusionRuleFromDraft(
+  ruleSetId: string,
+  versionId: string,
+  ruleId: string,
+): Promise<void> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const existing = await db.exclusionRule.findUnique({ where: { id: ruleId } });
+  if (!existing || existing.ruleSetVersionId !== versionId) {
+    throw new AdminRuleNotFoundError("ExclusionRule", ruleId, versionId);
+  }
+  const ruleKey = existing.key;
+
+  await db.$transaction(async (tx) => {
+    await tx.exclusionRuleCondition.deleteMany({ where: { exclusionRuleId: ruleId } });
+    await tx.exclusionRule.delete({ where: { id: ruleId } });
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "DELETE",
+        entityType: "ExclusionRule",
+        entityId: ruleId,
+        metadata: {
+          ruleSetId,
+          ruleSetVersionId: versionId,
+          key: ruleKey,
+          reason: "removed_from_draft",
+        },
+      },
+    });
+  });
+}
+
+async function loadExclusionRuleDetail(
+  ruleId: string,
+  versionId: string,
+): Promise<ExclusionRuleDetail> {
+  const row = await db.exclusionRule.findUnique({
+    where: { id: ruleId },
+    include: { conditions: true },
+  });
+  if (!row) {
+    throw new AdminRuleNotFoundError("ExclusionRule", ruleId, versionId);
+  }
+  return {
+    id: row.id,
+    key: row.key,
+    reasonCode: row.reasonCode,
+    description: row.description,
+    isActive: row.isActive,
+    conditions: row.conditions.map(toConditionDetail),
+  };
+}
+
+// --- 4.3 PrioritizationRule ---------------------------------------------------
+
+export async function addPrioritizationRuleToDraft(
+  ruleSetId: string,
+  versionId: string,
+  input: CreatePrioritizationRuleInput,
+): Promise<PrioritizationRuleDetail> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const ruleId = await db.$transaction(async (tx) => {
+    const rule = await tx.prioritizationRule.create({
+      data: {
+        tenantId,
+        ruleSetVersionId: versionId,
+        key: input.key,
+        description: input.description,
+        weight: input.weight,
+        commissionRequired: input.commissionRequired,
+        isActive: input.isActive,
+      },
+    });
+    if (input.conditions.length > 0) {
+      await tx.prioritizationRuleCondition.createMany({
+        data: input.conditions.map((c) => ({
+          tenantId,
+          prioritizationRuleId: rule.id,
+          groupIndex: c.groupIndex,
+          sourceType: c.sourceType,
+          questionId: c.questionId ?? null,
+          attributeKey: c.attributeKey ?? null,
+          operator: c.operator,
+          comparisonValue: c.comparisonValue,
+        })),
+      });
+    }
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "CREATE",
+        entityType: "PrioritizationRule",
+        entityId: rule.id,
+        metadata: { ruleSetId, ruleSetVersionId: versionId, key: input.key },
+      },
+    });
+    return rule.id;
+  });
+
+  return loadPrioritizationRuleDetail(ruleId, versionId);
+}
+
+export async function updatePrioritizationRuleInDraft(
+  ruleSetId: string,
+  versionId: string,
+  ruleId: string,
+  patch: UpdatePrioritizationRuleInput,
+): Promise<PrioritizationRuleDetail> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const existing = await db.prioritizationRule.findUnique({ where: { id: ruleId } });
+  if (!existing || existing.ruleSetVersionId !== versionId) {
+    throw new AdminRuleNotFoundError("PrioritizationRule", ruleId, versionId);
+  }
+
+  await db.$transaction(async (tx) => {
+    const fieldsChanged =
+      patch.key !== undefined ||
+      patch.description !== undefined ||
+      patch.weight !== undefined ||
+      patch.commissionRequired !== undefined ||
+      patch.isActive !== undefined;
+    if (fieldsChanged) {
+      await tx.prioritizationRule.update({
+        where: { id: ruleId },
+        data: {
+          ...(patch.key !== undefined ? { key: patch.key } : {}),
+          ...(patch.description !== undefined ? { description: patch.description } : {}),
+          ...(patch.weight !== undefined ? { weight: patch.weight } : {}),
+          ...(patch.commissionRequired !== undefined
+            ? { commissionRequired: patch.commissionRequired }
+            : {}),
+          ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+        },
+      });
+    }
+    if (patch.conditions !== undefined) {
+      await tx.prioritizationRuleCondition.deleteMany({ where: { prioritizationRuleId: ruleId } });
+      if (patch.conditions.length > 0) {
+        await tx.prioritizationRuleCondition.createMany({
+          data: patch.conditions.map((c) => ({
+            tenantId,
+            prioritizationRuleId: ruleId,
+            groupIndex: c.groupIndex,
+            sourceType: c.sourceType,
+            questionId: c.questionId ?? null,
+            attributeKey: c.attributeKey ?? null,
+            operator: c.operator,
+            comparisonValue: c.comparisonValue,
+          })),
+        });
+      }
+    }
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "UPDATE",
+        entityType: "PrioritizationRule",
+        entityId: ruleId,
+        metadata: { ruleSetId, ruleSetVersionId: versionId, changedFields: Object.keys(patch) },
+      },
+    });
+  });
+
+  return loadPrioritizationRuleDetail(ruleId, versionId);
+}
+
+export async function removePrioritizationRuleFromDraft(
+  ruleSetId: string,
+  versionId: string,
+  ruleId: string,
+): Promise<void> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const existing = await db.prioritizationRule.findUnique({ where: { id: ruleId } });
+  if (!existing || existing.ruleSetVersionId !== versionId) {
+    throw new AdminRuleNotFoundError("PrioritizationRule", ruleId, versionId);
+  }
+  const ruleKey = existing.key;
+
+  await db.$transaction(async (tx) => {
+    await tx.prioritizationRuleCondition.deleteMany({ where: { prioritizationRuleId: ruleId } });
+    await tx.prioritizationRule.delete({ where: { id: ruleId } });
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "DELETE",
+        entityType: "PrioritizationRule",
+        entityId: ruleId,
+        metadata: {
+          ruleSetId,
+          ruleSetVersionId: versionId,
+          key: ruleKey,
+          reason: "removed_from_draft",
+        },
+      },
+    });
+  });
+}
+
+async function loadPrioritizationRuleDetail(
+  ruleId: string,
+  versionId: string,
+): Promise<PrioritizationRuleDetail> {
+  const row = await db.prioritizationRule.findUnique({
+    where: { id: ruleId },
+    include: { conditions: true },
+  });
+  if (!row) {
+    throw new AdminRuleNotFoundError("PrioritizationRule", ruleId, versionId);
+  }
+  return {
+    id: row.id,
+    key: row.key,
+    description: row.description,
+    weight: row.weight,
+    commissionRequired: row.commissionRequired,
+    isActive: row.isActive,
+    conditions: row.conditions.map(toConditionDetail),
+  };
+}
+
+// --- 4.4 CrossSellingRule ------------------------------------------------------
+
+export async function addCrossSellingRuleToDraft(
+  ruleSetId: string,
+  versionId: string,
+  input: CreateCrossSellingRuleInput,
+): Promise<CrossSellingRuleDetail> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const ruleId = await db.$transaction(async (tx) => {
+    const rule = await tx.crossSellingRule.create({
+      data: {
+        tenantId,
+        ruleSetVersionId: versionId,
+        key: input.key,
+        description: input.description,
+        needType: input.needType,
+        priority: input.priority,
+        reasonCode: input.reasonCode,
+        suggestedProductVersionId: input.suggestedProductVersionId ?? null,
+        isActive: input.isActive,
+      },
+    });
+    if (input.conditions.length > 0) {
+      await tx.crossSellingRuleCondition.createMany({
+        data: input.conditions.map((c) => ({
+          tenantId,
+          crossSellingRuleId: rule.id,
+          groupIndex: c.groupIndex,
+          sourceType: c.sourceType,
+          questionId: c.questionId ?? null,
+          attributeKey: c.attributeKey ?? null,
+          operator: c.operator,
+          comparisonValue: c.comparisonValue,
+        })),
+      });
+    }
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "CREATE",
+        entityType: "CrossSellingRule",
+        entityId: rule.id,
+        metadata: { ruleSetId, ruleSetVersionId: versionId, key: input.key },
+      },
+    });
+    return rule.id;
+  });
+
+  return loadCrossSellingRuleDetail(ruleId, versionId);
+}
+
+export async function updateCrossSellingRuleInDraft(
+  ruleSetId: string,
+  versionId: string,
+  ruleId: string,
+  patch: UpdateCrossSellingRuleInput,
+): Promise<CrossSellingRuleDetail> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const existing = await db.crossSellingRule.findUnique({ where: { id: ruleId } });
+  if (!existing || existing.ruleSetVersionId !== versionId) {
+    throw new AdminRuleNotFoundError("CrossSellingRule", ruleId, versionId);
+  }
+
+  await db.$transaction(async (tx) => {
+    const fieldsChanged =
+      patch.key !== undefined ||
+      patch.description !== undefined ||
+      patch.needType !== undefined ||
+      patch.priority !== undefined ||
+      patch.reasonCode !== undefined ||
+      patch.suggestedProductVersionId !== undefined ||
+      patch.isActive !== undefined;
+    if (fieldsChanged) {
+      await tx.crossSellingRule.update({
+        where: { id: ruleId },
+        data: {
+          ...(patch.key !== undefined ? { key: patch.key } : {}),
+          ...(patch.description !== undefined ? { description: patch.description } : {}),
+          ...(patch.needType !== undefined ? { needType: patch.needType } : {}),
+          ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
+          ...(patch.reasonCode !== undefined ? { reasonCode: patch.reasonCode } : {}),
+          ...(patch.suggestedProductVersionId !== undefined
+            ? { suggestedProductVersionId: patch.suggestedProductVersionId }
+            : {}),
+          ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+        },
+      });
+    }
+    if (patch.conditions !== undefined) {
+      await tx.crossSellingRuleCondition.deleteMany({ where: { crossSellingRuleId: ruleId } });
+      if (patch.conditions.length > 0) {
+        await tx.crossSellingRuleCondition.createMany({
+          data: patch.conditions.map((c) => ({
+            tenantId,
+            crossSellingRuleId: ruleId,
+            groupIndex: c.groupIndex,
+            sourceType: c.sourceType,
+            questionId: c.questionId ?? null,
+            attributeKey: c.attributeKey ?? null,
+            operator: c.operator,
+            comparisonValue: c.comparisonValue,
+          })),
+        });
+      }
+    }
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "UPDATE",
+        entityType: "CrossSellingRule",
+        entityId: ruleId,
+        metadata: { ruleSetId, ruleSetVersionId: versionId, changedFields: Object.keys(patch) },
+      },
+    });
+  });
+
+  return loadCrossSellingRuleDetail(ruleId, versionId);
+}
+
+export async function removeCrossSellingRuleFromDraft(
+  ruleSetId: string,
+  versionId: string,
+  ruleId: string,
+): Promise<void> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const existing = await db.crossSellingRule.findUnique({ where: { id: ruleId } });
+  if (!existing || existing.ruleSetVersionId !== versionId) {
+    throw new AdminRuleNotFoundError("CrossSellingRule", ruleId, versionId);
+  }
+  const ruleKey = existing.key;
+
+  await db.$transaction(async (tx) => {
+    await tx.crossSellingRuleCondition.deleteMany({ where: { crossSellingRuleId: ruleId } });
+    await tx.crossSellingRule.delete({ where: { id: ruleId } });
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "DELETE",
+        entityType: "CrossSellingRule",
+        entityId: ruleId,
+        metadata: {
+          ruleSetId,
+          ruleSetVersionId: versionId,
+          key: ruleKey,
+          reason: "removed_from_draft",
+        },
+      },
+    });
+  });
+}
+
+async function loadCrossSellingRuleDetail(
+  ruleId: string,
+  versionId: string,
+): Promise<CrossSellingRuleDetail> {
+  const row = await db.crossSellingRule.findUnique({
+    where: { id: ruleId },
+    include: { conditions: true },
+  });
+  if (!row) {
+    throw new AdminRuleNotFoundError("CrossSellingRule", ruleId, versionId);
+  }
+  return {
+    id: row.id,
+    key: row.key,
+    description: row.description,
+    needType: row.needType,
+    priority: row.priority,
+    reasonCode: row.reasonCode,
+    suggestedProductVersionId: row.suggestedProductVersionId,
+    isActive: row.isActive,
+    conditions: row.conditions.map(toConditionDetail),
+  };
 }

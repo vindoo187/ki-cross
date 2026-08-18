@@ -42,3 +42,33 @@ export class CopySourceRuleSetVersionNotFoundError extends RuleAdminError {
     super(`RuleSetVersion "${versionId}" (Kopiervorlage) wurde nicht gefunden.`);
   }
 }
+
+/**
+ * Versuch, eine `RuleSetVersion` zu mutieren, die nicht (mehr) im Status
+ * DRAFT ist -- serverseitige Sperre (Phase 9 AP3, ChatGPT-Auflage
+ * 2026-08-18: "DRAFT-only fuer saemtliche Mutationen"), analog
+ * `QuestionnaireVersionNotDraftError` aus Phase 8. Aenderungen an einer
+ * bereits veroeffentlichten Version erfordern eine neue DRAFT-Version
+ * (AP2 `createDraftRuleSetVersion({ copyFromVersionId })`).
+ */
+export class RuleSetVersionNotDraftError extends RuleAdminError {
+  constructor(versionId: string, status: string) {
+    super(
+      `RuleSetVersion "${versionId}" kann nicht veraendert werden (Status: ${status}). ` +
+        `Nur Versionen im Status DRAFT sind mutierbar -- Aenderungen an veroeffentlichten Versionen ` +
+        `erfordern eine neue DRAFT-Version.`,
+    );
+  }
+}
+
+/**
+ * Eine referenzierte Regel (beliebiger Typ -- Eligibility/Exclusion/
+ * Prioritization/CrossSelling) existiert nicht innerhalb der angegebenen
+ * `RuleSetVersion`. `ruleTypeLabel` macht die Fehlermeldung je Regeltyp
+ * unterscheidbar, ohne vier fast identische Fehlerklassen zu benoetigen.
+ */
+export class AdminRuleNotFoundError extends RuleAdminError {
+  constructor(ruleTypeLabel: string, ruleId: string, versionId: string) {
+    super(`${ruleTypeLabel} "${ruleId}" wurde in RuleSetVersion "${versionId}" nicht gefunden.`);
+  }
+}

@@ -57,8 +57,10 @@ import {
   RollbackSourceNotEligibleError,
 } from "../admin/question-admin-errors";
 import {
+  AdminRuleNotFoundError,
   CopySourceRuleSetVersionNotFoundError,
   RuleSetNotFoundError,
+  RuleSetVersionNotDraftError,
   RuleSetVersionNotFoundError,
 } from "../admin/rule-admin-errors";
 
@@ -274,15 +276,24 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
     );
   }
 
-  // Rule-Management-API (Phase 9 AP2): 404 -- RuleSet/Version (inkl.
-  // Kopiervorlage) nicht gefunden (auch hier: fremde-Mandant-ID liefert
-  // ueber den gescopten `db`-Client 0 Treffer -> 404, analog Phase 8).
+  // Rule-Management-API (Phase 9 AP2/AP3): 404 -- RuleSet/Version (inkl.
+  // Kopiervorlage) oder eine Regel (beliebiger Typ) nicht gefunden (auch
+  // hier: fremde-Mandant-ID liefert ueber den gescopten `db`-Client 0
+  // Treffer -> 404, analog Phase 8).
   if (
     error instanceof RuleSetNotFoundError ||
     error instanceof RuleSetVersionNotFoundError ||
-    error instanceof CopySourceRuleSetVersionNotFoundError
+    error instanceof CopySourceRuleSetVersionNotFoundError ||
+    error instanceof AdminRuleNotFoundError
   ) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 404 });
+  }
+
+  // Rule-Management-API (Phase 9 AP3): 409 -- Versuch, eine nicht-DRAFT-
+  // RuleSetVersion zu mutieren (serverseitige Sperre, ChatGPT-Auflage
+  // 2026-08-18: "DRAFT-only fuer saemtliche Mutationen").
+  if (error instanceof RuleSetVersionNotDraftError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
   }
 
   return null;
