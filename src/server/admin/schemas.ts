@@ -89,3 +89,9 @@ export const createDraftVersionSchema = z.object({
   copyFromVersionId: z.string().uuid().optional(),
 });
 export type CreateDraftVersionInput = z.infer<typeof createDraftVersionSchema>;
+
+/** Phase 8 AP5 -- Rollback: optionales Label fuer die neu erzeugte DRAFT-Version (Default siehe rollbackToVersion()). */
+export const rollbackVersionSchema = z.object({
+  label: z.string().min(1).max(200).optional(),
+});
+export type RollbackVersionInput = z.infer<typeof rollbackVersionSchema>;

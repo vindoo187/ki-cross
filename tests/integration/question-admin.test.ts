@@ -24,9 +24,11 @@ import {
   addQuestionToDraft,
   createDraftVersion,
   getQuestionnaireVersionDetail,
+  getQuestionnaireVersionHistory,
   listQuestionnaires,
   publishDraftVersion,
   removeQuestionFromDraft,
+  rollbackToVersion,
   updateQuestionInDraft,
   validateDraftVersion,
 } from "@/server/admin/question-admin";
@@ -35,10 +37,14 @@ import {
   QuestionnaireNotFoundError,
   QuestionnaireVersionNotDraftError,
   QuestionnaireVersionNotFoundError,
+  RollbackSourceNotEligibleError,
 } from "@/server/admin/question-admin-errors";
 import { QuestionnaireVersionInvalidError } from "@/server/questionnaire/errors";
 import { GET as listQuestionnairesRoute } from "@/app/api/admin/questionnaires/route";
-import { POST as createDraftVersionRoute } from "@/app/api/admin/questionnaires/[id]/versions/route";
+import {
+  GET as listVersionHistoryRoute,
+  POST as createDraftVersionRoute,
+} from "@/app/api/admin/questionnaires/[id]/versions/route";
 import { GET as getVersionDetailRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/route";
 import { POST as addQuestionRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/questions/route";
 import {
@@ -47,6 +53,7 @@ import {
 } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/questions/[questionId]/route";
 import { POST as validateVersionRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/validate/route";
 import { POST as publishVersionRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/publish/route";
+import { POST as rollbackVersionRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/rollback/route";
 
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 process.env.DEV_AUTH_SECRET ??= "ap3-question-admin-test-secret-not-for-prod";
@@ -160,6 +167,63 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
       },
     });
     return { questionnaireId: questionnaire.id, draftVersionId: draftVersion.id };
+  }
+
+  /**
+   * Legt eine ECHTE `ConsultationSession` an, gepinnt auf `versionId` --
+   * fuer den AP5-Pinning-Test noetig (Company/Store/User/Employee sind
+   * Pflicht-FKs, siehe schema.prisma `model ConsultationSession`).
+   */
+  async function createConsultationSessionPinnedTo(
+    tenantId: string,
+    versionId: string,
+    key: string,
+  ) {
+    const company = await rawClient.company.create({
+      data: { tenantId, key: `company-${key}-${suffix}`, name: `Company ${key}` },
+    });
+    const store = await rawClient.store.create({
+      data: {
+        tenantId,
+        companyId: company.id,
+        key: `store-${key}-${suffix}`,
+        name: `Store ${key}`,
+      },
+    });
+    const user = await rawClient.user.create({
+      data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+    });
+    const employee = await rawClient.employee.create({
+      data: { tenantId, storeId: store.id, userId: user.id, displayName: `MA ${key}` },
+    });
+    const session = await rawClient.consultationSession.create({
+      data: {
+        tenantId,
+        storeId: store.id,
+        employeeId: employee.id,
+        questionnaireVersionId: versionId,
+        consultationType: "NEW_CONTRACT",
+        status: "IN_PROGRESS",
+        startedAt: new Date(),
+      },
+    });
+    return session.id;
+  }
+
+  function requestWithCookie(
+    url: string,
+    token: string,
+    init?: { method?: string; body?: string },
+  ) {
+    return new NextRequest(url, {
+      method: init?.method,
+      body: init?.body,
+      headers: new Headers({ cookie: `${SESSION_COOKIE_NAME}=${token}` }),
+    });
+  }
+
+  function routeParams<T extends Record<string, string>>(value: T) {
+    return { params: Promise.resolve(value) };
   }
 
   // -------------------------------------------------------------------
@@ -407,22 +471,6 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
   // 2. HTTP-Kette (echte Route-Handler, echtes signiertes Session-Cookie)
   // -------------------------------------------------------------------
   describe("2. HTTP-Kette (Config-RBAC + 409/404-Mapping)", () => {
-    function requestWithCookie(
-      url: string,
-      token: string,
-      init?: { method?: string; body?: string },
-    ) {
-      return new NextRequest(url, {
-        method: init?.method,
-        body: init?.body,
-        headers: new Headers({ cookie: `${SESSION_COOKIE_NAME}=${token}` }),
-      });
-    }
-
-    function routeParams<T extends Record<string, string>>(value: T) {
-      return { params: Promise.resolve(value) };
-    }
-
     it("GET /api/admin/questionnaires ohne config.questions.view -> 403", async () => {
       const tenantId = await createTenant("http-view-denied");
       const token = createSessionToken(baseSessionPayload(tenantId));
@@ -840,6 +888,306 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
       const body = await response.json();
       expect(Array.isArray(body.issues)).toBe(true);
       expect(body.issues.length).toBeGreaterThan(0);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // 3. AP5 -- Versionshistorie & Rollback (siehe
+  //    PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 8). Testet Service-Schicht
+  //    (getQuestionnaireVersionHistory()/rollbackToVersion()), HTTP-Kette,
+  //    und den geschaeftskritischen End-zu-Ende-Pinning-Test (ChatGPT-
+  //    Beispiel woertlich uebernommen: Beratung bleibt auf ihrer gepinnten
+  //    Version, auch nachdem Rollback+Publish eine neue ACTIVE-Version
+  //    erzeugt haben).
+  // -------------------------------------------------------------------
+  describe("3. AP5: Versionshistorie & Rollback", () => {
+    it("getQuestionnaireVersionHistory() liefert alle Versionen (neueste zuerst) unabhaengig vom Status", async () => {
+      const tenantId = await createTenant("svc-history");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => createDraftVersion(questionnaireId, { label: "v2-draft" }),
+      );
+      const history = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => getQuestionnaireVersionHistory(questionnaireId),
+      );
+      expect(history).toHaveLength(2);
+      const statuses = history.map((v) => v.status).sort();
+      expect(statuses).toEqual(["ACTIVE", "DRAFT"]);
+      expect(history.some((v) => v.id === activeVersionId)).toBe(true);
+    });
+
+    it("rollbackToVersion() von einer ACTIVE-Version erzeugt eine neue DRAFT-Version als Tiefkopie, Quelle bleibt unveraendert, AuditLog(ROLLBACK) geschrieben", async () => {
+      const tenantId = await createTenant("svc-rollback-active");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      const actorUserId = await createUser(tenantId, "svc-rollback-active-actor");
+
+      const rollbackDraft = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => rollbackToVersion(questionnaireId, activeVersionId),
+      );
+
+      expect(rollbackDraft.status).toBe("DRAFT");
+      expect(rollbackDraft.id).not.toBe(activeVersionId);
+      expect(rollbackDraft.questions).toHaveLength(1);
+      expect(rollbackDraft.questions[0]?.status).toBe("DRAFT");
+
+      // Quellversion (und ihre Frage-ID) bleibt UNVERAENDERT.
+      const source = await rawClient.questionnaireVersion.findUniqueOrThrow({
+        where: { id: activeVersionId },
+      });
+      expect(source.status).toBe("ACTIVE");
+      const sourceQuestions = await rawClient.question.findMany({
+        where: { questionnaireVersionId: activeVersionId },
+      });
+      expect(sourceQuestions[0]?.id).not.toBe(rollbackDraft.questions[0]?.id);
+
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "QuestionnaireVersion", entityId: rollbackDraft.id },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.action).toBe("ROLLBACK");
+      expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
+      const metadata = auditEntries[0]?.metadata as Record<string, unknown>;
+      expect(metadata.sourceVersionId).toBe(activeVersionId);
+    });
+
+    it("rollbackToVersion() von einer EXPIRED-Version funktioniert (historische, nicht mehr aktive Version)", async () => {
+      const tenantId = await createTenant("svc-rollback-expired");
+      const { questionnaireId, activeVersionId: v1Id } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      // Zweite Version veroeffentlichen -> v1 wird EXPIRED.
+      const v2Draft = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => createDraftVersion(questionnaireId, { label: "v2", copyFromVersionId: v1Id }),
+      );
+      const actorUserId = await createUser(tenantId, "svc-rollback-expired-actor");
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => publishDraftVersion(questionnaireId, v2Draft.id),
+      );
+      const v1AfterExpiry = await rawClient.questionnaireVersion.findUniqueOrThrow({
+        where: { id: v1Id },
+      });
+      expect(v1AfterExpiry.status).toBe("EXPIRED");
+
+      // Rollback auf die jetzt EXPIRED v1.
+      const rollbackDraft = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => rollbackToVersion(questionnaireId, v1Id, "Rollback auf v1"),
+      );
+      expect(rollbackDraft.status).toBe("DRAFT");
+      expect(rollbackDraft.label).toBe("Rollback auf v1");
+      expect(rollbackDraft.questions).toHaveLength(1);
+
+      // v1 bleibt EXPIRED (keine Mutation der Historie durch den Rollback selbst).
+      const v1AfterRollback = await rawClient.questionnaireVersion.findUniqueOrThrow({
+        where: { id: v1Id },
+      });
+      expect(v1AfterRollback.status).toBe("EXPIRED");
+    });
+
+    it("rollbackToVersion() von einer DRAFT-Version -> RollbackSourceNotEligibleError (409)", async () => {
+      const tenantId = await createTenant("svc-rollback-draft-src");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => rollbackToVersion(questionnaireId, draftVersionId),
+        ),
+      ).rejects.toThrow(RollbackSourceNotEligibleError);
+    });
+
+    it("Rollback-DRAFT durchlaeuft regulaer den AP4-Publish-Pfad (keine zweite Publish-Logik)", async () => {
+      const tenantId = await createTenant("svc-rollback-publish");
+      const { questionnaireId, activeVersionId: v1Id } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      const actorUserId = await createUser(tenantId, "svc-rollback-publish-actor");
+
+      const rollbackDraft = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => rollbackToVersion(questionnaireId, v1Id),
+      );
+      const publishResult = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => publishDraftVersion(questionnaireId, rollbackDraft.id),
+      );
+
+      expect(publishResult.version.status).toBe("ACTIVE");
+      expect(publishResult.previousActiveVersionId).toBe(v1Id);
+      const v1AfterPublish = await rawClient.questionnaireVersion.findUniqueOrThrow({
+        where: { id: v1Id },
+      });
+      expect(v1AfterPublish.status).toBe("EXPIRED");
+    });
+
+    it("GESCHAEFTSKRITISCH -- Pinning: laufende ConsultationSession bleibt auf ihrer Version, nachdem Rollback+Publish eine neue ACTIVE-Version erzeugt hat", async () => {
+      const tenantId = await createTenant("pinning");
+      const { questionnaireId, activeVersionId: v1Id } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+
+      // Beratung A startet auf der aktuell ACTIVE-Version (v1) -- gepinnt.
+      const sessionAId = await createConsultationSessionPinnedTo(tenantId, v1Id, "beratung-a");
+
+      const actorUserId = await createUser(tenantId, "pinning-actor");
+      // Admin macht einen Rollback (hier: auf v1 selbst, um ohne weitere
+      // Fixtures eine neue Version zu erzeugen) und veroeffentlicht sie ->
+      // v2 wird die neue ACTIVE-Version, v1 wird EXPIRED.
+      const rollbackDraft = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => rollbackToVersion(questionnaireId, v1Id),
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => publishDraftVersion(questionnaireId, rollbackDraft.id),
+      );
+
+      // Beratung A bleibt UNVERAENDERT auf v1 gepinnt -- publishDraftVersion()
+      // fasst ConsultationSession-Zeilen an keiner Stelle an (Plan Abschnitt 3.4).
+      const sessionAAfter = await rawClient.consultationSession.findUniqueOrThrow({
+        where: { id: sessionAId },
+      });
+      expect(sessionAAfter.questionnaireVersionId).toBe(v1Id);
+
+      // Eine NEUE Beratung B, die jetzt startet, wuerde die neue ACTIVE-Version
+      // (den veroeffentlichten Rollback-Entwurf) erhalten.
+      const sessionBId = await createConsultationSessionPinnedTo(
+        tenantId,
+        rollbackDraft.id,
+        "beratung-b",
+      );
+      const sessionB = await rawClient.consultationSession.findUniqueOrThrow({
+        where: { id: sessionBId },
+      });
+      expect(sessionB.questionnaireVersionId).toBe(rollbackDraft.id);
+      expect(sessionB.questionnaireVersionId).not.toBe(sessionAAfter.questionnaireVersionId);
+
+      // v1 (Beratung As Version) ist jetzt EXPIRED, aber die Beratung bleibt
+      // trotzdem darauf gepinnt -- genau die geforderte Invariante.
+      const v1Final = await rawClient.questionnaireVersion.findUniqueOrThrow({
+        where: { id: v1Id },
+      });
+      expect(v1Final.status).toBe("EXPIRED");
+    });
+
+    it("HTTP: GET .../versions (Historie) mit config.questions.view -> 200, alle Versionen", async () => {
+      const tenantId = await createTenant("http-history-ok");
+      const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view"],
+      });
+      const response = await listVersionHistoryRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions`,
+          token,
+        ),
+        routeParams({ id: questionnaireId }),
+      );
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(Array.isArray(body.versions)).toBe(true);
+      expect(body.versions.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("HTTP: POST .../rollback ohne config.questions.edit (nur view) -> 403", async () => {
+      const tenantId = await createTenant("http-rollback-denied");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view"],
+      });
+      const response = await rollbackVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${activeVersionId}/rollback`,
+          token,
+          { method: "POST", body: JSON.stringify({}) },
+        ),
+        routeParams({ id: questionnaireId, versionId: activeVersionId }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it("HTTP: POST .../rollback mit config.questions.edit -> 201, neue DRAFT-Version als Kopie", async () => {
+      const tenantId = await createTenant("http-rollback-ok");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      const actorUserId = await createUser(tenantId, "http-rollback-ok-actor");
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        userId: actorUserId,
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const response = await rollbackVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${activeVersionId}/rollback`,
+          token,
+          { method: "POST", body: JSON.stringify({ label: "Rollback-Test" }) },
+        ),
+        routeParams({ id: questionnaireId, versionId: activeVersionId }),
+      );
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      expect(body.version.status).toBe("DRAFT");
+      expect(body.version.label).toBe("Rollback-Test");
+      expect(body.version.id).not.toBe(activeVersionId);
+    });
+
+    it("HTTP: POST .../rollback von einer DRAFT-Quelle -> 409", async () => {
+      const tenantId = await createTenant("http-rollback-draft-src");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const response = await rollbackVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${draftVersionId}/rollback`,
+          token,
+          { method: "POST", body: JSON.stringify({}) },
+        ),
+        routeParams({ id: questionnaireId, versionId: draftVersionId }),
+      );
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.error).toBe("RollbackSourceNotEligibleError");
+    });
+
+    it("Tenant-Isolation: rollbackToVersion() mit versionId aus fremdem Mandanten -> QuestionnaireVersionNotFoundError", async () => {
+      const tenantA = await createTenant("iso-rollback-a");
+      const tenantB = await createTenant("iso-rollback-b");
+      const { questionnaireId: qA, activeVersionId: vA } =
+        await createQuestionnaireWithActiveVersion(tenantA, "qn");
+      await expect(
+        runWithTenantContext(
+          { tenantId: tenantB, userId: randomUUID(), roles: [], managementScope: null },
+          () => rollbackToVersion(qA, vA),
+        ),
+      ).rejects.toThrow(QuestionnaireNotFoundError);
     });
   });
 });

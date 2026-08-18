@@ -61,3 +61,20 @@ export class InvalidQuestionInputError extends QuestionAdminError {
     super(`Ungueltige Eingabe: ${issues.join("; ")}`);
   }
 }
+
+/**
+ * Rollback (Phase 8 AP5) darf nur von einer bereits veroeffentlichten Version
+ * (ACTIVE/EXPIRED/ARCHIVED) ausgehen -- fuer eine DRAFT-Quelle existiert
+ * bereits `createDraftVersion({ copyFromVersionId })`, das dieselbe
+ * Tiefkopie-Logik nutzt. Verhindert semantisch sinnlose "Rollbacks" auf einen
+ * noch gar nicht veroeffentlichten Stand.
+ */
+export class RollbackSourceNotEligibleError extends QuestionAdminError {
+  constructor(versionId: string) {
+    super(
+      `QuestionnaireVersion "${versionId}" kann nicht als Rollback-Quelle verwendet werden ` +
+        `(Status DRAFT). Rollback ist nur von bereits veroeffentlichten Versionen ` +
+        `(ACTIVE/EXPIRED/ARCHIVED) aus moeglich.`,
+    );
+  }
+}

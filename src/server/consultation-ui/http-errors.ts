@@ -54,6 +54,7 @@ import {
   QuestionnaireNotFoundError,
   QuestionnaireVersionNotDraftError,
   QuestionnaireVersionNotFoundError,
+  RollbackSourceNotEligibleError,
 } from "../admin/question-admin-errors";
 
 interface ErrorBody {
@@ -250,6 +251,13 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // Question-Management-API: 409 -- Versuch, eine nicht-DRAFT-Version zu
   // mutieren (serverseitige Sperre, Plan Abschnitt 6).
   if (error instanceof QuestionnaireVersionNotDraftError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Question-Management-API (Phase 8 AP5): 409 -- Rollback-Quelle ist noch
+  // eine DRAFT-Version (dafuer existiert bereits createDraftVersion() mit
+  // copyFromVersionId), siehe question-admin-errors.ts.
+  if (error instanceof RollbackSourceNotEligibleError) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
   }
 

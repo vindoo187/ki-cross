@@ -54,6 +54,7 @@ import {
   QuestionnaireNotFoundError,
   QuestionnaireVersionNotDraftError,
   QuestionnaireVersionNotFoundError,
+  RollbackSourceNotEligibleError,
 } from "./question-admin-errors";
 import type { CreateDraftVersionInput, CreateQuestionInput, UpdateQuestionInput } from "./schemas";
 
@@ -281,6 +282,122 @@ export async function getQuestionnaireVersionDetail(
 // 3. Neue DRAFT-Version anlegen (leer oder als Kopie)
 // ---------------------------------------------------------------------------
 
+/**
+ * Kopiert eine Menge von Quell-Questions (samt aktueller QuestionVersion,
+ * AnswerOptions, VisibilityConditions) als NEUE Zeilen in eine bereits
+ * angelegte (leere) `QuestionnaireVersion`. Gemeinsam genutzt von
+ * `createDraftVersion()` (Kopie einer Version als neuer Entwurf, AP3) und
+ * `rollbackToVersion()` (Kopie einer historischen Version als neuer Entwurf,
+ * AP5) -- beide Faelle sind dieselbe Tiefkopie-Operation, nur die Herkunft
+ * der Quellversion unterscheidet sich (beliebige DRAFT-Kopiervorlage vs.
+ * gezielt eine bereits veroeffentlichte historische Version).
+ */
+async function copySourceQuestionsIntoVersion(
+  tx: ScopedTransactionClient,
+  tenantId: string,
+  sourceQuestions: QuestionRow[],
+  newVersionId: string,
+  now: Date,
+): Promise<void> {
+  for (const q of sourceQuestions) {
+    const sourceVersion = pickCurrentVersion(q);
+    if (!sourceVersion) continue;
+
+    const newQuestion = await tx.question.create({
+      data: {
+        tenantId,
+        questionnaireVersionId: newVersionId,
+        key: q.key,
+        needType: q.needType,
+        sortOrder: q.sortOrder,
+      },
+    });
+
+    const newQuestionVersion = await tx.questionVersion.create({
+      data: {
+        tenantId,
+        questionId: newQuestion.id,
+        label: sourceVersion.label,
+        answerType: sourceVersion.answerType,
+        isRequired: sourceVersion.isRequired,
+        minValue: sourceVersion.minValue,
+        maxValue: sourceVersion.maxValue,
+        maxLength: sourceVersion.maxLength,
+        minSelections: sourceVersion.minSelections,
+        maxSelections: sourceVersion.maxSelections,
+        status: "DRAFT",
+        validFrom: now,
+        validTo: null,
+      },
+    });
+
+    // Flacher createMany()-Aufruf statt verschachteltem `create` unter der
+    // Relation -- siehe ausfuehrlichen Kommentar in addQuestionToDraft()
+    // (zusammengesetzter Fremdschluessel akzeptiert `tenantId` in einem
+    // verschachtelten Relations-Create nicht, CI #39).
+    if (sourceVersion.answerOptions.length > 0) {
+      await tx.answerOption.createMany({
+        data: sourceVersion.answerOptions.map((o) => ({
+          tenantId,
+          questionVersionId: newQuestionVersion.id,
+          key: o.key,
+          label: o.label,
+          sortOrder: o.sortOrder,
+        })),
+      });
+    }
+  }
+
+  // Zweiter Durchlauf fuer VisibilityConditions: targetQuestionId muss auf
+  // die NEUEN Question-IDs dieser Kopie zeigen, nicht auf die Quellfragen --
+  // daher erst nach Anlage ALLER neuen Questions aufloesbar.
+  if (sourceQuestions.length > 0) {
+    const idMap = new Map<string, string>(); // alte questionId -> neue questionId
+    const newQuestions = await tx.question.findMany({
+      where: { questionnaireVersionId: newVersionId },
+      include: { versions: { where: { status: "DRAFT" } } },
+    });
+    // Reihenfolge von sourceQuestions und newQuestions ist durch dieselbe
+    // sortOrder-Sortierung + Anlagereihenfolge deckungsgleich; robuster ist
+    // ein Mapping ueber `key` (pro QuestionnaireVersion nicht notwendig
+    // eindeutig erzwungen, aber in der Praxis eindeutig -- Fallback: erste
+    // unbenutzte passende Frage).
+    const usedNewIds = new Set<string>();
+    for (const sourceQuestion of sourceQuestions) {
+      const match = newQuestions.find(
+        (nq) => nq.key === sourceQuestion.key && !usedNewIds.has(nq.id),
+      );
+      if (match) {
+        idMap.set(sourceQuestion.id, match.id);
+        usedNewIds.add(match.id);
+      }
+    }
+
+    for (const sourceQuestion of sourceQuestions) {
+      const sourceVersion = pickCurrentVersion(sourceQuestion);
+      if (!sourceVersion || sourceVersion.visibilityConditions.length === 0) continue;
+      const newQuestionId = idMap.get(sourceQuestion.id);
+      const newQuestionVersion = newQuestions.find((nq) => nq.id === newQuestionId)?.versions[0];
+      if (!newQuestionId || !newQuestionVersion) continue;
+
+      for (const cond of sourceVersion.visibilityConditions) {
+        const newTargetId = idMap.get(cond.targetQuestionId);
+        if (!newTargetId) continue; // Zielfrage lag ausserhalb der kopierten Menge (sollte nicht vorkommen).
+        await tx.visibilityCondition.create({
+          data: {
+            tenantId,
+            questionVersionId: newQuestionVersion.id,
+            targetQuestionId: newTargetId,
+            operator: cond.operator,
+            comparisonValue: cond.comparisonValue,
+            combinator: cond.combinator,
+          },
+        });
+      }
+    }
+  }
+}
+
 export async function createDraftVersion(
   questionnaireId: string,
   input: CreateDraftVersionInput,
@@ -308,103 +425,7 @@ export async function createDraftVersion(
       },
     });
 
-    for (const q of sourceQuestions) {
-      const sourceVersion = pickCurrentVersion(q);
-      if (!sourceVersion) continue;
-
-      const newQuestion = await tx.question.create({
-        data: {
-          tenantId,
-          questionnaireVersionId: newVersion.id,
-          key: q.key,
-          needType: q.needType,
-          sortOrder: q.sortOrder,
-        },
-      });
-
-      const newQuestionVersion = await tx.questionVersion.create({
-        data: {
-          tenantId,
-          questionId: newQuestion.id,
-          label: sourceVersion.label,
-          answerType: sourceVersion.answerType,
-          isRequired: sourceVersion.isRequired,
-          minValue: sourceVersion.minValue,
-          maxValue: sourceVersion.maxValue,
-          maxLength: sourceVersion.maxLength,
-          minSelections: sourceVersion.minSelections,
-          maxSelections: sourceVersion.maxSelections,
-          status: "DRAFT",
-          validFrom: now,
-          validTo: null,
-        },
-      });
-
-      // Flacher createMany()-Aufruf statt verschachteltem `create` unter der
-      // Relation -- siehe ausfuehrlichen Kommentar in addQuestionToDraft()
-      // (zusammengesetzter Fremdschluessel akzeptiert `tenantId` in einem
-      // verschachtelten Relations-Create nicht, CI #39).
-      if (sourceVersion.answerOptions.length > 0) {
-        await tx.answerOption.createMany({
-          data: sourceVersion.answerOptions.map((o) => ({
-            tenantId,
-            questionVersionId: newQuestionVersion.id,
-            key: o.key,
-            label: o.label,
-            sortOrder: o.sortOrder,
-          })),
-        });
-      }
-    }
-
-    // Zweiter Durchlauf fuer VisibilityConditions: targetQuestionId muss auf
-    // die NEUEN Question-IDs dieser Kopie zeigen, nicht auf die Quellfragen
-    // -- daher erst nach Anlage ALLER neuen Questions aufloesbar.
-    if (sourceQuestions.length > 0) {
-      const idMap = new Map<string, string>(); // alte questionId -> neue questionId
-      const newQuestions = await tx.question.findMany({
-        where: { questionnaireVersionId: newVersion.id },
-        include: { versions: { where: { status: "DRAFT" } } },
-      });
-      // Reihenfolge von sourceQuestions und newQuestions ist durch dieselbe
-      // sortOrder-Sortierung + Anlagereihenfolge deckungsgleich; robuster ist
-      // ein Mapping ueber `key` (pro QuestionnaireVersion nicht notwendig
-      // eindeutig erzwungen, aber in der Praxis eindeutig -- Fallback: erste
-      // unbenutzte passende Frage).
-      const usedNewIds = new Set<string>();
-      for (const sourceQuestion of sourceQuestions) {
-        const match = newQuestions.find(
-          (nq) => nq.key === sourceQuestion.key && !usedNewIds.has(nq.id),
-        );
-        if (match) {
-          idMap.set(sourceQuestion.id, match.id);
-          usedNewIds.add(match.id);
-        }
-      }
-
-      for (const sourceQuestion of sourceQuestions) {
-        const sourceVersion = pickCurrentVersion(sourceQuestion);
-        if (!sourceVersion || sourceVersion.visibilityConditions.length === 0) continue;
-        const newQuestionId = idMap.get(sourceQuestion.id);
-        const newQuestionVersion = newQuestions.find((nq) => nq.id === newQuestionId)?.versions[0];
-        if (!newQuestionId || !newQuestionVersion) continue;
-
-        for (const cond of sourceVersion.visibilityConditions) {
-          const newTargetId = idMap.get(cond.targetQuestionId);
-          if (!newTargetId) continue; // Zielfrage lag ausserhalb der kopierten Menge (sollte nicht vorkommen).
-          await tx.visibilityCondition.create({
-            data: {
-              tenantId,
-              questionVersionId: newQuestionVersion.id,
-              targetQuestionId: newTargetId,
-              operator: cond.operator,
-              comparisonValue: cond.comparisonValue,
-              combinator: cond.combinator,
-            },
-          });
-        }
-      }
-    }
+    await copySourceQuestionsIntoVersion(tx, tenantId, sourceQuestions, newVersion.id, now);
 
     return newVersion.id;
   });
@@ -805,4 +826,117 @@ export async function publishDraftVersion(
 
   const version = await getQuestionnaireVersionDetail(questionnaireId, versionId);
   return { version, previousActiveVersionId };
+}
+
+// ---------------------------------------------------------------------------
+// 8. Versionshistorie & Rollback (Phase 8 AP5, siehe
+//    PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 8).
+// ---------------------------------------------------------------------------
+
+/**
+ * Vollstaendige Versionshistorie eines Questionnaire (alle Status, neueste
+ * zuerst) -- rein lesend, keine Filterung nach Status. Grundlage fuer die
+ * Versionshistorie-Ansicht in AP6.
+ */
+export async function getQuestionnaireVersionHistory(
+  questionnaireId: string,
+): Promise<QuestionnaireVersionSummary[]> {
+  await requireQuestionnaire(db, questionnaireId);
+  const versions = await db.questionnaireVersion.findMany({
+    where: { questionnaireId },
+    orderBy: { validFrom: "desc" },
+  });
+  return versions.map((v) => ({
+    id: v.id,
+    label: v.label,
+    status: v.status,
+    validFrom: v.validFrom.toISOString(),
+    validTo: v.validTo ? v.validTo.toISOString() : null,
+  }));
+}
+
+/**
+ * Rollback (Plan Abschnitt 8, ChatGPT-Auflagen 2026-08-18): erzeugt eine neue
+ * `DRAFT`-Version als vollstaendige Tiefkopie einer bereits veroeffentlichten
+ * historischen Version (`sourceVersionId`, Status ACTIVE/EXPIRED/ARCHIVED --
+ * DRAFT wird abgelehnt, siehe `RollbackSourceNotEligibleError`). Das ist
+ * KEIN direkter Statuswechsel der alten Version zurueck auf ACTIVE, sondern
+ * derselbe Tiefkopie-Mechanismus wie `createDraftVersion({
+ * copyFromVersionId })` (AP3) -- die Historie wird dadurch an keiner Stelle
+ * mutiert:
+ *
+ * - Die Quellversion (und alle ihre Question-/QuestionVersion-Zeilen) bleibt
+ *   UNVERAENDERT (kein UPDATE, kein DELETE).
+ * - Die neue DRAFT-Version erhaelt eine EIGENE ID sowie komplett neue
+ *   Question-/QuestionVersion-/AnswerOption-/VisibilityCondition-Zeilen
+ *   (Tiefkopie via `copySourceQuestionsIntoVersion()`, identische Logik wie
+ *   in `createDraftVersion()`).
+ * - Die neue DRAFT-Version durchlaeuft anschliessend REGULAER den
+ *   bestehenden Validate-/Publish-Workflow aus AP4 (`validateDraftVersion()`
+ *   / `publishDraftVersion()`) -- es gibt keine zweite/parallele
+ *   Publish-Logik fuer Rollbacks.
+ * - `AuditLog`-Eintrag (`action: "ROLLBACK"`) wird in DERSELBEN Transaktion
+ *   wie die Tiefkopie geschrieben (analog zur Audit-Invariante aus AP4).
+ *
+ * Autorisierung: dieselbe wie jede andere Draft-Mutation
+ * (`config.questions.edit`, siehe Route-Schicht) -- Rollback ist fachlich
+ * eine Entwurfserstellung, kein Publish-Vorgang.
+ *
+ * Bestandsschutz laufender Beratungen: unveraendert (Plan Abschnitt 3.4) --
+ * diese Funktion mutiert keine `ConsultationSession`-Zeile. Erst ein
+ * anschliessendes `publishDraftVersion()` der hier erzeugten Rollback-DRAFT
+ * aktiviert eine neue Version; bestehende `ConsultationSession`s bleiben auf
+ * ihrer bereits gepinnten `questionnaireVersionId`.
+ */
+export async function rollbackToVersion(
+  questionnaireId: string,
+  sourceVersionId: string,
+  label?: string,
+): Promise<QuestionnaireVersionDetail> {
+  await requireQuestionnaire(db, questionnaireId);
+  const sourceVersion = await requireVersion(db, questionnaireId, sourceVersionId);
+  if (sourceVersion.status === "DRAFT") {
+    throw new RollbackSourceNotEligibleError(sourceVersionId);
+  }
+
+  const sourceQuestions = await loadQuestionRows(db, sourceVersionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+  const now = new Date();
+  const resolvedLabel = label ?? `Rollback von "${sourceVersion.label}"`;
+
+  const newVersionId = await db.$transaction(async (tx) => {
+    const newVersion = await tx.questionnaireVersion.create({
+      data: {
+        tenantId,
+        questionnaireId,
+        label: resolvedLabel,
+        status: "DRAFT",
+        validFrom: now,
+        validTo: null,
+      },
+    });
+
+    await copySourceQuestionsIntoVersion(tx, tenantId, sourceQuestions, newVersion.id, now);
+
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "ROLLBACK",
+        entityType: "QuestionnaireVersion",
+        entityId: newVersion.id,
+        metadata: {
+          questionnaireId,
+          sourceVersionId,
+          sourceVersionStatus: sourceVersion.status,
+          questionCount: sourceQuestions.length,
+        },
+      },
+    });
+
+    return newVersion.id;
+  });
+
+  return getQuestionnaireVersionDetail(questionnaireId, newVersionId);
 }
