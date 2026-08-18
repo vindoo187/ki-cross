@@ -1,0 +1,616 @@
+/**
+ * Phase 8 AP3 -- Integrationstests fuer die Question-Management-API
+ * (Draft-CRUD, siehe PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 6). Testet
+ * sowohl die Service-Schicht (`src/server/admin/question-admin.ts`, direkt
+ * innerhalb `runWithTenantContext()`) als auch die volle HTTP-Kette
+ * (Route-Handler mit echtem signiertem Session-Cookie), gegen ECHTE
+ * Postgres-Fixtures (kein `vi.mock`, Codebase-Konvention, siehe
+ * tests/integration/analytics-management-security.test.ts).
+ *
+ * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
+ */
+
+import { randomUUID } from "node:crypto";
+import { PrismaClient } from "@prisma/client";
+import { NextRequest } from "next/server";
+import { afterAll, describe, expect, it } from "vitest";
+import { runWithTenantContext } from "@/server/tenant/context";
+import {
+  createSessionToken,
+  SESSION_COOKIE_NAME,
+  type SessionPayload,
+} from "@/server/auth/session";
+import {
+  addQuestionToDraft,
+  createDraftVersion,
+  getQuestionnaireVersionDetail,
+  listQuestionnaires,
+  removeQuestionFromDraft,
+  updateQuestionInDraft,
+} from "@/server/admin/question-admin";
+import {
+  AdminQuestionNotFoundError,
+  QuestionnaireNotFoundError,
+  QuestionnaireVersionNotDraftError,
+  QuestionnaireVersionNotFoundError,
+} from "@/server/admin/question-admin-errors";
+import { GET as listQuestionnairesRoute } from "@/app/api/admin/questionnaires/route";
+import { POST as createDraftVersionRoute } from "@/app/api/admin/questionnaires/[id]/versions/route";
+import { GET as getVersionDetailRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/route";
+import { POST as addQuestionRoute } from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/questions/route";
+import {
+  DELETE as deleteQuestionRoute,
+  PATCH as patchQuestionRoute,
+} from "@/app/api/admin/questionnaires/[id]/versions/[versionId]/questions/[questionId]/route";
+
+const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
+process.env.DEV_AUTH_SECRET ??= "ap3-question-admin-test-secret-not-for-prod";
+
+describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CRUD)", () => {
+  const rawClient = new PrismaClient();
+  const suffix = randomUUID().slice(0, 8);
+
+  afterAll(async () => {
+    await rawClient.$disconnect();
+  });
+
+  function baseSessionPayload(tenantId: string): Omit<SessionPayload, "issuedAt"> {
+    return {
+      tenantId,
+      userId: randomUUID(),
+      employeeId: randomUUID(),
+      storeId: randomUUID(),
+      displayName: "Test",
+      roles: [],
+      managementScope: null,
+      configPermissions: [],
+    };
+  }
+
+  async function createTenant(key: string) {
+    const tenant = await rawClient.tenant.create({
+      data: { key: `${key}-${suffix}`, name: `Test ${key}`, isSynthetic: true },
+    });
+    return tenant.id;
+  }
+
+  async function createQuestionnaireWithActiveVersion(tenantId: string, key: string) {
+    const questionnaire = await rawClient.questionnaire.create({
+      data: { tenantId, key: `${key}-${suffix}` },
+    });
+    const activeVersion = await rawClient.questionnaireVersion.create({
+      data: {
+        tenantId,
+        questionnaireId: questionnaire.id,
+        label: "v1",
+        status: "ACTIVE",
+        validFrom: new Date("2026-01-01T00:00:00Z"),
+        validTo: null,
+      },
+    });
+    const question = await rawClient.question.create({
+      data: {
+        tenantId,
+        questionnaireVersionId: activeVersion.id,
+        key: "q1",
+        sortOrder: 1,
+      },
+    });
+    const questionVersion = await rawClient.questionVersion.create({
+      data: {
+        tenantId,
+        questionId: question.id,
+        label: "Frage 1",
+        answerType: "SINGLE_CHOICE",
+        isRequired: true,
+        status: "ACTIVE",
+        validFrom: new Date("2026-01-01T00:00:00Z"),
+        validTo: null,
+      },
+    });
+    // Flache createMany()-Aufrufe statt verschachteltem `create` -- folgt
+    // demselben Muster wie prisma/seed.ts (siehe dort `answerOption.createMany()`).
+    await rawClient.answerOption.createMany({
+      data: [
+        { tenantId, questionVersionId: questionVersion.id, key: "ja", label: "Ja", sortOrder: 1 },
+        {
+          tenantId,
+          questionVersionId: questionVersion.id,
+          key: "nein",
+          label: "Nein",
+          sortOrder: 2,
+        },
+      ],
+    });
+    return { questionnaireId: questionnaire.id, activeVersionId: activeVersion.id };
+  }
+
+  async function createDraftQuestionnaireVersion(tenantId: string, key: string) {
+    const questionnaire = await rawClient.questionnaire.create({
+      data: { tenantId, key: `${key}-${suffix}` },
+    });
+    const draftVersion = await rawClient.questionnaireVersion.create({
+      data: {
+        tenantId,
+        questionnaireId: questionnaire.id,
+        label: "draft",
+        status: "DRAFT",
+        validFrom: new Date(),
+        validTo: null,
+      },
+    });
+    return { questionnaireId: questionnaire.id, draftVersionId: draftVersion.id };
+  }
+
+  // -------------------------------------------------------------------
+  // 1. Service-Schicht (direkt innerhalb runWithTenantContext())
+  // -------------------------------------------------------------------
+  describe("1. Service-Schicht", () => {
+    it("listQuestionnaires() liefert Fragebogen inkl. Versionen+Status", async () => {
+      const tenantId = await createTenant("svc-list");
+      await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const result = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => listQuestionnaires(),
+      );
+      expect(result.length).toBeGreaterThanOrEqual(1);
+      expect(result[0]?.versions[0]?.status).toBe("ACTIVE");
+    });
+
+    it("getQuestionnaireVersionDetail() liefert Fragen inkl. AnswerOptions", async () => {
+      const tenantId = await createTenant("svc-detail");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      const detail = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => getQuestionnaireVersionDetail(questionnaireId, activeVersionId),
+      );
+      expect(detail.questions).toHaveLength(1);
+      expect(detail.questions[0]?.answerOptions).toHaveLength(2);
+    });
+
+    it("getQuestionnaireVersionDetail() mit fremder questionnaireId -> QuestionnaireNotFoundError", async () => {
+      const tenantId = await createTenant("svc-qnf");
+      const { activeVersionId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => getQuestionnaireVersionDetail(randomUUID(), activeVersionId),
+        ),
+      ).rejects.toThrow(QuestionnaireNotFoundError);
+    });
+
+    it("getQuestionnaireVersionDetail() mit versionId aus anderem Questionnaire -> QuestionnaireVersionNotFoundError", async () => {
+      const tenantId = await createTenant("svc-vnf");
+      const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn-a");
+      const { activeVersionId: otherVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn-b",
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => getQuestionnaireVersionDetail(questionnaireId, otherVersionId),
+        ),
+      ).rejects.toThrow(QuestionnaireVersionNotFoundError);
+    });
+
+    it("createDraftVersion() ohne copyFromVersionId legt eine leere DRAFT-Version an", async () => {
+      const tenantId = await createTenant("svc-create-empty");
+      const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const version = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => createDraftVersion(questionnaireId, { label: "v2" }),
+      );
+      expect(version.status).toBe("DRAFT");
+      expect(version.questions).toHaveLength(0);
+    });
+
+    it("createDraftVersion() mit copyFromVersionId kopiert Fragen inkl. AnswerOptions als neue Zeilen", async () => {
+      const tenantId = await createTenant("svc-create-copy");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      const version = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          createDraftVersion(questionnaireId, { label: "v2", copyFromVersionId: activeVersionId }),
+      );
+      expect(version.status).toBe("DRAFT");
+      expect(version.questions).toHaveLength(1);
+      expect(version.questions[0]?.id).not.toBe(
+        (
+          await runWithTenantContext(
+            { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+            () => getQuestionnaireVersionDetail(questionnaireId, activeVersionId),
+          )
+        ).questions[0]?.id,
+      );
+      expect(version.questions[0]?.answerOptions).toHaveLength(2);
+      expect(version.questions[0]?.status).toBe("DRAFT");
+
+      // Quellversion bleibt unveraendert (ACTIVE, unveraenderte Frage-ID).
+      const source = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => getQuestionnaireVersionDetail(questionnaireId, activeVersionId),
+      );
+      expect(source.status).toBe("ACTIVE");
+    });
+
+    it("addQuestionToDraft() fuegt eine Frage inkl. AnswerOptions/VisibilityConditions hinzu", async () => {
+      const tenantId = await createTenant("svc-add");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const question = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          addQuestionToDraft(questionnaireId, draftVersionId, {
+            key: "neue-frage",
+            sortOrder: 1,
+            label: "Neue Frage",
+            answerType: "BOOLEAN",
+            isRequired: false,
+            answerOptions: [],
+            visibilityConditions: [],
+          }),
+      );
+      expect(question.key).toBe("neue-frage");
+      expect(question.status).toBe("DRAFT");
+    });
+
+    it("addQuestionToDraft() auf einer ACTIVE-Version -> QuestionnaireVersionNotDraftError (409-Sperre)", async () => {
+      const tenantId = await createTenant("svc-add-locked");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () =>
+            addQuestionToDraft(questionnaireId, activeVersionId, {
+              key: "x",
+              sortOrder: 1,
+              label: "X",
+              answerType: "BOOLEAN",
+              isRequired: false,
+              answerOptions: [],
+              visibilityConditions: [],
+            }),
+        ),
+      ).rejects.toThrow(QuestionnaireVersionNotDraftError);
+    });
+
+    it("updateQuestionInDraft() aktualisiert Label/AnswerOptions einer DRAFT-Frage in place", async () => {
+      const tenantId = await createTenant("svc-update");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const question = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          addQuestionToDraft(questionnaireId, draftVersionId, {
+            key: "q",
+            sortOrder: 1,
+            label: "Alt",
+            answerType: "SINGLE_CHOICE",
+            isRequired: false,
+            answerOptions: [{ key: "a", label: "A", sortOrder: 1 }],
+            visibilityConditions: [],
+          }),
+      );
+      const updated = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          updateQuestionInDraft(questionnaireId, draftVersionId, question.id, {
+            label: "Neu",
+            answerOptions: [
+              { key: "a", label: "A", sortOrder: 1 },
+              { key: "b", label: "B", sortOrder: 2 },
+            ],
+          }),
+      );
+      expect(updated.label).toBe("Neu");
+      expect(updated.answerOptions).toHaveLength(2);
+      // Gleiche QuestionVersion-Zeile (in place aktualisiert, keine neue Zeile).
+      expect(updated.questionVersionId).toBe(question.questionVersionId);
+    });
+
+    it("updateQuestionInDraft() mit unbekannter questionId -> AdminQuestionNotFoundError", async () => {
+      const tenantId = await createTenant("svc-update-nf");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () =>
+            updateQuestionInDraft(questionnaireId, draftVersionId, randomUUID(), { label: "X" }),
+        ),
+      ).rejects.toThrow(AdminQuestionNotFoundError);
+    });
+
+    it("removeQuestionFromDraft() entfernt eine Frage vollstaendig", async () => {
+      const tenantId = await createTenant("svc-remove");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const question = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          addQuestionToDraft(questionnaireId, draftVersionId, {
+            key: "q",
+            sortOrder: 1,
+            label: "Frage",
+            answerType: "BOOLEAN",
+            isRequired: false,
+            answerOptions: [],
+            visibilityConditions: [],
+          }),
+      );
+      await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => removeQuestionFromDraft(questionnaireId, draftVersionId, question.id),
+      );
+      const detail = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => getQuestionnaireVersionDetail(questionnaireId, draftVersionId),
+      );
+      expect(detail.questions).toHaveLength(0);
+    });
+
+    it("Tenant-Isolation: questionnaireId aus Tenant A ist in Tenant B nicht auffindbar (0 Treffer statt Cross-Tenant-Zugriff)", async () => {
+      const tenantA = await createTenant("iso-a");
+      const tenantB = await createTenant("iso-b");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantA,
+        "qn",
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId: tenantB, userId: randomUUID(), roles: [], managementScope: null },
+          () => getQuestionnaireVersionDetail(questionnaireId, activeVersionId),
+        ),
+      ).rejects.toThrow(QuestionnaireNotFoundError);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // 2. HTTP-Kette (echte Route-Handler, echtes signiertes Session-Cookie)
+  // -------------------------------------------------------------------
+  describe("2. HTTP-Kette (Config-RBAC + 409/404-Mapping)", () => {
+    function requestWithCookie(
+      url: string,
+      token: string,
+      init?: { method?: string; body?: string },
+    ) {
+      return new NextRequest(url, {
+        method: init?.method,
+        body: init?.body,
+        headers: new Headers({ cookie: `${SESSION_COOKIE_NAME}=${token}` }),
+      });
+    }
+
+    function routeParams<T extends Record<string, string>>(value: T) {
+      return { params: Promise.resolve(value) };
+    }
+
+    it("GET /api/admin/questionnaires ohne config.questions.view -> 403", async () => {
+      const tenantId = await createTenant("http-view-denied");
+      const token = createSessionToken(baseSessionPayload(tenantId));
+      const response = await listQuestionnairesRoute(
+        requestWithCookie("http://localhost/api/admin/questionnaires", token),
+      );
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(body.error).toBe("ConfigAccessDeniedError");
+    });
+
+    it("GET /api/admin/questionnaires mit config.questions.view -> 200", async () => {
+      const tenantId = await createTenant("http-view-ok");
+      await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view"],
+      });
+      const response = await listQuestionnairesRoute(
+        requestWithCookie("http://localhost/api/admin/questionnaires", token),
+      );
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(Array.isArray(body.questionnaires)).toBe(true);
+    });
+
+    it("kein Session-Cookie -> 401", async () => {
+      const response = await listQuestionnairesRoute(
+        new NextRequest("http://localhost/api/admin/questionnaires"),
+      );
+      expect(response.status).toBe(401);
+    });
+
+    it("POST .../versions ohne config.questions.edit (nur view) -> 403", async () => {
+      const tenantId = await createTenant("http-edit-denied");
+      const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view"],
+      });
+      const response = await createDraftVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions`,
+          token,
+          { method: "POST", body: JSON.stringify({ label: "v2" }) },
+        ),
+        routeParams({ id: questionnaireId }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it("POST .../versions mit config.questions.edit -> 201, neue DRAFT-Version", async () => {
+      const tenantId = await createTenant("http-edit-ok");
+      const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const response = await createDraftVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions`,
+          token,
+          { method: "POST", body: JSON.stringify({ label: "v2" }) },
+        ),
+        routeParams({ id: questionnaireId }),
+      );
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      expect(body.version.status).toBe("DRAFT");
+    });
+
+    it("POST .../questions auf einer ACTIVE-Version -> 409 (serverseitige DRAFT-Sperre)", async () => {
+      const tenantId = await createTenant("http-409");
+      const { questionnaireId, activeVersionId } = await createQuestionnaireWithActiveVersion(
+        tenantId,
+        "qn",
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const response = await addQuestionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${activeVersionId}/questions`,
+          token,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              key: "x",
+              sortOrder: 1,
+              label: "X",
+              answerType: "BOOLEAN",
+              isRequired: false,
+            }),
+          },
+        ),
+        routeParams({ id: questionnaireId, versionId: activeVersionId }),
+      );
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.error).toBe("QuestionnaireVersionNotDraftError");
+    });
+
+    it("GET .../versions/[versionId] mit manipulierter fremder-Mandant-versionId -> 404 (Tenant-Isolation ueber gescopten Client)", async () => {
+      const tenantA = await createTenant("http-iso-a");
+      const tenantB = await createTenant("http-iso-b");
+      const { questionnaireId: qA, activeVersionId: vA } =
+        await createQuestionnaireWithActiveVersion(tenantA, "qn");
+      await createQuestionnaireWithActiveVersion(tenantB, "qn");
+
+      const tokenB = createSessionToken({
+        ...baseSessionPayload(tenantB),
+        configPermissions: ["config.questions.view"],
+      });
+      const response = await getVersionDetailRoute(
+        requestWithCookie(`http://localhost/api/admin/questionnaires/${qA}/versions/${vA}`, tokenB),
+        routeParams({ id: qA, versionId: vA }),
+      );
+      expect(response.status).toBe(404);
+    });
+
+    it("PATCH .../questions/[questionId] mit unbekannter questionId -> 404", async () => {
+      const tenantId = await createTenant("http-patch-404");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const response = await patchQuestionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${draftVersionId}/questions/${randomUUID()}`,
+          token,
+          { method: "PATCH", body: JSON.stringify({ label: "X" }) },
+        ),
+        routeParams({ id: questionnaireId, versionId: draftVersionId, questionId: randomUUID() }),
+      );
+      expect(response.status).toBe(404);
+    });
+
+    it("DELETE .../questions/[questionId] auf DRAFT-Version -> 204, danach in der Detailansicht nicht mehr vorhanden", async () => {
+      const tenantId = await createTenant("http-delete");
+      const { questionnaireId, draftVersionId } = await createDraftQuestionnaireVersion(
+        tenantId,
+        "qn",
+      );
+      const editorToken = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const created = await addQuestionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${draftVersionId}/questions`,
+          editorToken,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              key: "q",
+              sortOrder: 1,
+              label: "Frage",
+              answerType: "BOOLEAN",
+              isRequired: false,
+            }),
+          },
+        ),
+        routeParams({ id: questionnaireId, versionId: draftVersionId }),
+      );
+      const { question } = await created.json();
+
+      const deleteResponse = await deleteQuestionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${draftVersionId}/questions/${question.id}`,
+          editorToken,
+          { method: "DELETE" },
+        ),
+        routeParams({ id: questionnaireId, versionId: draftVersionId, questionId: question.id }),
+      );
+      expect(deleteResponse.status).toBe(204);
+
+      const detailResponse = await getVersionDetailRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions/${draftVersionId}`,
+          editorToken,
+        ),
+        routeParams({ id: questionnaireId, versionId: draftVersionId }),
+      );
+      const { version } = await detailResponse.json();
+      expect(version.questions).toHaveLength(0);
+    });
+
+    it("config_editor (view+edit, kein publish) darf mutieren -- publish-Berechtigung ist nicht Voraussetzung fuer AP3-Routen", async () => {
+      const tenantId = await createTenant("http-editor-role");
+      const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const editorToken = createSessionToken({
+        ...baseSessionPayload(tenantId),
+        configPermissions: ["config.questions.view", "config.questions.edit"],
+      });
+      const response = await createDraftVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/questionnaires/${questionnaireId}/versions`,
+          editorToken,
+          { method: "POST", body: JSON.stringify({ label: "v2" }) },
+        ),
+        routeParams({ id: questionnaireId }),
+      );
+      expect(response.status).toBe(201);
+    });
+  });
+});

@@ -46,6 +46,14 @@ import {
   DealAlreadyExistsForSessionError,
 } from "../deals/errors";
 import { ManagementAccessDeniedError } from "../analytics/management-authz";
+import { ConfigAccessDeniedError } from "../authz/config-permissions";
+import {
+  AdminQuestionNotFoundError,
+  InvalidQuestionInputError,
+  QuestionnaireNotFoundError,
+  QuestionnaireVersionNotDraftError,
+  QuestionnaireVersionNotFoundError,
+} from "../admin/question-admin-errors";
 
 interface ErrorBody {
   error: string;
@@ -205,6 +213,37 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // nicht mit "kein Zugriff" verwechselt werden kann (siehe management-authz.ts).
   if (error instanceof ManagementAccessDeniedError) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 403 });
+  }
+
+  // Configuration-RBAC (Phase 8 AP2): 403 -- deny-by-default, keine
+  // Autorisierung aus der Rolle allein, siehe config-permissions.ts.
+  if (error instanceof ConfigAccessDeniedError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 403 });
+  }
+
+  // Question-Management-API (Phase 8 AP3): 404 -- Questionnaire/Version/Frage
+  // nicht gefunden (inkl. Tenant-Isolation ueber den gescopten `db`-Client:
+  // eine fremde-Mandant-ID liefert hier ebenfalls 0 Treffer -> 404).
+  if (
+    error instanceof QuestionnaireNotFoundError ||
+    error instanceof QuestionnaireVersionNotFoundError ||
+    error instanceof AdminQuestionNotFoundError
+  ) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 404 });
+  }
+
+  // Question-Management-API: 409 -- Versuch, eine nicht-DRAFT-Version zu
+  // mutieren (serverseitige Sperre, Plan Abschnitt 6).
+  if (error instanceof QuestionnaireVersionNotDraftError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Question-Management-API: 422 -- fachlich ungueltige Eingabe.
+  if (error instanceof InvalidQuestionInputError) {
+    return NextResponse.json(
+      { error: error.name, message: error.message, issues: error.issues },
+      { status: 422 },
+    );
   }
 
   return null;
