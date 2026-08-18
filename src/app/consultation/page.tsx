@@ -77,6 +77,17 @@ export default async function ConsultationEntryPage() {
           <Link href="/analytics/management">Management-Analytics ansehen</Link>
         </p>
       )}
+
+      {/* Phase 8 AP6: Einstiegspunkt zur Fragenverwaltung -- nur sichtbar, wenn
+          die Session ueberhaupt config.questions.view traegt (reine
+          UI-Bequemlichkeit, KEINE Sicherheitsgrenze: der eigentliche Zugriff
+          wird ausschliesslich serverseitig ueber requireConfigPermission()
+          durchgesetzt, siehe /admin/questions/page.tsx). */}
+      {session.configPermissions.includes("config.questions.view") && (
+        <p className="consultation-entry__analytics-link">
+          <Link href="/admin/questions">Fragenverwaltung oeffnen</Link>
+        </p>
+      )}
     </main>
   );
 }
