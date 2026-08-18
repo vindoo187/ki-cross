@@ -1401,4 +1401,95 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
       expect(auditEntries).toHaveLength(0);
     });
   });
+
+  // -------------------------------------------------------------------
+  // 5. AP8 -- Hardening (siehe PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 9
+  //    und die Versionierungs-Invariante "niemals zwei ACTIVE-Versionen").
+  //    Bei der Pruefung dieser Invariante wurde zunaechst faelschlich eine
+  //    offene Race-Condition-Luecke vermutet (siehe ChatGPT-Konsultation
+  //    2026-08-18) -- tatsaechlich verhindert dies bereits der seit der
+  //    Init-Migration bestehende EXCLUDE-Constraint
+  //    "questionnaire_versions_no_overlap" (siehe Kommentar bei
+  //    QuestionnaireVersion in schema.prisma; ChatGPT-Entscheidung
+  //    "Option B" -- kein zusaetzlicher Unique-Index noetig). Dieser Test
+  //    reproduziert den DB-Lock-Wettlauf tatsaechlich (zwei parallele
+  //    publishDraftVersion()-Aufrufe fuer zwei VERSCHIEDENE DRAFT-Versionen
+  //    desselben Questionnaire) und beweist damit die Invariante End-zu-Ende,
+  //    nicht nur per PGlite-Direkt-Insert (siehe verify_migration_pglite.mjs).
+  // -------------------------------------------------------------------
+  describe("5. AP8: Hardening (Versionierungs-Invarianten)", () => {
+    it("zwei nahezu gleichzeitige publishDraftVersion()-Aufrufe fuer zwei verschiedene DRAFT-Versionen desselben Questionnaire: hoechstens eine wird ACTIVE", async () => {
+      const tenantId = await createTenant("ap8-publish-race");
+      const { questionnaireId } = await createQuestionnaireWithActiveVersion(tenantId, "qn");
+      const actorUserId = await createUser(tenantId, "ap8-publish-race-actor");
+
+      async function preparePublishableDraft(label: string) {
+        const version = await runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => createDraftVersion(questionnaireId, { label }),
+        );
+        await runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            addQuestionToDraft(questionnaireId, version.id, {
+              key: `${label}-q1`,
+              sortOrder: 1,
+              label: "Frage 1",
+              answerType: "BOOLEAN",
+              isRequired: false,
+              answerOptions: [],
+              visibilityConditions: [],
+            }),
+        );
+        return version.id;
+      }
+
+      const draftAId = await preparePublishableDraft("draft-a");
+      const draftBId = await preparePublishableDraft("draft-b");
+
+      const results = await Promise.allSettled([
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishDraftVersion(questionnaireId, draftAId),
+        ),
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishDraftVersion(questionnaireId, draftBId),
+        ),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      // Mindestens einer der beiden konkurrierenden Publish-Versuche muss
+      // erfolgreich sein (kein genereller Deadlock/Totalausfall) -- exakt
+      // einer, ODER im (bei zwei CPU-Kernen theoretisch moeglichen, hier
+      // nicht beobachteten) seriellen Fall beide, sofern Postgres sie
+      // vollstaendig nacheinander abarbeitet. Die eigentliche Invariante
+      // wird unten direkt gegen die DB geprueft, nicht ueber die Anzahl
+      // der Promise-Ergebnisse.
+      expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+      expect(fulfilled.length + rejected.length).toBe(2);
+
+      // Die eigentliche Invariante: unabhaengig vom genauen Timing darf
+      // NIE mehr als eine ACTIVE QuestionnaireVersion fuer dieses
+      // Questionnaire existieren.
+      const activeVersions = await rawClient.questionnaireVersion.findMany({
+        where: { tenantId, questionnaireId, status: "ACTIVE" },
+      });
+      expect(activeVersions).toHaveLength(1);
+
+      // Und: hoechstens ein ACTIVATE-Audit-Eintrag pro tatsaechlich
+      // aktivierter Version -- ein fehlgeschlagener Publish-Versuch darf
+      // keinen Audit-Eintrag hinterlassen (Atomaritaet, siehe AP7).
+      const activateAudits = await rawClient.auditLog.findMany({
+        where: {
+          tenantId,
+          entityType: "QuestionnaireVersion",
+          action: "ACTIVATE",
+          entityId: { in: [draftAId, draftBId] },
+        },
+      });
+      expect(activateAudits).toHaveLength(fulfilled.length);
+    });
+  });
 });

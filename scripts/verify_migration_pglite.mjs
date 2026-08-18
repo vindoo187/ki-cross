@@ -436,13 +436,53 @@ try {
   console.log(`OK (erwartet abgelehnt) append-only: UPDATE auf audit_logs: ${err.message}`);
 }
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 8 AP8 (Hardening): "niemals zwei ACTIVE-Versionen
+// gleichzeitig" fuer dasselbe Questionnaire. Bei der Pruefung dieser
+// Invariante wurde zunaechst faelschlich eine offene Luecke vermutet
+// (Race Condition bei zwei nahezu gleichzeitigen publishDraftVersion()-
+// Aufrufen) -- tatsaechlich verhindert dies bereits der seit der
+// Init-Migration bestehende EXCLUDE-Constraint
+// "questionnaire_versions_no_overlap" (siehe Kommentar bei
+// QuestionnaireVersion in schema.prisma; ChatGPT-Entscheidung "Option B",
+// 2026-08-18, statt eines zusaetzlichen Unique-Index). Dieser Smoke-Test
+// belegt das explizit.
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-8-AP8-questionnaire_versions ACTIVE-Ueberlappungsschutz ==");
+
+await expectRejected(
+  "zweite ACTIVE QuestionnaireVersion desselben Questionnaire (questionnaire_versions_no_overlap)",
+  () =>
+    db.query(
+      `INSERT INTO questionnaire_versions (id, tenant_id, questionnaire_id, label, valid_from, status) VALUES ($1,$2,$3,'V2-parallel','2026-06-01T00:00:00Z','ACTIVE')`,
+      [uuid(), tenantId, questionnaireId],
+    ),
+);
+
+// Ein zweites, ANDERES Questionnaire darf weiterhin unabhaengig eine eigene
+// ACTIVE Version haben -- der Index ist bewusst pro Questionnaire scoped,
+// nicht pro Tenant.
+const questionnaireId2 = uuid();
+await db.query(`INSERT INTO questionnaires (id, tenant_id, key) VALUES ($1,$2,'q2')`, [
+  questionnaireId2,
+  tenantId,
+]);
+await db.query(
+  `INSERT INTO questionnaire_versions (id, tenant_id, questionnaire_id, label, valid_from, status) VALUES ($1,$2,$3,'V1','2026-01-01T00:00:00Z','ACTIVE')`,
+  [uuid(), tenantId, questionnaireId2],
+);
+console.log(
+  "OK: ACTIVE QuestionnaireVersion fuer ein ANDERES Questionnaire desselben Tenants bleibt unabhaengig moeglich.",
+);
+
 if (failures > 0) {
   console.error(`\n${failures} Smoke-Test-Pruefung(en) FEHLGESCHLAGEN.`);
   process.exit(1);
 }
 
 console.log(
-  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7) ERFOLGREICH.",
+  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8) ERFOLGREICH.",
 );
 
 await db.close();

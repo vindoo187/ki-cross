@@ -889,6 +889,17 @@ export async function publishDraftVersion(
       });
     }
 
+    // Phase 8 AP8 (Hardening): eine Race Condition "zwei nahezu gleichzeitig
+    // ACTIVE Versionen desselben Questionnaire" wurde hier vermutet und mit
+    // ChatGPT abgestimmt -- tatsaechlich verhindert bereits der bestehende
+    // EXCLUDE-Constraint `questionnaire_versions_no_overlap` (Init-Migration)
+    // diesen Fall: eine ACTIVE Version hat immer `validTo = null` (offenes
+    // Zeitfenster), zwei offene Zeitfenster fuer dasselbe Questionnaire
+    // ueberlappen sich zwangslaeufig und werden vom Constraint abgelehnt.
+    // Kein zusaetzlicher Unique-Index noetig (ChatGPT-Entscheidung "Option B",
+    // 2026-08-18) -- siehe den erklaerenden Kommentar bei `QuestionnaireVersion`
+    // in schema.prisma sowie den PGlite-Smoke-Test in
+    // scripts/verify_migration_pglite.mjs.
     await tx.auditLog.create({
       data: {
         tenantId,

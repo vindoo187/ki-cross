@@ -1082,6 +1082,28 @@ model QuestionnaireVersion {
   @@map("questionnaire_versions")
 }
 
+// Phase 8 AP8 (Hardening) -- Dokumentations-Nachtrag zu einem bereits seit
+// der Init-Migration bestehenden Constraint, der bei einer Race-Condition-
+// Pruefung ("niemals zwei ACTIVE-Versionen gleichzeitig") zunaechst uebersehen
+// wurde: "questionnaire_versions_no_overlap" (EXCLUDE USING gist ueber
+// tenant_id/questionnaire_id/tstzrange(valid_from, valid_to) WHERE status IN
+// ('ACTIVE','EXPIRED"), per rohem SQL in
+// prisma/migrations/20260731000000_init/migration.sql -- Prisma kennt keine
+// EXCLUDE-Constraints im Schema-DSL, siehe auch RuleSetVersion).
+//
+// Diese EXCLUDE-Constraint verhindert bereits jede zeitliche Ueberlappung
+// zweier ACTIVE/EXPIRED-Versionen desselben Questionnaire. Da
+// publishDraftVersion() (src/server/admin/question-admin.ts) eine neu
+// aktivierte Version IMMER mit validTo=NULL (offenes Zeitfenster) anlegt,
+// wuerden zwei nahezu gleichzeitige Publish-Vorgaenge fuer zwei
+// VERSCHIEDENE DRAFT-Versionen desselben Questionnaire zwangslaeufig zwei
+// sich ueberlappende offene Zeitfenster erzeugen -- die EXCLUDE-Constraint
+// lehnt den zweiten Publish-Versuch dadurch bereits ab, ganz ohne
+// zusaetzlichen Unique-Index (ChatGPT-Entscheidung "Option B", 2026-08-18,
+// nach eigener Selbstkorrektur eines zunaechst faelschlich als offene Luecke
+// gemeldeten Befunds). Durch PGlite-Smoke-Test bewiesen, siehe
+// scripts/verify_migration_pglite.mjs, Abschnitt "Phase-8-AP8".
+
 model Question {
   id                     String   @id @default(uuid()) @db.Uuid
   tenantId               String   @map("tenant_id") @db.Uuid
