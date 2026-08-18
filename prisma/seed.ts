@@ -37,6 +37,7 @@ import {
   permissionKeysForSeedRole,
   type SeedRoleKey,
 } from "../src/server/authz/seed-role-permissions";
+import { hashPassword } from "../src/server/auth/password";
 
 const prisma = new PrismaClient();
 
@@ -344,6 +345,44 @@ async function seedTenant(
       },
     })
     .catch(() => undefined);
+
+  // --- Admin-/Konfigurations-Testnutzer (Phase 8 AP1) ---
+  // Synthetischer Admin-Testnutzer mit gesetztem passwordHash fuer den
+  // neuen Credential-Login (src/app/api/auth/admin-login/route.ts) --
+  // additiv zum bestehenden Dev-Login-Fluss oben (kein Passwort). Erhaelt
+  // wie jeder synthetische Nutzer einen Employee-Datensatz (notwendig,
+  // weil SessionPayload employeeId/storeId voraussetzt), aber noch KEINE
+  // config.*-RoleAssignment -- die config_editor/config_publisher-Rollen
+  // und ihre Zuweisung folgen erst in AP2 (siehe
+  // PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 5). Test-Passwort ist bewusst
+  // klar als synthetisch gekennzeichnet, kein echtes Secret, NICHT
+  // produktionsreif (siehe src/server/auth/errors.ts).
+  const adminTestPassword = "synthetic-admin-test-passwort-2026";
+  const adminUser = await prisma.user.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenant.id,
+        email: `${config.key}-admin@example-synthetic.test`,
+      },
+    },
+    update: { passwordHash: hashPassword(adminTestPassword) },
+    create: {
+      tenantId: tenant.id,
+      email: `${config.key}-admin@example-synthetic.test`,
+      isSynthetic: true,
+      passwordHash: hashPassword(adminTestPassword),
+    },
+  });
+  await prisma.employee.upsert({
+    where: { tenantId_userId: { tenantId: tenant.id, userId: adminUser.id } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      storeId: stores[0]!.id,
+      userId: adminUser.id,
+      displayName: `Synthetische:r Admin:in (${config.key})`,
+    },
+  });
 
   // --- Produktkatalog (tenant-eigene Kategorien/Produkte, globaler Provider) ---
   const category = await prisma.productCategory.upsert({

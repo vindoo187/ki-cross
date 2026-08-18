@@ -311,6 +311,16 @@ model User {
   isSynthetic Boolean  @default(false) @map("is_synthetic")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  // Phase 8 AP1: Passwort-Hash fuer den neuen, ausschliesslich fuer
+  // Admin-/Konfigurationsflaechen gueltigen Credential-Login
+  // (src/server/auth/admin-login.ts). `null` fuer alle Nutzer, die sich
+  // weiterhin nur ueber den bestehenden `dev-login` (Beratungsfluss, kein
+  // Passwort) anmelden -- additiv, siehe PHASE_8_IMPLEMENTATION_PLAN.md
+  // Abschnitt 3.1/1.3. Format: "<salt-hex>:<hash-hex>" (scrypt via
+  // node:crypto, siehe src/server/auth/password.ts) -- niemals Klartext,
+  // niemals an Client/UI zurueckgegeben.
+  passwordHash String? @map("password_hash")
+
   tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   employee Employee?
 

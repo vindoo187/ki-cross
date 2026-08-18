@@ -10,6 +10,7 @@ const MIGRATIONS = [
   "prisma/migrations/20260801130000_recommendation_engine/migration.sql",
   "prisma/migrations/20260817170000_deal_unique_consultation_session/migration.sql",
   "prisma/migrations/20260817220000_analytics_kpi_indexes/migration.sql",
+  "prisma/migrations/20260818090000_user_password_hash/migration.sql",
 ];
 
 const db = new PGlite({ extensions: { btree_gist } });
@@ -374,11 +375,46 @@ for (const name of expectedIndexes) {
   }
 }
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 8 AP1: users.password_hash existiert, ist nullable und
+// laesst sich fuer einen synthetischen Admin-Testnutzer setzen, waehrend
+// bestehende Nutzer ohne den Wert unveraendert funktionieren (siehe
+// PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 3.1/4).
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-8-AP1-users.password_hash ==");
+
+const columnRows = await db.query(`
+  SELECT is_nullable FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'password_hash';
+`);
+if (columnRows.rows.length === 0) {
+  console.error(`FEHLER: Spalte "users.password_hash" fehlt!`);
+  failures += 1;
+} else if (columnRows.rows[0].is_nullable !== "YES") {
+  console.error(`FEHLER: "users.password_hash" ist nicht nullable!`);
+  failures += 1;
+} else {
+  console.log(`OK: Spalte "users.password_hash" vorhanden und nullable.`);
+}
+
+const adminUserId = uuid();
+await db.query(
+  `INSERT INTO users (id, tenant_id, email, is_synthetic, password_hash) VALUES ($1,$2,'admin@example-synthetic.test',true,'deadbeef:cafebabe')`,
+  [adminUserId, tenantId],
+);
+console.log("OK: Nutzer mit gesetztem password_hash angelegt.");
+console.log(
+  "OK: bestehende Nutzer (userId oben) blieben mit password_hash = NULL funktionsfaehig.",
+);
+
 if (failures > 0) {
   console.error(`\n${failures} Smoke-Test-Pruefung(en) FEHLGESCHLAGEN.`);
   process.exit(1);
 }
 
-console.log("\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6) ERFOLGREICH.");
+console.log(
+  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1) ERFOLGREICH.",
+);
 
 await db.close();

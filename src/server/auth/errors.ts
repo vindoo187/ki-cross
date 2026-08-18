@@ -1,11 +1,14 @@
 /**
- * Fehlerklassen fuer den minimalen Dev-/Pilot-Auth-Mechanismus (Phase 5).
+ * Fehlerklassen fuer den minimalen Dev-/Pilot-Auth-Mechanismus (Phase 5) und
+ * den darauf aufbauenden Admin-/Konfigurations-Login (Phase 8 AP1).
  *
- * WICHTIG: Dieser Mechanismus ist ausdruecklich NICHT produktionsreif (siehe
- * .env.example, Kommentar zu DEV_AUTH_SECRET, und
- * PHASE_5_IMPLEMENTATION_PLAN.md Abschnitt 15, Stop-Punkt 1). Er ersetzt kein
- * vollstaendiges Authentifizierungssystem (kein Passwort-Hashing, kein IdP,
- * kein Passwort-Reset).
+ * WICHTIG: Der Dev-Login-Mechanismus (Beratungsfluss) ist ausdruecklich
+ * NICHT produktionsreif (siehe .env.example, Kommentar zu DEV_AUTH_SECRET,
+ * und PHASE_5_IMPLEMENTATION_PLAN.md Abschnitt 15, Stop-Punkt 1). Der neue
+ * Admin-Login (Phase 8) hat echtes Passwort-Hashing (siehe
+ * src/server/auth/password.ts), aber weiterhin keinen Passwort-Reset-/
+ * Einladungsflow und keine Rate-Begrenzung -- siehe
+ * PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 14 (Risiken).
  */
 
 export class AuthenticationError extends Error {
@@ -48,5 +51,19 @@ export class InvalidDevLoginCandidateError extends AuthenticationError {
       "Dieser Mitarbeiter-Datensatz ist nicht (mehr) fuer den Dev-Login gueltig (nicht synthetisch, kein aktiver Mitarbeiter oder keine verknuepfte Nutzer-ID).",
     );
     this.name = "InvalidDevLoginCandidateError";
+  }
+}
+
+/**
+ * Wird geworfen, wenn E-Mail+Passwort fuer den Admin-/Konfigurations-Login
+ * (Phase 8 AP1) nicht zusammenpassen. Bewusst EINE einzige Fehlerklasse fuer
+ * "E-Mail unbekannt" UND "Passwort falsch" -- unterschiedliche Fehler wuerden
+ * Nutzer-Enumeration ermoeglichen (ChatGPT-Auflage, siehe
+ * PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 15, Punkt 2 / AP1).
+ */
+export class InvalidAdminCredentialsError extends AuthenticationError {
+  constructor() {
+    super("E-Mail oder Passwort ist ungueltig.");
+    this.name = "InvalidAdminCredentialsError";
   }
 }
