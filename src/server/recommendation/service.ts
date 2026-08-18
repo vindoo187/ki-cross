@@ -529,9 +529,45 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
 
   const session = await requireSession(consultationSessionId);
   assertSessionEvaluable(session);
-  const atTime: Date = session.startedAt;
 
-  const nodes = await loadQuestionNodesAtTime(db, session.questionnaireVersionId, atTime);
+  // Phase 9 AP9 (Kern-Testfall, ChatGPT-Vorgabe 2026-08-18): die drei
+  // zeitabhaengigen Konfigurationsquellen haben UNTERSCHIEDLICHE Semantik --
+  // vorher wurde hierfuer einheitlich `session.startedAt` verwendet, was fuer
+  // RuleSetVersion FALSCH war (siehe Git-Historie dieser Zeile) und dazu
+  // fuehrte, dass eine erneute Auswertung derselben Session nach einem
+  // Publish einer neuen RuleSetVersion weiterhin die zum Session-Start
+  // aktive (ggf. laengst EXPIRED) Version verwendete, statt der aktuell
+  // aktiven -- ein Widerspruch zur Architekturentscheidung "RuleSet-Version
+  // = pro Evaluation aktueller Snapshot" (im Unterschied zu
+  // "Questionnaire-Version = Session-Pinning").
+  //
+  //   questionnaireAt -- Fragenstand (Text/Struktur) bleibt auf den
+  //                      Session-Start gepinnt: eine laufende Beratung soll
+  //                      sich rueckwirkend nicht in den gestellten Fragen
+  //                      aendern.
+  //   ruleSetAt       -- JETZT (aktueller Auswertungszeitpunkt): jede
+  //                      evaluate()-Auswertung verwendet die zu diesem
+  //                      Zeitpunkt aktuell ACTIVE RuleSetVersion, nicht die
+  //                      zum Session-Start aktive. `Recommendation`
+  //                      speichert die tatsaechlich verwendete
+  //                      `ruleSetVersionId` weiterhin unveraenderlich
+  //                      (append-only) je Auswertung.
+  //   commercialAt    -- ProductVersion- und CommissionModelVersion-
+  //                      Aufloesung bleiben BEWUSST auf den Session-Start
+  //                      gepinnt (fachliche Entscheidung, NICHT durch Phase 9
+  //                      geaendert): eine automatische, stillschweigende
+  //                      Umstellung auf ein neues Preis-/Provisionsmodell
+  //                      waehrend einer laufenden Beratung koennte deren
+  //                      Preis-/Provisionsstabilitaet beeintraechtigen. Eine
+  //                      moegliche Umstellung auf Evaluation-Zeit ist eine
+  //                      eigenstaendige fachliche Entscheidung und bewusst
+  //                      zurueckgestellt (siehe docs/DECISION_LOG.md,
+  //                      Abschnitt "Phase 9 AP9").
+  const questionnaireAt: Date = session.startedAt;
+  const ruleSetAt: Date = new Date();
+  const commercialAt: Date = session.startedAt;
+
+  const nodes = await loadQuestionNodesAtTime(db, session.questionnaireVersionId, questionnaireAt);
   const { answers, answerIdByQuestionId, rawByQuestionId } = await loadActiveAnswers(
     db,
     session.id,
@@ -543,9 +579,9 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
     throw new InsufficientAnswerDataError(progress.missingRequiredQuestionIds);
   }
 
-  const ruleSetVersion = await loadActiveRuleSetVersion(db, atTime);
+  const ruleSetVersion = await loadActiveRuleSetVersion(db, ruleSetAt);
   if (!ruleSetVersion) {
-    throw new RuleSetNotConfiguredError(tenantId, atTime);
+    throw new RuleSetNotConfiguredError(tenantId, ruleSetAt);
   }
 
   const [eligibilityRules, exclusionRules, prioritizationRules, crossSellingRules] =
@@ -556,12 +592,12 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
       loadCrossSellingRules(db, ruleSetVersion.id),
     ]);
 
-  const productCandidates = await loadProductCandidates(db, atTime);
+  const productCandidates = await loadProductCandidates(db, commercialAt);
   if (productCandidates.length === 0) {
-    throw new NoValidProductVersionError(tenantId, atTime);
+    throw new NoValidProductVersionError(tenantId, commercialAt);
   }
 
-  const commissionRows = await loadActiveCommissionModelVersions(db, atTime);
+  const commissionRows = await loadActiveCommissionModelVersions(db, commercialAt);
   const resolveCommission = buildResolveCommission(commissionRows);
 
   const sessionAttributes = buildSessionAttributes(session);

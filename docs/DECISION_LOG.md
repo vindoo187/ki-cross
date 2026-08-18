@@ -550,3 +550,56 @@ Mitarbeiter, synthetische Daten) notwendig zu sein. Verbindlich
 dokumentiert als Einschränkung in [CONSULTATION_UI.md](CONSULTATION_UI.md)
 und [RISK_REGISTER.md](RISK_REGISTER.md), damit dies vor einem echten
 Produktivbetrieb nicht übersehen wird.
+
+## Phase 9 AP9: RuleSetVersion-Auswahl auf Auswertungszeitpunkt korrigiert; ProductVersion/CommissionModelVersion bewusst weiter auf Session-Start gepinnt
+
+**Befund:** `evaluate()` (`src/server/recommendation/service.ts`, seit
+Phase 3B) verwendete für alle vier zeitabhängigen Konfigurationsquellen
+(`QuestionVersion`, `RuleSetVersion`, `ProductVersion`,
+`CommissionModelVersion`) einheitlich einen einzigen Zeitpunkt
+`atTime = session.startedAt`. Für `RuleSetVersion` war das ein
+vorbestehender Korrektheitsfehler: `loadActiveRuleSetVersion()` filtert
+auf `validFrom <= atTime AND (validTo IS NULL OR validTo > atTime)`. Eine
+`RuleSetVersion`, die nach Session-Start per Publish EXPIRED wird (Phase 9
+AP2/AP5), erfüllt diese Bedingung für `atTime = session.startedAt`
+weiterhin (`validTo` liegt ja NACH dem Session-Start) – eine erneute
+Auswertung derselben, noch laufenden Session verwendete dadurch dauerhaft
+die zum Session-Start aktive, ggf. längst abgelöste `RuleSetVersion`, nie
+die tatsächlich aktuell aktive. Das widersprach der Architekturentscheidung
+"RuleSet-Version = pro Evaluation aktueller Snapshot" und wurde erst durch
+den in Phase 9 eingeführten echten Publish-Workflow praktisch relevant.
+Der Befund wurde vor jeder Änderung mit dem ChatGPT-Projektleiter
+abgestimmt (verbindliche Vorgabe, siehe
+[[feedback_chatgpt_massnahmen_abstimmung]]).
+
+**Entscheidung (ChatGPT-Vorgabe 2026-08-18):**
+
+- `RuleSetVersion`-Auflösung verwendet ab sofort den tatsächlichen
+  Auswertungszeitpunkt (`ruleSetAt = new Date()`), nicht mehr
+  `session.startedAt`. Jede `evaluate()`-Auswertung nutzt damit die zum
+  Zeitpunkt DIESER Auswertung aktuell `ACTIVE` `RuleSetVersion`.
+  `Recommendation.ruleSetVersionId` speichert weiterhin unveränderlich
+  (append-only) je Auswertung, welche Version tatsächlich verwendet wurde.
+- `QuestionVersion`-Auflösung (`questionnaireAt = session.startedAt`)
+  bleibt unverändert auf Session-Start gepinnt: der Fragenstand einer
+  laufenden Beratung soll sich rückwirkend nicht ändern.
+- `ProductVersion`- und `CommissionModelVersion`-Auflösung
+  (`commercialAt = session.startedAt`) bleiben ABSICHTLICH ebenfalls auf
+  Session-Start gepinnt und wurden NICHT auf den Auswertungszeitpunkt
+  umgestellt, obwohl dieselbe Query-Struktur denselben theoretischen Effekt
+  hätte. Das ist eine eigenständige, bewusst zurückgestellte fachliche
+  Entscheidung (Preis-/Provisionsstabilität während einer laufenden
+  Beratung), keine versehentliche Inkonsistenz.
+
+**Code:** die drei Zeitpunkte sind in `evaluate()` als explizite,
+semantisch benannte Variablen (`questionnaireAt`/`ruleSetAt`/
+`commercialAt`) geführt statt verstreuter `new Date()`-Aufrufe, mit
+Inline-Kommentar, der genau diese Begründung wiederholt.
+
+**Test:** `tests/integration/recommendation-ruleset-snapshot.test.ts`
+bildet den von ChatGPT vorgegebenen Kern-Testfall nach: Session startet mit
+RuleSet v1 (aktiv), v2 wird über den echten `publishRuleSetVersion()`-Pfad
+veröffentlicht (v1 dadurch mandantenweit EXPIRED), dieselbe Session wird
+erneut ausgewertet und muss v2 verwenden, während `questionnaireVersionId`
+der Session unverändert bleibt; zusätzlich verwendet eine neu gestartete
+Session ebenfalls v2.
