@@ -46,8 +46,16 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient, ProductType, CommissionType, AnswerType, NeedType } from "@prisma/client";
+import { hashPassword } from "../src/server/auth/password";
+import { permissionKeysForSeedRole } from "../src/server/authz/seed-role-permissions";
 
 const prisma = new PrismaClient();
+
+// Phase 9 AP9 (E2E-Erweiterung fuer /admin/rules, ChatGPT-Vorgabe
+// 2026-08-18): synthetisches, klar als Test gekennzeichnetes Passwort fuer
+// die beiden Admin-Testnutzer unten -- analog prisma/seed.ts
+// (adminTestPassword), NICHT produktionsreif, siehe src/server/auth/errors.ts.
+const E2E_ADMIN_PASSWORD = "synthetic-e2e-admin-test-passwort-2026";
 
 // Wird nach jedem Lauf ueberschrieben (siehe .gitignore) und von
 // tests/e2e/seed-output.ts eingelesen: die Playwright-Spec-Dateien laufen in
@@ -64,7 +72,23 @@ async function seedGlobalCatalog() {
     update: {},
     create: { key: "o2-telefonica", name: "O2 / Telefonica (synthetisch)", isSynthetic: true },
   });
-  return { provider };
+
+  // Phase 9 AP9: nur die Regel-Administrations-Permissions werden fuer
+  // diese E2E-Suite benoetigt (die Fragenverwaltung ist nicht Teil des
+  // /admin/rules-E2E-Umfangs) -- bewusst minimal, kein voller
+  // config.questions.*-Katalog wie in prisma/seed.ts.
+  const rulePermissionKeys = ["config.rules.view", "config.rules.edit", "config.rules.publish"];
+  const permissions = await Promise.all(
+    rulePermissionKeys.map((key) =>
+      prisma.permission.upsert({
+        where: { key },
+        update: {},
+        create: { key, description: `Berechtigung: ${key}` },
+      }),
+    ),
+  );
+
+  return { provider, permissions };
 }
 
 interface TenantBase {
@@ -124,7 +148,10 @@ async function seedTenantShell(config: {
   };
 }
 
-async function seedTenantA(providerId: string) {
+async function seedTenantA(
+  providerId: string,
+  permissions: Awaited<ReturnType<typeof seedGlobalCatalog>>["permissions"],
+) {
   const base = await seedTenantShell({
     key: "e2e-tenant-a",
     name: "E2E TestTel A (synthetisch)",
@@ -488,6 +515,111 @@ async function seedTenantA(providerId: string) {
     },
   });
 
+  // --- Phase 9 AP9: Admin-/Config-RBAC-Testnutzer fuer die
+  // /admin/rules-E2E-Suite (tests/e2e/admin-rules.spec.ts). Zwei Rollen,
+  // analog prisma/seed.ts (config_editor/config_publisher), TENANT-Scope --
+  // dieselbe geteilte, getestete Zuordnung (permissionKeysForSeedRole())
+  // statt einer eigenen, potenziell abweichenden Permission-Liste. ---
+  const configEditorRole = await prisma.role.upsert({
+    where: { tenantId_key: { tenantId, key: "config_editor" } },
+    update: {},
+    create: {
+      tenantId,
+      key: "config_editor",
+      name: "Fachadministration (Entwurf)",
+      isSystemDefined: true,
+    },
+  });
+  const configPublisherRole = await prisma.role.upsert({
+    where: { tenantId_key: { tenantId, key: "config_publisher" } },
+    update: {},
+    create: {
+      tenantId,
+      key: "config_publisher",
+      name: "Fachadministration (Veroeffentlichung)",
+      isSystemDefined: true,
+    },
+  });
+
+  const allPermissionKeys = permissions.map((p) => p.key);
+  for (const [roleKey, role] of [
+    ["config_editor", configEditorRole],
+    ["config_publisher", configPublisherRole],
+  ] as const) {
+    for (const key of permissionKeysForSeedRole(roleKey, allPermissionKeys)) {
+      const permission = permissions.find((p) => p.key === key);
+      if (!permission) continue;
+      await prisma.rolePermission
+        .upsert({
+          where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+          update: {},
+          create: { roleId: role.id, permissionId: permission.id },
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  // config_editor-Testnutzer: config.rules.view+edit, KEIN .publish --
+  // fuer den negativen Szenario-Test "Publish ohne config.rules.publish
+  // nicht moeglich".
+  const configEditorEmail = `e2e-tenant-a-config-editor@example-synthetic.test`;
+  const configEditorUser = await prisma.user.create({
+    data: {
+      tenantId,
+      email: configEditorEmail,
+      isSynthetic: true,
+      passwordHash: hashPassword(E2E_ADMIN_PASSWORD),
+    },
+  });
+  await prisma.employee.create({
+    data: {
+      tenantId,
+      storeId: base.storeId,
+      userId: configEditorUser.id,
+      displayName: "E2E Regel-Editor:in (e2e-tenant-a, ohne Publish)",
+    },
+  });
+  await prisma.roleAssignment.create({
+    data: {
+      tenantId,
+      userId: configEditorUser.id,
+      roleId: configEditorRole.id,
+      scopeType: "TENANT",
+      companyId: null,
+      storeId: null,
+    },
+  });
+
+  // config_publisher-Testnutzer: config.rules.view+edit+publish -- fuer den
+  // vollstaendigen DRAFT->Edit->Validate->Publish->Rollback-Fluss.
+  const configPublisherEmail = `e2e-tenant-a-config-publisher@example-synthetic.test`;
+  const configPublisherUser = await prisma.user.create({
+    data: {
+      tenantId,
+      email: configPublisherEmail,
+      isSynthetic: true,
+      passwordHash: hashPassword(E2E_ADMIN_PASSWORD),
+    },
+  });
+  await prisma.employee.create({
+    data: {
+      tenantId,
+      storeId: base.storeId,
+      userId: configPublisherUser.id,
+      displayName: "E2E Regel-Publisher:in (e2e-tenant-a)",
+    },
+  });
+  await prisma.roleAssignment.create({
+    data: {
+      tenantId,
+      userId: configPublisherUser.id,
+      roleId: configPublisherRole.id,
+      scopeType: "TENANT",
+      companyId: null,
+      storeId: null,
+    },
+  });
+
   return {
     ...base,
     questionnaireKey: questionnaire.key,
@@ -497,6 +629,9 @@ async function seedTenantA(providerId: string) {
       streamingPaket: { questionKey: streamingPaketQuestion.key },
       familienmitglieder: { questionKey: familienmitgliederQuestion.key },
     },
+    ruleSetId: ruleSet.id,
+    configEditorAdmin: { email: configEditorEmail, password: E2E_ADMIN_PASSWORD },
+    configPublisherAdmin: { email: configPublisherEmail, password: E2E_ADMIN_PASSWORD },
   };
 }
 
@@ -558,7 +693,28 @@ async function seedTenantB() {
     },
   });
 
-  return { ...base, consultationSessionId: session.id };
+  // Phase 9 AP9: minimaler RuleSet fuer den negativen /admin/rules-
+  // Tenant-Isolationstest (Tenant-A-Admin versucht per manipulierter URL auf
+  // eine RuleSetVersion von Tenant B zuzugreifen).
+  const ruleSet = await prisma.ruleSet.create({
+    data: { tenantId, key: "e2e-b-regeln" },
+  });
+  const ruleSetVersion = await prisma.ruleSetVersion.create({
+    data: {
+      tenantId,
+      ruleSetId: ruleSet.id,
+      label: "E2E B Regeln v1",
+      validFrom: VALID_FROM,
+      status: "ACTIVE",
+    },
+  });
+
+  return {
+    ...base,
+    consultationSessionId: session.id,
+    ruleSetId: ruleSet.id,
+    ruleSetVersionId: ruleSetVersion.id,
+  };
 }
 
 async function main() {
@@ -572,10 +728,10 @@ async function main() {
   }
 
   console.log("E2E-Seed: globaler Katalog ...");
-  const { provider } = await seedGlobalCatalog();
+  const { provider, permissions } = await seedGlobalCatalog();
 
   console.log("E2E-Seed: Tenant A (e2e-tenant-a) ...");
-  const tenantA = await seedTenantA(provider.id);
+  const tenantA = await seedTenantA(provider.id, permissions);
 
   console.log("E2E-Seed: Tenant B (e2e-tenant-b) ...");
   const tenantB = await seedTenantB();
@@ -585,11 +741,16 @@ async function main() {
       tenantId: tenantA.tenantId,
       employeeDisplayName: tenantA.displayName,
       questionnaireKey: tenantA.questionnaireKey,
+      ruleSetId: tenantA.ruleSetId,
+      configEditorAdmin: tenantA.configEditorAdmin,
+      configPublisherAdmin: tenantA.configPublisherAdmin,
     },
     tenantB: {
       tenantId: tenantB.tenantId,
       employeeDisplayName: tenantB.displayName,
       consultationSessionId: tenantB.consultationSessionId,
+      ruleSetId: tenantB.ruleSetId,
+      ruleSetVersionId: tenantB.ruleSetVersionId,
     },
   };
   writeFileSync(SEED_OUTPUT_PATH, JSON.stringify(output, null, 2), "utf-8");

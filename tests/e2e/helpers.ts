@@ -21,6 +21,33 @@ export async function loginAs(page: Page, employeeDisplayName: string): Promise<
   ]);
 }
 
+/**
+ * Meldet sich ueber `POST /api/auth/admin-login` an (Phase 8 AP1, kein
+ * eigenes Login-Formular in der UI -- siehe
+ * src/app/api/auth/admin-login/route.ts Modulkommentar). `page.request`
+ * teilt sich den Cookie-Jar mit dem Browsing-Context der `page`, das per
+ * `Set-Cookie` gesetzte Session-Cookie ist daher automatisch bei jedem
+ * nachfolgenden `page.goto()` vorhanden -- keine manuelle
+ * Cookie-Uebertragung noetig.
+ */
+export async function loginAsAdmin(
+  page: Page,
+  credentials: { tenantId: string; email: string; password: string },
+): Promise<void> {
+  const response = await page.request.post("/api/auth/admin-login", {
+    data: {
+      tenantId: credentials.tenantId,
+      email: credentials.email,
+      password: credentials.password,
+    },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `Admin-Login fehlgeschlagen fuer ${credentials.email}: ${response.status()} ${await response.text()}`,
+    );
+  }
+}
+
 /** Startet eine neue Beratung (Tenant A hat genau einen aktiven Fragebogen, kein Auswahlfeld noetig). */
 export async function startNewConsultation(page: Page): Promise<string> {
   await page.goto("/consultation");

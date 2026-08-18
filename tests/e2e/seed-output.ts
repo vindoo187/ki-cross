@@ -9,16 +9,30 @@ import path from "node:path";
  * kennen wuerden.
  */
 
+interface E2eAdminCredentials {
+  email: string;
+  password: string;
+}
+
 export interface E2eSeedOutput {
   tenantA: {
     tenantId: string;
     employeeDisplayName: string;
     questionnaireKey: string;
+    /** RuleSet mit einer ACTIVE-Version (Phase 9 AP9, /admin/rules-E2E-Suite). */
+    ruleSetId: string;
+    /** config.rules.view+edit, KEIN .publish. */
+    configEditorAdmin: E2eAdminCredentials;
+    /** config.rules.view+edit+publish. */
+    configPublisherAdmin: E2eAdminCredentials;
   };
   tenantB: {
     tenantId: string;
     employeeDisplayName: string;
     consultationSessionId: string;
+    /** Fuer den negativen /admin/rules-Tenant-Isolationstest (Phase 9 AP9). */
+    ruleSetId: string;
+    ruleSetVersionId: string;
   };
 }
 
