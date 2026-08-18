@@ -787,12 +787,29 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
       expect(oldVersion.status).toBe("EXPIRED");
       expect(oldVersion.validTo).not.toBeNull();
 
-      const auditEntries = await rawClient.auditLog.findMany({
-        where: { tenantId, entityType: "QuestionnaireVersion", entityId: copiedDraft.id },
+      // Seit AP7 existieren fuer diese QuestionnaireVersion ZWEI Audit-Eintraege:
+      // CREATE (aus createDraftVersion(), oben) und ACTIVATE (aus publishDraftVersion()).
+      // Beide sind erwuenscht und werden hier gezielt nach action gefiltert geprueft.
+      const activateEntries = await rawClient.auditLog.findMany({
+        where: {
+          tenantId,
+          entityType: "QuestionnaireVersion",
+          entityId: copiedDraft.id,
+          action: "ACTIVATE",
+        },
       });
-      expect(auditEntries).toHaveLength(1);
-      expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
-      expect(auditEntries[0]?.action).toBe("ACTIVATE");
+      expect(activateEntries).toHaveLength(1);
+      expect(activateEntries[0]?.actorUserId).toBe(actorUserId);
+
+      const createEntries = await rawClient.auditLog.findMany({
+        where: {
+          tenantId,
+          entityType: "QuestionnaireVersion",
+          entityId: copiedDraft.id,
+          action: "CREATE",
+        },
+      });
+      expect(createEntries).toHaveLength(1);
     });
 
     it("publishDraftVersion() auf einer bereits ACTIVE-Version -> QuestionnaireVersionNotDraftError (409)", async () => {
