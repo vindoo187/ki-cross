@@ -1589,3 +1589,115 @@ async function loadActiveQuestionAnswerTypeMap(
   }
   return map;
 }
+
+// ---------------------------------------------------------------------------
+// 10. AP5 -- Publish-Workflow (Phase 9 AP5, siehe
+//     PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 7). Analog
+//     `publishDraftVersion()` (question-admin.ts, Phase 8 AP4) mit EINER
+//     zentralen Abweichung, die ChatGPT als "kritischsten Teil der Phase"
+//     bezeichnet hat (2026-08-18):
+//
+// MANDANTENWEITER ACTIVE-SCOPE (nicht pro-RuleSet): Die Invariante ist "pro
+// Mandant existiert zu jedem Zeitpunkt hoechstens EINE ACTIVE
+// RuleSetVersion" -- unabhaengig davon, zu welchem `RuleSet` sie gehoert
+// (siehe PHASE_9_DISCOVERY.md Abschnitt 1, bereits in AP2 fuer
+// `copyFromVersionId` beruecksichtigt). Der Publish eines Drafts aus
+// RuleSet A muss daher die bisherige ACTIVE-Version eines BELIEBIGEN
+// anderen RuleSets desselben Mandanten auf EXPIRED setzen -- die Suche
+// nach `previousActive` filtert deshalb bewusst NICHT nach `ruleSetId`
+// (einziger fachlicher Unterschied zu `publishDraftVersion()`, das dort
+// gezielt nach `questionnaireId` filtert, weil die Questionnaire-ACTIVE-
+// Uniqueness PRO Questionnaire gilt, siehe `questionnaire_versions_no_overlap`
+// vs. `rule_set_versions_no_overlap`/`rule_set_versions_tenant_active_no_overlap`
+// in prisma/schema.prisma).
+//
+// Transaktionsreihenfolge (identisch zu Phase 8, hier erneut angewendet):
+// 1. Serverseitige Revalidierung ueber `validateDraftRuleSetVersion()` VOR
+//    der Transaktion (rein lesend) -- ein Validierungsfehler darf keine
+//    Transaktion eroeffnen.
+// 2. Innerhalb EINER Transaktion:
+//    a. Bisherige mandantenweite ACTIVE-Version (falls vorhanden, aus
+//       EINEM BELIEBIGEN RuleSet) zuerst auf EXPIRED setzen (`validTo =
+//       now`) -- MUSS vor (b) passieren, sonst schlaegt die EXCLUDE-
+//       Constraint sofort fehl (zwei gleichzeitig offene ACTIVE-Zeitspannen
+//       desselben Mandanten).
+//    b. Ziel-Draft ueber `updateMany({where: {id, status: "DRAFT"}})` (nicht
+//       `update()`) auf ACTIVE setzen -- schuetzt gegen einen parallelen
+//       Publish-Versuch (Race Condition): `count !== 1` wirft, wodurch die
+//       GESAMTE Transaktion inkl. Schritt (a) zurueckgerollt wird.
+//    c. `AuditLog`-Eintrag (ACTIVATE) in DERSELBEN Transaktion.
+//
+// Anders als bei Questionnaire/Question gibt es hier KEINEN Schritt "Kind-
+// Versionen aktivieren": die vier Regeltypen (EligibilityRule etc.) haben
+// keinen eigenen Status -- nur die `RuleSetVersion` selbst wird versioniert.
+// ---------------------------------------------------------------------------
+
+export interface PublishRuleSetVersionResult {
+  version: RuleSetVersionDetail;
+  /** ID der zuvor ACTIVE-Version (aus EINEM BELIEBIGEN RuleSet dieses Mandanten), die durch diesen Publish auf EXPIRED gesetzt wurde -- `null` beim allerersten Publish des Mandanten. */
+  previousActiveVersionId: string | null;
+}
+
+export async function publishRuleSetVersion(
+  ruleSetId: string,
+  versionId: string,
+): Promise<PublishRuleSetVersionResult> {
+  await requireRuleSet(db, ruleSetId);
+  await requireDraftRuleSetVersion(db, ruleSetId, versionId);
+
+  // Serverseitige Revalidierung -- niemals nur auf eine vorherige
+  // Client-Validierung vertrauen (identisches Prinzip wie Phase 8 AP4).
+  await validateDraftRuleSetVersion(ruleSetId, versionId);
+
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+  const now = new Date();
+
+  const previousActiveVersionId = await db.$transaction(async (tx) => {
+    // Mandantenweiter Scope: bewusst OHNE ruleSetId-Filter (siehe
+    // Modulkommentar oben) -- der tenant-gescopte Client injiziert die
+    // tenantId bereits automatisch.
+    const previousActive = await tx.ruleSetVersion.findFirst({
+      where: { status: "ACTIVE", id: { not: versionId } },
+    });
+    if (previousActive) {
+      await tx.ruleSetVersion.update({
+        where: { id: previousActive.id },
+        data: { status: "EXPIRED", validTo: now },
+      });
+    }
+
+    const activated = await tx.ruleSetVersion.updateMany({
+      where: { id: versionId, status: "DRAFT" },
+      data: { status: "ACTIVE", validFrom: now, validTo: null },
+    });
+    if (activated.count !== 1) {
+      // Wurde zwischen der Vorab-Pruefung oben und hier bereits von einem
+      // parallelen Request veroeffentlicht -- ROLLBACK macht Schritt (a)
+      // rueckgaengig, kein Zwischenzustand persistiert.
+      throw new RuleSetVersionNotDraftError(
+        versionId,
+        "bereits veroeffentlicht (paralleler Publish-Versuch)",
+      );
+    }
+
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "ACTIVATE",
+        entityType: "RuleSetVersion",
+        entityId: versionId,
+        metadata: {
+          ruleSetId,
+          previousActiveVersionId: previousActive ? previousActive.id : null,
+        },
+      },
+    });
+
+    return previousActive ? previousActive.id : null;
+  });
+
+  const version = await getRuleSetVersionDetail(ruleSetId, versionId);
+  return { version, previousActiveVersionId };
+}
