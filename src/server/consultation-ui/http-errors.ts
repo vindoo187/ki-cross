@@ -59,6 +59,7 @@ import {
 import {
   AdminRuleNotFoundError,
   CopySourceRuleSetVersionNotFoundError,
+  RollbackSourceNotEligibleError as RuleRollbackSourceNotEligibleError,
   RuleSetNotFoundError,
   RuleSetVersionInvalidError,
   RuleSetVersionNotDraftError,
@@ -294,6 +295,13 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // RuleSetVersion zu mutieren (serverseitige Sperre, ChatGPT-Auflage
   // 2026-08-18: "DRAFT-only fuer saemtliche Mutationen").
   if (error instanceof RuleSetVersionNotDraftError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Rule-Management-API (Phase 9 AP6): 409 -- Rollback-Quelle ist noch eine
+  // DRAFT-Version (dafuer existiert bereits createDraftRuleSetVersion() mit
+  // copyFromVersionId), analog RollbackSourceNotEligibleError aus Phase 8.
+  if (error instanceof RuleRollbackSourceNotEligibleError) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
   }
 

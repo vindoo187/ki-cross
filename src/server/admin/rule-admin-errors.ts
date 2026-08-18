@@ -88,3 +88,19 @@ export class RuleSetVersionInvalidError extends RuleAdminError {
     super(`RuleSetVersion "${ruleSetVersionId}" ist nicht gueltig: ${issues.join("; ")}`);
   }
 }
+
+/**
+ * Rollback (Phase 9 AP6, siehe PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 8)
+ * wurde mit einer `sourceVersionId` im Status DRAFT aufgerufen -- Rollback
+ * ist nur von bereits veroeffentlichten Versionen (ACTIVE/EXPIRED/ARCHIVED)
+ * aus moeglich, analog `RollbackSourceNotEligibleError` aus Phase 8.
+ */
+export class RollbackSourceNotEligibleError extends RuleAdminError {
+  constructor(versionId: string) {
+    super(
+      `RuleSetVersion "${versionId}" kann nicht als Rollback-Quelle verwendet werden ` +
+        `(Status DRAFT). Rollback ist nur von bereits veroeffentlichten Versionen ` +
+        `(ACTIVE/EXPIRED/ARCHIVED) aus moeglich.`,
+    );
+  }
+}

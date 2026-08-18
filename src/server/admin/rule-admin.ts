@@ -55,6 +55,7 @@ import { isOperatorSupportedForAnswerType, splitComparisonList } from "../questi
 import {
   AdminRuleNotFoundError,
   CopySourceRuleSetVersionNotFoundError,
+  RollbackSourceNotEligibleError,
   RuleSetNotFoundError,
   RuleSetVersionInvalidError,
   RuleSetVersionNotDraftError,
@@ -1700,4 +1701,128 @@ export async function publishRuleSetVersion(
 
   const version = await getRuleSetVersionDetail(ruleSetId, versionId);
   return { version, previousActiveVersionId };
+}
+
+// ---------------------------------------------------------------------------
+// 11. AP6 -- Historie + Rollback (Phase 9 AP6, siehe
+//     PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 8). Analog
+//     `getQuestionnaireVersionHistory()`/`rollbackToVersion()`
+//     (question-admin.ts, Phase 8 AP5) mit EINEM wichtigen Unterschied zu
+//     AP2's `copyFromVersionId`: Rollback ist bewusst auf dasselbe `RuleSet`
+//     beschraenkt (siehe Plan Abschnitt 2.3, "einer historischen ... Version
+//     DESSELBEN RuleSet") -- anders als der mandantenweite Kopiermechanismus
+//     aus AP2 (`createDraftRuleSetVersion({ copyFromVersionId })`), der
+//     bewusst RuleSet-uebergreifend ist. `requireRuleSetVersion()` (nicht
+//     die ruleSetId-unabhaengige `requireAnyRuleSetVersionInTenant()`)
+//     erzwingt das strukturell: eine `sourceVersionId` aus einem ANDEREN
+//     RuleSet liefert `RuleSetVersionNotFoundError` (404), Rollback schlaegt
+//     fehl -- kein "Cross-RuleSet-Rollback" moeglich (ChatGPT-Vorgabe
+//     2026-08-18, explizit als Regressionstest gefordert).
+// ---------------------------------------------------------------------------
+
+/**
+ * Vollstaendige Versionshistorie eines `RuleSet` (alle Status, neueste
+ * zuerst) -- rein lesend, keine Filterung nach Status. Grundlage fuer die
+ * Versionshistorie-Ansicht in AP8.
+ */
+export async function getRuleSetVersionHistory(
+  ruleSetId: string,
+): Promise<RuleSetVersionSummary[]> {
+  await requireRuleSet(db, ruleSetId);
+  const versions = await db.ruleSetVersion.findMany({
+    where: { ruleSetId },
+    orderBy: { validFrom: "desc" },
+  });
+  return versions.map((v) => ({
+    id: v.id,
+    label: v.label,
+    status: v.status,
+    validFrom: v.validFrom.toISOString(),
+    validTo: v.validTo ? v.validTo.toISOString() : null,
+  }));
+}
+
+/**
+ * Rollback: erzeugt eine neue `DRAFT`-Version als vollstaendige Tiefkopie
+ * einer bereits veroeffentlichten historischen Version (`sourceVersionId`,
+ * Status ACTIVE/EXPIRED/ARCHIVED -- DRAFT wird abgelehnt, siehe
+ * `RollbackSourceNotEligibleError`) DESSELBEN `RuleSet`. Das ist KEIN
+ * direkter Statuswechsel der alten Version zurueck auf ACTIVE, sondern
+ * derselbe Tiefkopie-Mechanismus wie `createDraftRuleSetVersion({
+ * copyFromVersionId })` (AP2, wiederverwendet ueber
+ * `copyRuleSetVersionContents()`) -- die Historie wird dadurch an keiner
+ * Stelle mutiert:
+ *
+ * - Die Quellversion (und alle ihre Regel-/Condition-Zeilen) bleibt
+ *   UNVERAENDERT (kein UPDATE, kein DELETE).
+ * - Die neue DRAFT-Version erhaelt eine EIGENE ID sowie komplett neue
+ *   Regel-/Condition-Zeilen aller vier Typen (Tiefkopie).
+ * - Die neue DRAFT-Version durchlaeuft anschliessend REGULAER den
+ *   bestehenden Validate-/Publish-Workflow aus AP4/AP5 -- es gibt keine
+ *   zweite/parallele Publish-Logik fuer Rollbacks.
+ * - `AuditLog`-Eintrag (`action: "ROLLBACK"`) wird in DERSELBEN Transaktion
+ *   wie die Tiefkopie geschrieben.
+ *
+ * Autorisierung: dieselbe wie jede andere Draft-Mutation
+ * (`config.rules.edit`, siehe Route-Schicht) -- Rollback ist fachlich eine
+ * Entwurfserstellung, kein Publish-Vorgang.
+ *
+ * Kein Session-Pinning betroffen (Leitplanke 2): diese Funktion mutiert
+ * keine `ConsultationSession`-Zeile.
+ */
+export async function rollbackToRuleSetVersion(
+  ruleSetId: string,
+  sourceVersionId: string,
+  label?: string,
+): Promise<RuleSetVersionDetail> {
+  await requireRuleSet(db, ruleSetId);
+  const sourceVersion = await requireRuleSetVersion(db, ruleSetId, sourceVersionId);
+  if (sourceVersion.status === "DRAFT") {
+    throw new RollbackSourceNotEligibleError(sourceVersionId);
+  }
+
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+  const now = new Date();
+  const resolvedLabel = label ?? `Rollback von "${sourceVersion.label}"`;
+
+  const newVersionId = await db.$transaction(async (tx) => {
+    const newVersion = await tx.ruleSetVersion.create({
+      data: {
+        tenantId,
+        ruleSetId,
+        label: resolvedLabel,
+        status: "DRAFT",
+        validFrom: now,
+        validTo: null,
+      },
+    });
+
+    const { ruleCount } = await copyRuleSetVersionContents(
+      tx,
+      tenantId,
+      sourceVersionId,
+      newVersion.id,
+    );
+
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "ROLLBACK",
+        entityType: "RuleSetVersion",
+        entityId: newVersion.id,
+        metadata: {
+          ruleSetId,
+          sourceVersionId,
+          sourceVersionStatus: sourceVersion.status,
+          ruleCount,
+        },
+      },
+    });
+
+    return newVersion.id;
+  });
+
+  return getRuleSetVersionDetail(ruleSetId, newVersionId);
 }

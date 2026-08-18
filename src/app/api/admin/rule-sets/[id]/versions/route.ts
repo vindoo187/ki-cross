@@ -6,10 +6,13 @@
  * gehoeren -- siehe `src/server/admin/rule-admin.ts` Modulkommentar).
  * Fachlogik ausschliesslich in `createDraftRuleSetVersion()`.
  *
- * Versionshistorie (`GET`) folgt erst in AP6, analog Phase 8 AP5 --
- * bewusst noch nicht Teil von AP2.
+ * `GET /api/admin/rule-sets/[id]/versions` (Phase 9 AP6, siehe
+ * PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 8). Vollstaendige Versionshistorie
+ * eines `RuleSet` (alle Status, neueste zuerst) -- Grundlage fuer die
+ * Versionshistorie-Ansicht mit Rollback-Aktion (AP8).
  *
- * Erfordert `config.rules.edit` (Configuration-RBAC, Phase 9 AP1).
+ * Erfordert `config.rules.view` (GET) bzw. `config.rules.edit` (POST) --
+ * Configuration-RBAC, Phase 9 AP1.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -17,10 +20,21 @@ import { withRequestTenantContext } from "@/server/auth/request-context";
 import { withErrorMapping } from "@/server/consultation-ui/http-errors";
 import { requireConfigPermission } from "@/server/authz/config-permissions";
 import { createDraftRuleSetVersionSchema } from "@/server/admin/rule-schemas";
-import { createDraftRuleSetVersion } from "@/server/admin/rule-admin";
+import { createDraftRuleSetVersion, getRuleSetVersionHistory } from "@/server/admin/rule-admin";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
+}
+
+export async function GET(request: NextRequest, { params }: RouteParams) {
+  return withErrorMapping(() =>
+    withRequestTenantContext(request, async (session) => {
+      requireConfigPermission(session, "config.rules.view");
+      const { id } = await params;
+      const versions = await getRuleSetVersionHistory(id);
+      return NextResponse.json({ versions }, { status: 200 });
+    }),
+  );
 }
 
 export async function POST(request: NextRequest, { params }: RouteParams) {

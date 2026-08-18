@@ -16,6 +16,18 @@ export const createDraftRuleSetVersionSchema = z.object({
 });
 export type CreateDraftRuleSetVersionInput = z.infer<typeof createDraftRuleSetVersionSchema>;
 
+/**
+ * Phase 9 AP6 -- Eingabe fuer `POST /api/admin/rule-sets/:id/versions/:versionId/rollback`
+ * (siehe PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 8). Eigenes, kleines
+ * Schema statt Wiederverwendung von `rollbackVersionSchema`
+ * (`src/server/admin/schemas.ts`, Phase 8) -- gleiches Trennungsprinzip wie
+ * bei den Fehlerklassen (siehe rule-admin-errors.ts Modulkommentar).
+ */
+export const rollbackRuleSetVersionSchema = z.object({
+  label: z.string().min(1).max(200).optional(),
+});
+export type RollbackRuleSetVersionInput = z.infer<typeof rollbackRuleSetVersionSchema>;
+
 // ---------------------------------------------------------------------------
 // Phase 9 AP3 -- Rule-CRUD fuer den flachen Condition-Baum (siehe
 // PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 5). Identische Condition-Struktur
