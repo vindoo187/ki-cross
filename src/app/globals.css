@@ -1514,3 +1514,33 @@ code {
 .admin-questions__back {
   margin-top: 32px;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Phase 9 AP8 -- Regelverwaltung (/admin/rules). Reuses the .admin-questions
+   class family above (badges, forms, history, actions) 1:1 -- same visual
+   language, no fachliche Kopplung an die Fragen-Domaene, siehe
+   RuleDraftEditor.tsx Modulkommentar. Nur die wenigen Rules-spezifischen
+   Ergaenzungen (mandantenweiter Publish-Hinweis, Abschnittsabstand) stehen
+   hier unter einem eigenen .admin-rules-Praefix. */
+/* ---------------------------------------------------------------------- */
+
+.admin-rules__publish-warning {
+  padding: 8px 12px;
+  border: 1px solid #c77700;
+  border-radius: 6px;
+  background: #fff6e6;
+  color: #7a4b00;
+  font-weight: 600;
+}
+
+.admin-rules__section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.admin-rules__section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}

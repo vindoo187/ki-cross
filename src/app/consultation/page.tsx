@@ -88,6 +88,17 @@ export default async function ConsultationEntryPage() {
           <Link href="/admin/questions">Fragenverwaltung oeffnen</Link>
         </p>
       )}
+
+      {/* Phase 9 AP8: Einstiegspunkt zur Regelverwaltung -- nur sichtbar, wenn
+          die Session ueberhaupt config.rules.view traegt (reine
+          UI-Bequemlichkeit, KEINE Sicherheitsgrenze: der eigentliche Zugriff
+          wird ausschliesslich serverseitig ueber requireConfigPermission()
+          durchgesetzt, siehe /admin/rules/page.tsx). */}
+      {session.configPermissions.includes("config.rules.view") && (
+        <p className="consultation-entry__analytics-link">
+          <Link href="/admin/rules">Regelverwaltung oeffnen</Link>
+        </p>
+      )}
     </main>
   );
 }
