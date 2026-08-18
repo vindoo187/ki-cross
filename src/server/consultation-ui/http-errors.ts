@@ -56,6 +56,11 @@ import {
   QuestionnaireVersionNotFoundError,
   RollbackSourceNotEligibleError,
 } from "../admin/question-admin-errors";
+import {
+  CopySourceRuleSetVersionNotFoundError,
+  RuleSetNotFoundError,
+  RuleSetVersionNotFoundError,
+} from "../admin/rule-admin-errors";
 
 interface ErrorBody {
   error: string;
@@ -267,6 +272,17 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
       { error: error.name, message: error.message, issues: error.issues },
       { status: 422 },
     );
+  }
+
+  // Rule-Management-API (Phase 9 AP2): 404 -- RuleSet/Version (inkl.
+  // Kopiervorlage) nicht gefunden (auch hier: fremde-Mandant-ID liefert
+  // ueber den gescopten `db`-Client 0 Treffer -> 404, analog Phase 8).
+  if (
+    error instanceof RuleSetNotFoundError ||
+    error instanceof RuleSetVersionNotFoundError ||
+    error instanceof CopySourceRuleSetVersionNotFoundError
+  ) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 404 });
   }
 
   return null;
