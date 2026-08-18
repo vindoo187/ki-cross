@@ -85,6 +85,14 @@ async function seedGlobalCatalog() {
     "analytics.view_tenant",
     "master_data.manage",
     "user.manage",
+    // Phase 8 AP2 (ChatGPT-GO 2026-08-18): Configuration-RBAC fuer die
+    // Fragen-/Fragebogen-Administration, siehe
+    // src/server/authz/config-permissions.ts. Bewusst drei separate Keys
+    // statt eines pauschalen admin.*-Rechts (deny-by-default, publish darf
+    // nicht implizit aus edit entstehen).
+    "config.questions.view",
+    "config.questions.edit",
+    "config.questions.publish",
   ];
   const permissions = await Promise.all(
     permissionKeys.map((key) =>
@@ -198,6 +206,30 @@ async function seedTenant(
       isSystemDefined: true,
     },
   });
+  // Phase 8 AP2 (ChatGPT-GO 2026-08-18): Configuration-RBAC-Rollen fuer die
+  // Fragen-/Fragebogen-Administration -- getrennt von den Management-
+  // Analytics-Rollen oben (eigene, unabhaengige RBAC-Architektur, siehe
+  // PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 3.2).
+  const configEditorRole = await prisma.role.upsert({
+    where: { tenantId_key: { tenantId: tenant.id, key: "config_editor" } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      key: "config_editor",
+      name: "Fachadministration (Entwurf)",
+      isSystemDefined: true,
+    },
+  });
+  const configPublisherRole = await prisma.role.upsert({
+    where: { tenantId_key: { tenantId: tenant.id, key: "config_publisher" } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      key: "config_publisher",
+      name: "Fachadministration (Veroeffentlichung)",
+      isSystemDefined: true,
+    },
+  });
 
   const allPermissionKeys = permissions.map((p) => p.key);
   const roleByKey: Record<SeedRoleKey, { id: string }> = {
@@ -205,6 +237,8 @@ async function seedTenant(
     store_admin: adminRole,
     company_management: companyManagementRole,
     executive_management: executiveManagementRole,
+    config_editor: configEditorRole,
+    config_publisher: configPublisherRole,
   };
 
   for (const roleKey of SEED_ROLE_KEYS) {
@@ -346,16 +380,13 @@ async function seedTenant(
     })
     .catch(() => undefined);
 
-  // --- Admin-/Konfigurations-Testnutzer (Phase 8 AP1) ---
-  // Synthetischer Admin-Testnutzer mit gesetztem passwordHash fuer den
-  // neuen Credential-Login (src/app/api/auth/admin-login/route.ts) --
-  // additiv zum bestehenden Dev-Login-Fluss oben (kein Passwort). Erhaelt
-  // wie jeder synthetische Nutzer einen Employee-Datensatz (notwendig,
-  // weil SessionPayload employeeId/storeId voraussetzt), aber noch KEINE
-  // config.*-RoleAssignment -- die config_editor/config_publisher-Rollen
-  // und ihre Zuweisung folgen erst in AP2 (siehe
-  // PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 5). Test-Passwort ist bewusst
-  // klar als synthetisch gekennzeichnet, kein echtes Secret, NICHT
+  // --- Admin-/Konfigurations-Testnutzer (Phase 8 AP1/AP2) ---
+  // Synthetischer Admin-Testnutzer OHNE jede config.*-RoleAssignment --
+  // dient als bewusste Negativ-Fixture fuer deny-by-default (gesetztes
+  // Passwort, aber keine Fragen-Administrationsrechte). Erhaelt wie jeder
+  // synthetische Nutzer einen Employee-Datensatz (notwendig, weil
+  // SessionPayload employeeId/storeId voraussetzt). Test-Passwort ist
+  // bewusst klar als synthetisch gekennzeichnet, kein echtes Secret, NICHT
   // produktionsreif (siehe src/server/auth/errors.ts).
   const adminTestPassword = "synthetic-admin-test-passwort-2026";
   const adminUser = await prisma.user.upsert({
@@ -380,9 +411,89 @@ async function seedTenant(
       tenantId: tenant.id,
       storeId: stores[0]!.id,
       userId: adminUser.id,
-      displayName: `Synthetische:r Admin:in (${config.key})`,
+      displayName: `Synthetische:r Admin:in ohne Config-Rechte (${config.key})`,
     },
   });
+
+  // config_editor-Testnutzer: darf Entwuerfe erstellen/aendern, aber NICHT
+  // veroeffentlichen (config.questions.view + .edit, kein .publish).
+  const configEditorUser = await prisma.user.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenant.id,
+        email: `${config.key}-config-editor@example-synthetic.test`,
+      },
+    },
+    update: { passwordHash: hashPassword(adminTestPassword) },
+    create: {
+      tenantId: tenant.id,
+      email: `${config.key}-config-editor@example-synthetic.test`,
+      isSynthetic: true,
+      passwordHash: hashPassword(adminTestPassword),
+    },
+  });
+  const configEditorEmployee = await prisma.employee.upsert({
+    where: { tenantId_userId: { tenantId: tenant.id, userId: configEditorUser.id } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      storeId: stores[0]!.id,
+      userId: configEditorUser.id,
+      displayName: `Synthetische:r Fragen-Editor:in (${config.key})`,
+    },
+  });
+  await prisma.roleAssignment
+    .create({
+      data: {
+        tenantId: tenant.id,
+        userId: configEditorEmployee.userId!,
+        roleId: configEditorRole.id,
+        scopeType: "TENANT",
+        companyId: null,
+        storeId: null,
+      },
+    })
+    .catch(() => undefined);
+
+  // config_publisher-Testnutzer: darf zusaetzlich veroeffentlichen
+  // (config.questions.view + .edit + .publish).
+  const configPublisherUser = await prisma.user.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: tenant.id,
+        email: `${config.key}-config-publisher@example-synthetic.test`,
+      },
+    },
+    update: { passwordHash: hashPassword(adminTestPassword) },
+    create: {
+      tenantId: tenant.id,
+      email: `${config.key}-config-publisher@example-synthetic.test`,
+      isSynthetic: true,
+      passwordHash: hashPassword(adminTestPassword),
+    },
+  });
+  const configPublisherEmployee = await prisma.employee.upsert({
+    where: { tenantId_userId: { tenantId: tenant.id, userId: configPublisherUser.id } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      storeId: stores[0]!.id,
+      userId: configPublisherUser.id,
+      displayName: `Synthetische:r Fragen-Publisher:in (${config.key})`,
+    },
+  });
+  await prisma.roleAssignment
+    .create({
+      data: {
+        tenantId: tenant.id,
+        userId: configPublisherEmployee.userId!,
+        roleId: configPublisherRole.id,
+        scopeType: "TENANT",
+        companyId: null,
+        storeId: null,
+      },
+    })
+    .catch(() => undefined);
 
   // --- Produktkatalog (tenant-eigene Kategorien/Produkte, globaler Provider) ---
   const category = await prisma.productCategory.upsert({

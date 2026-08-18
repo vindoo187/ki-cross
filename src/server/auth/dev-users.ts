@@ -21,6 +21,11 @@ import {
   type ManagementScopeCandidate,
   type ManagementScopeLevel,
 } from "../authz/management-scope";
+import {
+  deriveConfigPermissions,
+  type ConfigPermissionCandidate,
+  type ConfigPermissionKey,
+} from "../authz/config-permissions";
 
 export interface DevLoginCandidate {
   tenantId: string;
@@ -151,6 +156,29 @@ export async function resolveManagementScopeForUser(
 }
 
 /**
+ * Loest die `config.questions.*`-Permissions (Phase 8 AP2) fuer einen
+ * Nutzer aus dessen bereits geladenen `RoleAssignment`-Zeilen auf -- ohne
+ * zusaetzlichen DB-Roundtrip (anders als `resolveManagementScopeForUser()`
+ * braucht diese Aufloesung keine Store-ID-Aufloesung, da Config-Permissions
+ * ausschliesslich TENANT-scoped sind, siehe
+ * PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 3.2/15 Punkt 5). Reine
+ * Auswahllogik liegt in
+ * `src/server/authz/config-permissions.ts::deriveConfigPermissions()`.
+ */
+export function resolveConfigPermissionsForUser(
+  roleAssignments: RoleAssignmentForScope[],
+): ConfigPermissionKey[] {
+  const activeAssignments = roleAssignments.filter((assignment) => assignment.revokedAt === null);
+
+  const candidates: ConfigPermissionCandidate[] = activeAssignments.map((assignment) => ({
+    scopeType: assignment.scopeType,
+    permissionKeys: assignment.role.rolePermissions.map((rp) => rp.permission.key),
+  }));
+
+  return deriveConfigPermissions(candidates);
+}
+
+/**
  * Prueft einen gewaehlten Login-Kandidaten (per `employeeId`) erneut gegen
  * die DB (nie ungeprueft dem Client vertrauen) und baut daraus den
  * Session-Payload.
@@ -187,6 +215,7 @@ export async function buildSessionPayloadForEmployee(
     employee.tenantId,
     employee.user.roleAssignments,
   );
+  const configPermissions = resolveConfigPermissionsForUser(employee.user.roleAssignments);
 
   return {
     tenantId: employee.tenantId,
@@ -196,5 +225,6 @@ export async function buildSessionPayloadForEmployee(
     displayName: employee.displayName,
     roles: roleKeysFromAssignments(employee.user.roleAssignments),
     managementScope,
+    configPermissions,
   };
 }
