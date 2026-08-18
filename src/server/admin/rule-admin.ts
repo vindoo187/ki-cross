@@ -48,10 +48,15 @@
 import { db } from "../db/client";
 import { getTenantContext, getTenantId } from "../tenant/context";
 import type { ScopedPrismaClient } from "../tenant/scoped-client";
+import { assertOperatorAllowedForAttribute } from "../recommendation/attribute-registry";
+import { assertValidConditionSource } from "../recommendation/conditions";
+import type { AnswerType, ConditionSourceType, VisibilityOperator } from "../recommendation/types";
+import { isOperatorSupportedForAnswerType, splitComparisonList } from "../questionnaire/visibility";
 import {
   AdminRuleNotFoundError,
   CopySourceRuleSetVersionNotFoundError,
   RuleSetNotFoundError,
+  RuleSetVersionInvalidError,
   RuleSetVersionNotDraftError,
   RuleSetVersionNotFoundError,
 } from "./rule-admin-errors";
@@ -1300,4 +1305,287 @@ async function loadCrossSellingRuleDetail(
     isActive: row.isActive,
     conditions: row.conditions.map(toConditionDetail),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 9. AP4 -- Serverseitiger Validator (Phase 9 AP4, siehe
+//    PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 6). Rein lesend -- keine
+//    Statusbeschraenkung (analog `validateDraftVersion()` in
+//    question-admin.ts: auch bereits veroeffentlichte Versionen koennen zu
+//    Regressionszwecken erneut geprueft werden), keine Mutation, kein
+//    Publish.
+//
+// Vor-AP4-Code-Check (ChatGPT-Auflage 2026-08-18, "Validator und Runtime
+// muessen dieselbe Mathematik haben"):
+// - `PrioritizationRule.weight` wird in `prioritization.ts`
+//   (`businessPriorityScore += rule.weight`) als reine Summe verwendet --
+//   negative Werte werden mathematisch korrekt verarbeitet (mindern die
+//   Summe), daher hier bewusst KEINE Nichtnegativ-Pruefung.
+// - `EligibilityRule.fitWeight` wird in `fit-score.ts`
+//   (`computeCustomerFitScore()`) dagegen laut Modulkommentar ausdruecklich
+//   "als nicht-negativ vorausgesetzt" und per `Math.max(0, ...)` VOR jeder
+//   Rechnung auf 0 abgeschnitten -- ein negativer Wert wuerde also
+//   stillschweigend wirkungslos bleiben, statt (wie man annehmen koennte)
+//   "gegen die Empfehlung zu sprechen". Um genau diese stille Divergenz
+//   zwischen Regel-Autoring und tatsaechlicher Auswertung zu verhindern,
+//   lehnt der Validator negative `fitWeight`-Werte ab (spiegelt die
+//   bestehende Runtime-Semantik, erfindet keine neue).
+// ---------------------------------------------------------------------------
+
+/**
+ * Fuehrt die vollstaendige fachliche Validierung einer `RuleSetVersion`
+ * (beliebiger Status) aus. Sammelt ALLE gefundenen Verstoesse (analog
+ * `validateQuestionnaireVersion()`, `src/server/questionnaire/service.ts`)
+ * statt beim ersten Fehler abzubrechen und wirft bei mindestens einem Fund
+ * `RuleSetVersionInvalidError` (bereits mit `issues: string[]`).
+ *
+ * Prueft je Regel/Condition:
+ * - Struktur (`assertValidConditionSource()`, bestehend aus der
+ *   Empfehlungs-Engine).
+ * - ANSWER-Conditions: `questionId` muss zu einer Frage gehoeren, die in
+ *   MINDESTENS EINER aktuell ACTIVE `QuestionnaireVersion` des Mandanten
+ *   vorkommt (Vereinigung ueber alle `Questionnaire`s des Mandanten, siehe
+ *   `loadActiveQuestionAnswerTypeMap()` -- `Questionnaire.key` ist in
+ *   diesem Schema kein fixer Singleton, `POST
+ *   /api/consultation/sessions` nimmt ihn als freien Parameter entgegen);
+ *   Operator muss fuer den `AnswerType` der Frage zulaessig sein
+ *   (`isOperatorSupportedForAnswerType()`, identisches Prinzip wie bei
+ *   `VisibilityCondition`); bei SINGLE_CHOICE/MULTIPLE_CHOICE muessen
+ *   referenzierte AnswerOption-Keys existieren.
+ * - PRODUCT_ATTRIBUTE/SESSION_ATTRIBUTE-Conditions:
+ *   `assertOperatorAllowedForAttribute()` (bestehend), zusaetzlich muss
+ *   `comparisonValue` (bzw. jeder Wert bei IN/NOT_IN) gemaess dem
+ *   `AttributeValueType` parsebar sein.
+ * - `description` nicht leer (redundant zur Zod-Struktur-Validierung bei
+ *   AP3, aber defensiv fuer per Deep-Copy uebernommene Altdaten).
+ * - `EligibilityRule.fitWeight` nicht negativ (siehe Code-Check oben).
+ * - `CrossSellingRule.priority` nicht negativ (ChatGPT-Entscheidung
+ *   2026-08-18, siehe Plan Abschnitt 2.5).
+ * - `ExclusionRule.reasonCode`-Eindeutigkeit je Version -- bereits durch
+ *   den DB-UNIQUE-Constraint `exclusion_rules_tenant_id_rule_set_version_id_reason_code_key`
+ *   strukturell ausgeschlossen; diese Pruefung ist bewusst redundant
+ *   (verstaendlicher Validierungsfehler statt rohem DB-Fehler, falls der
+ *   Constraint jemals entfaellt oder umgangen wird -- ChatGPT-Vorgabe
+ *   2026-08-18).
+ * - `CrossSellingRule.suggestedProductVersionId`, falls gesetzt: muss zu
+ *   einer existierenden `ProductVersion` dieses Mandanten gehoeren --
+ *   ebenfalls bereits durch die DB-FK abgesichert (`onDelete: SetNull`),
+ *   hier defensiv erneut geprueft.
+ * - Leerer Draft (keine einzige Regel in allen vier Typen).
+ */
+export async function validateDraftRuleSetVersion(
+  ruleSetId: string,
+  versionId: string,
+): Promise<{ valid: true }> {
+  await requireRuleSet(db, ruleSetId);
+  const version = await requireRuleSetVersion(db, ruleSetId, versionId);
+  const detail = await loadRuleSetVersionDetail(db, version);
+
+  const issues: string[] = [];
+
+  const totalRuleCount =
+    detail.eligibilityRules.length +
+    detail.exclusionRules.length +
+    detail.prioritizationRules.length +
+    detail.crossSellingRules.length;
+  if (totalRuleCount === 0) {
+    issues.push("RuleSetVersion enthaelt keine Regeln.");
+  }
+
+  const activeQuestions = await loadActiveQuestionAnswerTypeMap(db);
+
+  function validateConditions(
+    ruleLabel: string,
+    ruleKey: string,
+    conditions: RuleConditionDetail[],
+  ): void {
+    for (const condition of conditions) {
+      const sourceType = condition.sourceType as ConditionSourceType;
+      const operator = condition.operator as VisibilityOperator;
+      const conditionInput = {
+        id: condition.id,
+        groupIndex: condition.groupIndex,
+        sourceType,
+        questionId: condition.questionId,
+        attributeKey: condition.attributeKey,
+        operator,
+        comparisonValue: condition.comparisonValue,
+      };
+
+      try {
+        assertValidConditionSource(conditionInput);
+      } catch (err) {
+        issues.push(
+          `${ruleLabel} "${ruleKey}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+
+      if (sourceType === "ANSWER") {
+        const questionId = conditionInput.questionId as string;
+        const question = activeQuestions.get(questionId);
+        if (!question) {
+          issues.push(
+            `${ruleLabel} "${ruleKey}": Bedingung verweist auf Frage "${questionId}", die nicht Teil einer aktuell aktiven Fragebogen-Version dieses Mandanten ist.`,
+          );
+          continue;
+        }
+        if (!isOperatorSupportedForAnswerType(operator, question.answerType)) {
+          issues.push(
+            `${ruleLabel} "${ruleKey}": Operator "${operator}" ist fuer Frage "${questionId}" (Typ ${question.answerType}) nicht zulaessig.`,
+          );
+        }
+        if (
+          (question.answerType === "SINGLE_CHOICE" || question.answerType === "MULTIPLE_CHOICE") &&
+          (["EQUALS", "NOT_EQUALS", "IN", "NOT_IN", "CONTAINS"] as const).includes(
+            operator as never,
+          )
+        ) {
+          const referenced = splitComparisonList(conditionInput.comparisonValue);
+          const invalid = referenced.filter((r) => !question.answerOptionKeys.has(r));
+          if (invalid.length > 0) {
+            issues.push(
+              `${ruleLabel} "${ruleKey}": Bedingung verweist auf ungueltige AnswerOption(en) "${invalid.join(", ")}" der Frage "${questionId}".`,
+            );
+          }
+        }
+        continue;
+      }
+
+      // PRODUCT_ATTRIBUTE | SESSION_ATTRIBUTE
+      try {
+        const definition = assertOperatorAllowedForAttribute(
+          sourceType,
+          conditionInput.attributeKey as string,
+          operator,
+        );
+        if (operator !== "IS_ANSWERED" && operator !== "IS_NOT_ANSWERED") {
+          const values =
+            operator === "IN" || operator === "NOT_IN"
+              ? splitComparisonList(conditionInput.comparisonValue)
+              : [conditionInput.comparisonValue];
+          for (const value of values) {
+            definition.parse(value);
+          }
+        }
+      } catch (err) {
+        issues.push(
+          `${ruleLabel} "${ruleKey}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  for (const rule of detail.eligibilityRules) {
+    if (rule.description.trim().length === 0) {
+      issues.push(`EligibilityRule "${rule.key}": description darf nicht leer sein.`);
+    }
+    if (rule.fitWeight < 0) {
+      issues.push(
+        `EligibilityRule "${rule.key}": fitWeight (${rule.fitWeight}) darf nicht negativ sein -- die Fit-Score-Berechnung (fit-score.ts) behandelt fitWeight als nichtnegative Groesse und wuerde einen negativen Wert stillschweigend auf 0 abschneiden.`,
+      );
+    }
+    validateConditions("EligibilityRule", rule.key, rule.conditions);
+  }
+
+  const exclusionRuleKeysByReasonCode = new Map<string, string[]>();
+  for (const rule of detail.exclusionRules) {
+    if (rule.description.trim().length === 0) {
+      issues.push(`ExclusionRule "${rule.key}": description darf nicht leer sein.`);
+    }
+    const keys = exclusionRuleKeysByReasonCode.get(rule.reasonCode) ?? [];
+    keys.push(rule.key);
+    exclusionRuleKeysByReasonCode.set(rule.reasonCode, keys);
+    validateConditions("ExclusionRule", rule.key, rule.conditions);
+  }
+  for (const [reasonCode, keys] of exclusionRuleKeysByReasonCode) {
+    if (keys.length > 1) {
+      issues.push(
+        `reasonCode "${reasonCode}" ist mehrfach vergeben (ExclusionRule(n): ${keys.join(", ")}) -- muss innerhalb einer RuleSetVersion eindeutig sein.`,
+      );
+    }
+  }
+
+  for (const rule of detail.prioritizationRules) {
+    if (rule.description.trim().length === 0) {
+      issues.push(`PrioritizationRule "${rule.key}": description darf nicht leer sein.`);
+    }
+    validateConditions("PrioritizationRule", rule.key, rule.conditions);
+  }
+
+  const referencedProductVersionIds = detail.crossSellingRules
+    .map((rule) => rule.suggestedProductVersionId)
+    .filter((id): id is string => id !== null);
+  const existingProductVersionIds =
+    referencedProductVersionIds.length > 0
+      ? new Set(
+          (
+            await db.productVersion.findMany({
+              where: { id: { in: referencedProductVersionIds } },
+              select: { id: true },
+            })
+          ).map((p) => p.id),
+        )
+      : new Set<string>();
+
+  for (const rule of detail.crossSellingRules) {
+    if (rule.description.trim().length === 0) {
+      issues.push(`CrossSellingRule "${rule.key}": description darf nicht leer sein.`);
+    }
+    if (rule.priority < 0) {
+      issues.push(
+        `CrossSellingRule "${rule.key}": priority (${rule.priority}) darf nicht negativ sein.`,
+      );
+    }
+    if (
+      rule.suggestedProductVersionId !== null &&
+      !existingProductVersionIds.has(rule.suggestedProductVersionId)
+    ) {
+      issues.push(
+        `CrossSellingRule "${rule.key}": suggestedProductVersionId "${rule.suggestedProductVersionId}" verweist auf keine existierende ProductVersion dieses Mandanten.`,
+      );
+    }
+    validateConditions("CrossSellingRule", rule.key, rule.conditions);
+  }
+
+  if (issues.length > 0) {
+    throw new RuleSetVersionInvalidError(versionId, issues);
+  }
+  return { valid: true };
+}
+
+/**
+ * Laedt fuer jede Frage, die zu einer aktuell ACTIVE `QuestionnaireVersion`
+ * dieses Mandanten gehoert (Vereinigung ueber ALLE `Questionnaire`s, siehe
+ * Modulkommentar zu `validateDraftRuleSetVersion()`), die jeweils neueste
+ * nicht-archivierte `QuestionVersion` (DRAFT/ACTIVE/EXPIRED), indiziert
+ * nach `Question.id`. Fragen ohne gueltige `QuestionVersion` werden
+ * uebersprungen -- das ist ein Fragebogen-Validierungsproblem
+ * (`validateQuestionnaireVersion()`), nicht Aufgabe des Regel-Validators.
+ */
+async function loadActiveQuestionAnswerTypeMap(
+  client: QueryClient,
+): Promise<Map<string, { answerType: AnswerType; answerOptionKeys: ReadonlySet<string> }>> {
+  const questions = await client.question.findMany({
+    where: { questionnaireVersion: { status: "ACTIVE" } },
+    include: {
+      versions: {
+        where: { status: { in: ["DRAFT", "ACTIVE", "EXPIRED"] } },
+        include: { answerOptions: true },
+        orderBy: [{ validFrom: "desc" }, { createdAt: "desc" }],
+        take: 1,
+      },
+    },
+  });
+
+  const map = new Map<string, { answerType: AnswerType; answerOptionKeys: ReadonlySet<string> }>();
+  for (const question of questions) {
+    const version = question.versions[0];
+    if (!version) continue;
+    map.set(question.id, {
+      answerType: version.answerType,
+      answerOptionKeys: new Set(version.answerOptions.map((o) => o.key)),
+    });
+  }
+  return map;
 }

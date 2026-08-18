@@ -72,3 +72,19 @@ export class AdminRuleNotFoundError extends RuleAdminError {
     super(`${ruleTypeLabel} "${ruleId}" wurde in RuleSetVersion "${versionId}" nicht gefunden.`);
   }
 }
+
+/**
+ * `validateDraftRuleSetVersion()` (Phase 9 AP4, siehe
+ * PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 6) hat fachliche Verstoesse
+ * gefunden. `issues` enthaelt ALLE gefundenen Verstoesse, nicht nur den
+ * ersten -- analog `QuestionnaireVersionInvalidError`
+ * (`src/server/questionnaire/errors.ts`, seit Phase 3A/8).
+ */
+export class RuleSetVersionInvalidError extends RuleAdminError {
+  constructor(
+    public readonly ruleSetVersionId: string,
+    public readonly issues: string[],
+  ) {
+    super(`RuleSetVersion "${ruleSetVersionId}" ist nicht gueltig: ${issues.join("; ")}`);
+  }
+}

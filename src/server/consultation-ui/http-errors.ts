@@ -60,6 +60,7 @@ import {
   AdminRuleNotFoundError,
   CopySourceRuleSetVersionNotFoundError,
   RuleSetNotFoundError,
+  RuleSetVersionInvalidError,
   RuleSetVersionNotDraftError,
   RuleSetVersionNotFoundError,
 } from "../admin/rule-admin-errors";
@@ -294,6 +295,17 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // 2026-08-18: "DRAFT-only fuer saemtliche Mutationen").
   if (error instanceof RuleSetVersionNotDraftError) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Rule-Management-API (Phase 9 AP4): 422 -- validateDraftRuleSetVersion()
+  // hat fachliche Verstoesse gefunden. `issues` enthaelt ALLE gefundenen
+  // Verstoesse, nicht nur den ersten (siehe rule-admin-errors.ts), analog
+  // QuestionnaireVersionInvalidError oben.
+  if (error instanceof RuleSetVersionInvalidError) {
+    return NextResponse.json(
+      { error: error.name, message: error.message, issues: error.issues },
+      { status: 422 },
+    );
   }
 
   return null;
