@@ -38,12 +38,12 @@ auf die nächste Empfehlungs-Generierung dieser Session aus — dieses
 Verhalten bleibt unverändert, wird aber in Phase 9 erstmals explizit
 dokumentiert und mit einem End-zu-Ende-Test bewiesen (siehe AP9).
 
-**Status dieses Plans:** ChatGPT hat eine grobe AP-Struktur vorgeschlagen
-(unten übernommen, mit einer Präzisierung: Abschlussbericht als eigener
-AP11, analog allen Vorphasen, statt in AP10 gebündelt). Ausstehend:
-Prüfung dieses ausformulierten Plans durch ChatGPT, danach explizites
-Implementierungs-GO des Nutzers (wie bei Phase 7/8, da Phase 9 den
-produktiven Empfehlungspfad berührt).
+**Status dieses Plans:** ChatGPT hat den ausformulierten Plan geprüft und
+alle vier offenen Klärungspunkte (Abschnitt 15) am 2026-08-18 entschieden
+— Details siehe die jeweiligen Abschnitte unten. ChatGPT-GO für den Plan
+liegt vor ("Ja — der Plan passt", "Jetzt kann AP1 beginnen"). Ausstehend
+vor AP1: explizites Implementierungs-GO des Nutzers (wie bei Phase 7/8,
+da Phase 9 den produktiven Empfehlungspfad berührt).
 
 ## 1. Scope-Rahmen (aus AP0-Review + ChatGPT-Entscheidungen, verbindlich)
 
@@ -80,16 +80,13 @@ unangetastet — Phase 9 baut nur die Verwaltungsschicht **darüber**).
 
 - Vier neue Permission-Keys: `config.rules.view`, `config.rules.edit`,
   `config.rules.publish` (analog `config.questions.*`).
-- **Entscheidung (zur Bestätigung an ChatGPT):** Die bestehenden Rollen
+- **Entschieden (ChatGPT-GO, 2026-08-18):** Die bestehenden Rollen
   `config_editor`/`config_publisher` aus Phase 8 werden um die neuen
-  `config.rules.*`-Keys erweitert (ein Fachadministrator verwaltet i. d. R.
-  sowohl Fragen als auch Regeln), statt vier komplett neue Rollen
-  einzuführen. Alternative wäre eine strikte Trennung
-  (`rules_editor`/`rules_publisher` getrennt von `config_editor`/
-  `config_publisher`) — schafft mehr Rollen-Granularität, aber mehr
-  Verwaltungsaufwand für ein synthetisches Pilotsystem mit wenigen
-  Admin-Usern. Empfehlung: erweiterte Rollen (weniger Rollen-Wildwuchs),
-  aber explizit ChatGPT zur Entscheidung vorgelegt (Abschnitt 12).
+  `config.rules.*`-Keys erweitert — **keine** neuen
+  `rules_editor`/`rules_publisher`-Rollen. Begründung (ChatGPT, wörtlich):
+  "Das hält das RBAC-Modell übersichtlich und entspricht dem Prinzip aus
+  Phase 8: Rolle beschreibt die administrative Fähigkeit, Permission
+  beschreibt den konkreten Konfigurationsbereich."
 - `requireConfigPermission()` (Phase 8, unverändert) wird für die neuen
   Keys wiederverwendet — keine neue Middleware-Architektur.
 
@@ -148,25 +145,44 @@ bewiesen werden — eine laufende Session verwendet nach einem Publish
   vor dem DB-Constraint-Fehler).
 - `CrossSellingRule.suggestedProductVersionId`, falls gesetzt: muss zu
   einer existierenden `ProductVersion` desselben Tenants gehören.
-- Pflichtfeld-Vollständigkeit (`description` nicht leer,
-  `weight`/`priority`/`fitWeight` in sinnvollen Wertebereichen, z. B.
-  nicht negativ, falls fachlich keine negativen Gewichte vorgesehen sind
-  — an ChatGPT zu bestätigen, siehe Abschnitt 12).
+- Pflichtfeld-Vollständigkeit (`description` nicht leer) sowie
+  Wertebereiche für `priority`/`weight`/`fitWeight` (**entschieden**,
+  ChatGPT 2026-08-18, siehe unten).
 
-### 2.6 Offene Klärungsfrage: Referenzintegrität über Questionnaire-Grenzen
+**Entschieden (ChatGPT-GO, 2026-08-18) — Wertebereiche:**
+
+- `priority`: **nicht negativ.**
+- `weight`: negativ grundsätzlich zulässig, **sofern** die bestehende
+  Recommendation-Engine negative Gewichtung mathematisch unterstützt.
+- `fitWeight`: negativ grundsätzlich zulässig, **sofern** dieselbe
+  Semantik im bestehenden Empfehlungscode bereits implementiert ist.
+- Begründung (ChatGPT, wörtlich): "Ein negatives Gewicht kann fachlich
+  durchaus bedeuten: 'Diese Eigenschaft spricht gegen die Empfehlung.'
+  Wir sollten dem Validator keine neue Fachsemantik erfinden lassen." Der
+  AP4-Validator muss die bereits im Recommendation-Code (`eligibility.ts`/
+  `prioritization.ts`) definierte Semantik spiegeln — **nicht** eigene
+  Regeln erfinden. Falls der bestehende Code `weight`/`fitWeight`
+  ausdrücklich als nichtnegative Größen behandelt, dann entsprechend in
+  AP4 ablehnen. **Verbindlich:** Validator und Runtime müssen dieselbe
+  Mathematik haben — vor AP4 ist daher ein kurzer Code-Check von
+  `eligibility.ts`/`prioritization.ts` nötig, um zu klären, ob negative
+  Werte dort überhaupt sinnvoll verarbeitet werden.
+
+### 2.6 Referenzintegrität über Questionnaire-Grenzen (entschieden)
 
 Da `RuleSetVersion` und `QuestionnaireVersion` **unabhängig** versioniert
-werden (Leitplanke 2), stellt sich die Frage, gegen **welche**
+werden (Leitplanke 2), stellte sich die Frage, gegen **welche**
 `QuestionnaireVersion` eine `questionId`-Referenz in einer
-`RuleSetVersion`-Condition bei der Validierung geprüft werden soll — die
-aktuell ACTIVE `QuestionnaireVersion` zum Zeitpunkt der Regel-Validierung,
-oder unabhängig davon (nur Existenz der `Question` als stabile Entität
-über Versionen hinweg, ohne Versionsbezug)? Diese Frage ist rein
-technisch/fachlich und wird explizit an ChatGPT vorgelegt (Abschnitt 12) —
-Empfehlung dieses Plans: Prüfung gegen die aktuell ACTIVE
-`QuestionnaireVersion` (konsistent mit dem, was der Empfehlungspfad zur
-Laufzeit tatsächlich sieht), mit einer klaren Fehlermeldung, falls sich
-Frage und Regel-Version fachlich widersprechen.
+`RuleSetVersion`-Condition bei der Validierung geprüft werden soll.
+
+**Entschieden (ChatGPT-GO, 2026-08-18):** Prüfung gegen die aktuell ACTIVE
+`QuestionnaireVersion` zum Zeitpunkt der Regel-Validierung — nicht nur
+"Question mit dieser ID existiert irgendwo", sondern "Diese Frage ist
+Bestandteil der aktuell ACTIVE QuestionnaireVersion." Begründung (ChatGPT,
+wörtlich): "Das passt zur Laufzeitlogik und verhindert Regeln, die zwar
+formal auf eine existierende historische Question zeigen, aber im
+aktuellen Fragebogen niemals beantwortet werden können." Wichtig: Das ist
+Validierung, keine nachträgliche Mutation historischer Daten.
 
 ## 3. AP1 – Rule-Admin-RBAC/Auth (Anbindung an Phase-8-Infrastruktur)
 
@@ -317,18 +333,48 @@ Regel-Builder, Campaigns, Ziele, Provisionsmodelle, Freitext-KI).
   dokumentierten Verhalten aufdeckt (wäre ein echter, wertvoller Fund,
   kein Show-Stopper, aber zeitlich einzuplanen).
 
-## 15. Offene Klärungspunkte für ChatGPT (vor Plan-GO)
+## 15. Klärungspunkte — ChatGPT-Entscheidungen (2026-08-18, alle GO)
 
-1. **Rollenmodell (2.1):** bestehende `config_editor`/`config_publisher`
-   um `config.rules.*` erweitern, oder eigene
-   `rules_editor`/`rules_publisher`-Rollen?
-2. **Referenzintegrität (2.6):** `questionId`-Prüfung gegen die aktuell
-   ACTIVE `QuestionnaireVersion`, oder versionsunabhängig nur gegen die
-   `Question`-Entität?
-3. **Wertebereiche (2.5):** dürfen `weight`/`priority`/`fitWeight`
-   negativ sein, oder soll der Validator das ablehnen?
-4. **AP-Nummerierung:** Abschlussbericht als eigener AP11 (Präzisierung
-   dieses Plans gegenüber ChatGPTs Kurzvorschlag "AP10 bündelt Hardening/
-   CI/Bericht") — Bestätigung erbeten, analog allen Vorphasen (Phase 6
-   AP13, Phase 7 AP10, Phase 8 AP10 waren jeweils eigene
-   Berichts-APs nach dem Hardening/CI-AP).
+1. **Rollenmodell (2.1):** GO für Erweiterung der bestehenden
+   `config_editor`/`config_publisher`-Rollen — keine neuen Rollen.
+2. **Referenzintegrität (2.6):** GO für Prüfung gegen die aktuell ACTIVE
+   `QuestionnaireVersion`.
+3. **Wertebereiche (2.5):** `priority` nicht negativ; `weight`/
+   `fitWeight` negativ zulässig, sofern die bestehende Engine dies
+   mathematisch unterstützt (vor AP4 zu verifizieren).
+4. **AP-Nummerierung:** GO für AP11 als eigenen Abschlussbericht-AP,
+   getrennt von AP10 (Hardening/CI). ChatGPT-Präzisierung (wörtlich):
+   "AP11 als separater Abschlussbericht ist richtig", mit der zusätzlichen
+   Empfehlung, AP9 (Security/Regression) explizit inklusive des
+   mandantenweiten Concurrency-Tests zu verstehen und AP10 rein als
+   Hardening/CI-Verifikationsblock zu halten (bereits so in diesem Plan
+   umgesetzt, siehe Abschnitt 11/12).
+
+**Ergänzung zum mandantenweiten Concurrency-Test (AP9), von ChatGPT als
+"einer der wichtigsten Punkte des Plans" bezeichnet — exaktes Beweisziel:**
+
+```
+Tenant A
+ ├── RuleSet A / v1 ACTIVE
+ └── RuleSet B / v1 DRAFT
+
+Publish RuleSet B
+        ↓
+RuleSet A / v1 → EXPIRED
+RuleSet B / v1 → ACTIVE
+
+und NICHT versehentlich:
+
+RuleSet A / v1 → ACTIVE
+RuleSet B / v1 → ACTIVE   ❌
+```
+
+Zusätzliche ChatGPT-Klarstellung zu Leitplanke 2: RuleSet-Versionierung
+darf niemals dazu führen, dass eine bereits erzeugte `Recommendation`
+nachträglich ihre verwendete `ruleSetVersionId` verliert oder überschrieben
+bekommt — die alte `Recommendation` bleibt unverändert, nur zukünftige
+Evaluationen verwenden die neue ACTIVE-Version. Kurzformel (ChatGPT):
+"Questionnaire = Session-Pinning / RuleSet = Evaluation-Snapshot."
+
+**Plan-Status: ChatGPT-GO vollständig erteilt ("Jetzt kann AP1
+beginnen"). Ausstehend: Implementierungs-GO des Nutzers.**
