@@ -64,6 +64,7 @@ import {
   RuleSetVersionInvalidError,
   RuleSetVersionNotDraftError,
   RuleSetVersionNotFoundError,
+  RuleSetVersionPublishConflictError,
 } from "../admin/rule-admin-errors";
 
 interface ErrorBody {
@@ -302,6 +303,16 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // DRAFT-Version (dafuer existiert bereits createDraftRuleSetVersion() mit
   // copyFromVersionId), analog RollbackSourceNotEligibleError aus Phase 8.
   if (error instanceof RuleRollbackSourceNotEligibleError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Rule-Management-API (Phase 9 AP9, ChatGPT-Vorgabe 2026-08-18): 409 --
+  // echter Nebenlaeufigkeitskonflikt beim mandantenweiten Publish (der
+  // Verlierer eines Wettlaufs zwischen zwei DRAFT-Versionen), siehe
+  // RuleSetVersionPublishConflictError-Kommentar. Datenintegritaet ist
+  // bereits durch die DB-EXCLUDE-Constraint garantiert -- dies ist nur die
+  // saubere API-Uebersetzung des erwartbaren Konflikts.
+  if (error instanceof RuleSetVersionPublishConflictError) {
     return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
   }
 

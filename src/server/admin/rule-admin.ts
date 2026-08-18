@@ -45,6 +45,7 @@
  *   Tenant-FKs achten").
  */
 
+import { Prisma } from "@prisma/client";
 import { db } from "../db/client";
 import { getTenantContext, getTenantId } from "../tenant/context";
 import type { ScopedPrismaClient } from "../tenant/scoped-client";
@@ -60,6 +61,7 @@ import {
   RuleSetVersionInvalidError,
   RuleSetVersionNotDraftError,
   RuleSetVersionNotFoundError,
+  RuleSetVersionPublishConflictError,
 } from "./rule-admin-errors";
 import type {
   CreateCrossSellingRuleInput,
@@ -1639,6 +1641,53 @@ export interface PublishRuleSetVersionResult {
   previousActiveVersionId: string | null;
 }
 
+/**
+ * Name des DB-EXCLUDE-Constraints (siehe Migration
+ * `20260801130000_recommendation_engine/migration.sql`), der strukturell
+ * garantiert, dass niemals zwei `RuleSetVersion`s desselben Mandanten
+ * gleichzeitig ACTIVE sind -- auch nicht bei ECHTER Nebenlaeufigkeit
+ * zwischen zwei VERSCHIEDENEN Drafts (der `updateMany`-count-Guard oben
+ * schuetzt nur gegen den doppelten Publish DERSELBEN Version). Diese
+ * Constraint ist in `schema.prisma` NICHT als `@@unique`/`@@index`
+ * modelliert (raw SQL, GiST-Index) -- Prisma erkennt eine Verletzung daher
+ * NICHT als bekannten Fehlercode (kein P2002), sondern wirft
+ * `PrismaClientUnknownRequestError` mit dem rohen Postgres-Fehlertext.
+ * Diese Konstante wird sowohl hier als auch (indirekt, per Instanceof) in
+ * Tests referenziert.
+ */
+const RULE_SET_VERSION_ACTIVE_NO_OVERLAP_CONSTRAINT = "rule_set_versions_tenant_active_no_overlap";
+
+/**
+ * Uebersetzt NUR die bekannte, oben benannte EXCLUDE-Constraint-Verletzung
+ * in einen fachlichen `RuleSetVersionPublishConflictError` (409). Jeder
+ * andere Fehler wird unveraendert weitergeworfen -- ChatGPT-Vorgabe
+ * 2026-08-18 (Phase 9 AP9): "keinen pauschalen PostgreSQL-/Prisma-Fehler
+ * auf 409 mappen". Die Erkennung stuetzt sich bewusst NICHT auf einen
+ * Prisma-Fehlercode (den gibt es fuer diese Constraint nicht, siehe oben),
+ * sondern auf den Constraint-Namen in der Fehlermeldung -- das ist der
+ * einzige stabile, spezifische Anker, den Prisma fuer einen von ihm nicht
+ * modellierten DB-Constraint liefert.
+ *
+ * Exportiert (statt modul-privat), damit diese Mapping-Logik deterministisch
+ * per Unit-Test mit synthetischen Prisma-Fehlerobjekten abgedeckt werden
+ * kann -- ein echter EXCLUDE-Constraint-Konflikt laesst sich nicht
+ * zuverlaessig/deterministisch ueber eine echte Nebenlaeufigkeitssituation
+ * provozieren (siehe tests/integration/rule-admin-publish.test.ts, das den
+ * echten Nebenlaeufigkeitsfall best-effort abdeckt, aber timing-abhaengig
+ * ist).
+ */
+export function translatePublishError(error: unknown, versionId: string): never {
+  const message =
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    error instanceof Prisma.PrismaClientUnknownRequestError
+      ? error.message
+      : undefined;
+  if (message?.includes(RULE_SET_VERSION_ACTIVE_NO_OVERLAP_CONSTRAINT)) {
+    throw new RuleSetVersionPublishConflictError(versionId);
+  }
+  throw error;
+}
+
 export async function publishRuleSetVersion(
   ruleSetId: string,
   versionId: string,
@@ -1654,50 +1703,63 @@ export async function publishRuleSetVersion(
   const actorUserId = getTenantContext().userId;
   const now = new Date();
 
-  const previousActiveVersionId = await db.$transaction(async (tx) => {
-    // Mandantenweiter Scope: bewusst OHNE ruleSetId-Filter (siehe
-    // Modulkommentar oben) -- der tenant-gescopte Client injiziert die
-    // tenantId bereits automatisch.
-    const previousActive = await tx.ruleSetVersion.findFirst({
-      where: { status: "ACTIVE", id: { not: versionId } },
-    });
-    if (previousActive) {
-      await tx.ruleSetVersion.update({
-        where: { id: previousActive.id },
-        data: { status: "EXPIRED", validTo: now },
+  let previousActiveVersionId: string | null;
+  try {
+    previousActiveVersionId = await db.$transaction(async (tx) => {
+      // Mandantenweiter Scope: bewusst OHNE ruleSetId-Filter (siehe
+      // Modulkommentar oben) -- der tenant-gescopte Client injiziert die
+      // tenantId bereits automatisch.
+      const previousActive = await tx.ruleSetVersion.findFirst({
+        where: { status: "ACTIVE", id: { not: versionId } },
       });
-    }
+      if (previousActive) {
+        await tx.ruleSetVersion.update({
+          where: { id: previousActive.id },
+          data: { status: "EXPIRED", validTo: now },
+        });
+      }
 
-    const activated = await tx.ruleSetVersion.updateMany({
-      where: { id: versionId, status: "DRAFT" },
-      data: { status: "ACTIVE", validFrom: now, validTo: null },
-    });
-    if (activated.count !== 1) {
-      // Wurde zwischen der Vorab-Pruefung oben und hier bereits von einem
-      // parallelen Request veroeffentlicht -- ROLLBACK macht Schritt (a)
-      // rueckgaengig, kein Zwischenzustand persistiert.
-      throw new RuleSetVersionNotDraftError(
-        versionId,
-        "bereits veroeffentlicht (paralleler Publish-Versuch)",
-      );
-    }
+      const activated = await tx.ruleSetVersion.updateMany({
+        where: { id: versionId, status: "DRAFT" },
+        data: { status: "ACTIVE", validFrom: now, validTo: null },
+      });
+      if (activated.count !== 1) {
+        // Wurde zwischen der Vorab-Pruefung oben und hier bereits von einem
+        // parallelen Request veroeffentlicht -- ROLLBACK macht Schritt (a)
+        // rueckgaengig, kein Zwischenzustand persistiert.
+        throw new RuleSetVersionNotDraftError(
+          versionId,
+          "bereits veroeffentlicht (paralleler Publish-Versuch)",
+        );
+      }
 
-    await tx.auditLog.create({
-      data: {
-        tenantId,
-        actorUserId,
-        action: "ACTIVATE",
-        entityType: "RuleSetVersion",
-        entityId: versionId,
-        metadata: {
-          ruleSetId,
-          previousActiveVersionId: previousActive ? previousActive.id : null,
+      await tx.auditLog.create({
+        data: {
+          tenantId,
+          actorUserId,
+          action: "ACTIVATE",
+          entityType: "RuleSetVersion",
+          entityId: versionId,
+          metadata: {
+            ruleSetId,
+            previousActiveVersionId: previousActive ? previousActive.id : null,
+          },
         },
-      },
-    });
+      });
 
-    return previousActive ? previousActive.id : null;
-  });
+      return previousActive ? previousActive.id : null;
+    });
+  } catch (error) {
+    // Faengt NUR den in translatePublishError() benannten, bekannten
+    // EXCLUDE-Constraint-Konflikt ab und uebersetzt ihn in eine fachliche
+    // 409-Antwort (siehe RuleSetVersionPublishConflictError-Kommentar) --
+    // die gesamte Transaktion ist bei JEDEM Fehler (auch diesem) bereits
+    // vollstaendig zurueckgerollt, bevor dieser catch-Block erreicht wird
+    // (Prisma rollt eine `$transaction()`-Closure bei einem Wurf immer
+    // vollstaendig zurueck). Alle anderen Fehler werden unveraendert
+    // weitergeworfen.
+    translatePublishError(error, versionId);
+  }
 
   const version = await getRuleSetVersionDetail(ruleSetId, versionId);
   return { version, previousActiveVersionId };

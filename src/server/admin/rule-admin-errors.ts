@@ -104,3 +104,27 @@ export class RollbackSourceNotEligibleError extends RuleAdminError {
     );
   }
 }
+
+/**
+ * Ein ECHT paralleler Publish-Versuch (zwei verschiedene DRAFT-Versionen,
+ * ggf. aus verschiedenen `RuleSet`s desselben Mandanten) ist mit der
+ * Datenbank-EXCLUDE-Constraint `rule_set_versions_tenant_active_no_overlap`
+ * kollidiert (Phase 9 AP9, ChatGPT-Vorgabe 2026-08-18, siehe
+ * docs/DECISION_LOG.md Abschnitt "Phase 9 AP9: Publish-Konflikt bei
+ * echter Nebenlaeufigkeit"). Die Datenintegritaet ("hoechstens eine
+ * ACTIVE RuleSetVersion je Mandant") ist zu jedem Zeitpunkt bereits durch
+ * genau diese Datenbank-Constraint strukturell garantiert -- dieser Fehler
+ * ist NUR die fachliche API-Uebersetzung eines erwartbaren
+ * Concurrency-Konflikts (der Verlierer eines echten Wettlaufs) in eine
+ * saubere 409-Antwort, statt eines rohen, unuebersetzten Datenbankfehlers.
+ */
+export class RuleSetVersionPublishConflictError extends RuleAdminError {
+  constructor(versionId: string) {
+    super(
+      `RuleSetVersion "${versionId}" konnte nicht veroeffentlicht werden, weil zeitgleich ` +
+        `bereits eine andere RuleSetVersion desselben Mandanten veroeffentlicht wurde ` +
+        `(Publish-Konflikt bei paralleler Bearbeitung). Bitte die Version erneut oeffnen ` +
+        `und den Publish-Vorgang wiederholen.`,
+    );
+  }
+}
