@@ -321,7 +321,7 @@ export async function createDraftVersion(
         },
       });
 
-      await tx.questionVersion.create({
+      const newQuestionVersion = await tx.questionVersion.create({
         data: {
           tenantId,
           questionId: newQuestion.id,
@@ -336,16 +336,24 @@ export async function createDraftVersion(
           status: "DRAFT",
           validFrom: now,
           validTo: null,
-          answerOptions: {
-            create: sourceVersion.answerOptions.map((o) => ({
-              tenantId,
-              key: o.key,
-              label: o.label,
-              sortOrder: o.sortOrder,
-            })),
-          },
         },
       });
+
+      // Flacher createMany()-Aufruf statt verschachteltem `create` unter der
+      // Relation -- siehe ausfuehrlichen Kommentar in addQuestionToDraft()
+      // (zusammengesetzter Fremdschluessel akzeptiert `tenantId` in einem
+      // verschachtelten Relations-Create nicht, CI #39).
+      if (sourceVersion.answerOptions.length > 0) {
+        await tx.answerOption.createMany({
+          data: sourceVersion.answerOptions.map((o) => ({
+            tenantId,
+            questionVersionId: newQuestionVersion.id,
+            key: o.key,
+            label: o.label,
+            sortOrder: o.sortOrder,
+          })),
+        });
+      }
     }
 
     // Zweiter Durchlauf fuer VisibilityConditions: targetQuestionId muss auf
@@ -427,7 +435,7 @@ export async function addQuestionToDraft(
       },
     });
 
-    await tx.questionVersion.create({
+    const questionVersion = await tx.questionVersion.create({
       data: {
         tenantId,
         questionId: question.id,
@@ -442,25 +450,41 @@ export async function addQuestionToDraft(
         status: "DRAFT",
         validFrom: new Date(),
         validTo: null,
-        answerOptions: {
-          create: input.answerOptions.map((o) => ({
-            tenantId,
-            key: o.key,
-            label: o.label,
-            sortOrder: o.sortOrder,
-          })),
-        },
-        visibilityConditions: {
-          create: input.visibilityConditions.map((c) => ({
-            tenantId,
-            targetQuestionId: c.targetQuestionId,
-            operator: c.operator,
-            comparisonValue: c.comparisonValue,
-            combinator: c.combinator,
-          })),
-        },
       },
     });
+
+    // Flache createMany()-Aufrufe statt verschachteltem `create` unter der
+    // Relation: `AnswerOption`/`VisibilityCondition` haengen ueber einen
+    // ZUSAMMENGESETZTEN Fremdschluessel (tenantId, questionVersionId) an
+    // QuestionVersion (siehe prisma/schema.prisma). Ein verschachtelter
+    // `create` ueber das Relationsfeld akzeptiert `tenantId` dort NICHT als
+    // Feld (Prisma wirft "Unknown argument tenantId" -- erst in CI mit
+    // echtem Prisma Client sichtbar, siehe CI #39). Flache Top-Level-Creates
+    // mit explizitem tenantId + questionVersionId funktionieren dagegen
+    // zuverlaessig (identisches Muster wie prisma/seed.ts).
+    if (input.answerOptions.length > 0) {
+      await tx.answerOption.createMany({
+        data: input.answerOptions.map((o) => ({
+          tenantId,
+          questionVersionId: questionVersion.id,
+          key: o.key,
+          label: o.label,
+          sortOrder: o.sortOrder,
+        })),
+      });
+    }
+    if (input.visibilityConditions.length > 0) {
+      await tx.visibilityCondition.createMany({
+        data: input.visibilityConditions.map((c) => ({
+          tenantId,
+          questionVersionId: questionVersion.id,
+          targetQuestionId: c.targetQuestionId,
+          operator: c.operator,
+          comparisonValue: c.comparisonValue,
+          combinator: c.combinator,
+        })),
+      });
+    }
 
     return question.id;
   });
