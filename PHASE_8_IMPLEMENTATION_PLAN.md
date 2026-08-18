@@ -35,10 +35,16 @@ Dieser Plan enthält diese Code-Verifikation bereits (Abschnitt 1), da sie
 für eine sinnvolle Aufwandsschätzung nötig war; AP1 selbst vertieft und
 verifiziert sie erneut vor der eigentlichen Umsetzung.
 
-**Status dieses Plans:** Entworfen auf Basis von `PHASE_8_DISCOVERY.md` und
-zusätzlicher Code-Verifikation der Auth-/Schema-Grundlage (Abschnitt 1).
-Geht als Nächstes an ChatGPT zur Prüfung (wie in jeder Vorphase), danach an
-den Nutzer zum expliziten Implementierungs-GO — dies ist der erste
+**Status dieses Plans:** ChatGPT hat den Plan geprüft und am 2026-08-18
+**GO für AP1–AP10 (Umsetzung darf beginnen)** erteilt, mit vier
+verbindlichen Präzisierungen (siehe Abschnitt 15 — dort als
+ChatGPT-Entscheidungen dokumentiert, ehemals Klärungspunkte):
+Admin-Login-Zusatzanforderungen (3.1/AP1), `AuditLog` statt
+`ConfigurationChange` für das Fragen-Audit (AP7), explizite
+Atomaritäts-Invariante für `publish()` (3.3/AP4/AP8), und Prüfung eines
+User-Sperrstatus in AP1 (unten, kein bestehendes Feld gefunden → nicht
+Teil dieser Phase). **Ausstehend: explizites Implementierungs-GO des
+Nutzers** (wie in allen Vorphasen) — dies ist der erste
 Entscheidungspunkt seit dem Nutzer-Auftrag, eigenständig weiterzuarbeiten,
 weil Phase 8 erstmals produktionsnahen Auth-Code betrifft.
 
@@ -82,9 +88,9 @@ dieser Phase:
   Ablaufzeit) — nur der **Anmeldenachweis** fehlt, nicht die Session an
   sich.
 
-**Vorschlag (zur Bestätigung an ChatGPT, siehe Abschnitt 15):** Minimaler
-Ausbau des bestehenden Stacks statt externem IdP — Passwort-Hash-Feld auf
-`User`, echte Credential-Prüfung, bestehende `createSessionToken()`/
+**Entschieden (ChatGPT, siehe Abschnitt 15, Punkt 2):** Minimaler Ausbau
+des bestehenden Stacks statt externem IdP — Passwort-Hash-Feld auf `User`,
+echte Credential-Prüfung, bestehende `createSessionToken()`/
 `verifySessionToken()`-Mechanik unverändert weiterverwenden. Kein Enterprise-
 IdP, kein OAuth/SSO in dieser Phase.
 
@@ -95,7 +101,7 @@ die Kundenberatung ein) ist Teil des seit Phase 5 stabilen,
 vielfach getesteten Beratungs-Flows und **ausdrücklich nicht Gegenstand
 dieser Phase** (ChatGPT: "nicht als Phase 8 komplett dazwischenwerfen").
 
-**Vorschlag (zur Bestätigung an ChatGPT, siehe Abschnitt 15):** Der neue
+**Entschieden (ChatGPT, siehe Abschnitt 15, Punkt 1):** Der neue
 Credential-Login schützt **ausschließlich** die neuen Admin-/Konfigurations-
 Routen (`/admin/*`, `config.*`-APIs). Der bestehende `dev-login` bleibt für
 den Beratungsfluss unverändert bestehen und wird in Phase 8 nicht
@@ -120,10 +126,11 @@ außerhalb dieser Phase.
   Antwort-Events genutzt) und `ConfigurationChange` (spezifisch
   `configKey`/`oldValue: String?`/`newValue: String`, für **skalare**
   Konfigurationswerte gedacht, laut Modul-Kommentar z. B. "ConfigurableThreshold
-  oder RetentionPolicy"). **Offener Punkt:** `ConfigurationChange` passt vom
-  Datenmodell her gut zu einzelnen Skalarwerten, aber Fragen/Versionen sind
-  strukturierte Mehrfeld-Entitäten (Label, Antworttyp, Optionen,
-  Sichtbarkeitsregeln). Vorschlag siehe Abschnitt 15, Klärungspunkt 3.
+  oder RetentionPolicy"). `ConfigurationChange` passt vom Datenmodell her
+  gut zu einzelnen Skalarwerten, aber Fragen/Versionen sind strukturierte
+  Mehrfeld-Entitäten (Label, Antworttyp, Optionen, Sichtbarkeitsregeln) —
+  ChatGPT hat dazu entschieden, `AuditLog` zu verwenden (siehe Abschnitt 15,
+  Punkt 3).
 
 ## 2. Scope-Rahmen (aus AP0-Review + ChatGPT-Scope-Entscheidung, verbindlich)
 
@@ -180,7 +187,7 @@ Neue Permission-Keys, analog zum bestehenden `analytics.view_*`-Muster:
 - `config.questions.edit` (Entwürfe erstellen/ändern)
 - `config.questions.publish` (validieren/veröffentlichen)
 
-**Default-Rollenmodell (Vorschlag, siehe Abschnitt 15):** Eine Rolle
+**Default-Rollenmodell (entschieden, siehe Abschnitt 15, Punkt 4):** Eine Rolle
 `config_editor` (view + edit) und eine Rolle `config_publisher` (view +
 edit + publish) je Tenant, mit je einem synthetischen Test-Admin-User.
 Deny-by-default bleibt Leitlinie — ein User ohne diese Permissions bekommt
@@ -209,6 +216,15 @@ ACTIVE --archive()--> ARCHIVED (nur wenn keine offene Beratung mehr referenziert
   (`validFrom = now()`) — **in einer DB-Transaktion**, um die bestehende
   PostgreSQL-EXCLUDE-Constraint gegen überlappende Gültigkeitszeiträume
   nicht zu verletzen.
+- **Atomaritäts-Invariante (ChatGPT-Auflage, verbindlich):** Der gesamte
+  Publish-Vorgang läuft als eine Transaktion — `BEGIN` → serverseitige
+  Revalidierung → alte Version → `EXPIRED` → neue Version → `ACTIVE` →
+  `AuditLog`-Eintrag → `COMMIT`. Schlägt irgendein Schritt fehl, greift
+  `ROLLBACK` vollständig. **Der Zustand "alte Version `EXPIRED` UND neue
+  Version nicht `ACTIVE`" darf zu keinem Zeitpunkt persistiert werden** —
+  explizit als Testfall in AP4 und AP8 zu verifizieren (z. B. erzwungener
+  Constraint-Verstoß mitten in der Transaktion → danach beide Versionen im
+  ursprünglichen Zustand).
 - **Rollback** = Veröffentlichen einer vorherigen (bereits existierenden,
   jetzt `EXPIRED`/`ARCHIVED`) Version als neue `ACTIVE`-Version — keine
   Mutation der Historie, sondern ein neuer Publish-Vorgang mit einer
@@ -246,10 +262,27 @@ liefert hierfür einen expliziten Regressionstest statt neuer Logik.
 - Seed: mindestens ein synthetischer Admin-User je Tenant mit
   Test-Passwort (klar als synthetisch/Test gekennzeichnet, wie alle
   bisherigen Seed-Daten).
+- **Verbindliche Sicherheitsanforderungen (ChatGPT-Auflage):** Passwort
+  niemals im Klartext persistiert oder geloggt; `passwordHash` niemals an
+  Client/UI zurückgegeben (auch nicht in Fehler-Payloads); Login-Fehler
+  unterscheiden nicht zwischen "User existiert nicht" und "Passwort
+  falsch" (identische 401-Antwort, siehe unten); Session nach
+  erfolgreichem Login wird über dieselbe `createSessionToken()`-Signierung
+  erzeugt wie bei `dev-login` (kein zweiter Signierungsmechanismus); **kein
+  Fallback** vom Admin-Login auf `dev-login` oder umgekehrt bei
+  Fehlschlag.
+- **Prüfung User-Sperrstatus (ChatGPT-Auflage):** `model User`
+  (`prisma/schema.prisma` Zeilen 307–325) wurde bereits gegengeprüft — es
+  existiert **kein** Feld für deaktivierte/gesperrte Nutzer (kein
+  `isActive`/`revokedAt`/vergleichbares). Ein vollständiges
+  User-Lifecycle-System (Deaktivierung, Sperrung) wird in dieser Phase
+  **bewusst nicht** neu gebaut (Scope Creep, ChatGPT-Auflage) — als
+  spätere Erweiterung in Abschnitt 14 dokumentiert.
 - Tests: korrektes Passwort → Session, falsches Passwort → 401,
   unbekannte E-Mail → 401 (nicht unterscheidbar von falschem Passwort,
-  keine Nutzer-Enumeration), Rate-Begrenzung **explizit außerhalb dieses
-  APs** (siehe Abschnitt 14, Risiken).
+  keine Nutzer-Enumeration), `passwordHash` erscheint in keiner
+  API-Response, Rate-Begrenzung **explizit außerhalb dieses APs, aber
+  Prüfpunkt in AP8** (siehe Abschnitt 14, Risiken).
 
 ## 5. AP2 – Configuration-RBAC
 
@@ -303,6 +336,10 @@ liefert hierfür einen expliziten Regressionstest statt neuer Logik.
   live schalten kann (Rollenmodell aus 3.2).
 - Fehler-Mapping: Validierungsfehler → 422 mit Fehlerliste,
   Publish-Versuch einer bereits nicht mehr `DRAFT`-Version → 409.
+- Umsetzung der Atomaritäts-Invariante aus 3.3 (ChatGPT-Auflage): die
+  gesamte Publish-Transaktion (Revalidierung, `EXPIRED`-Setzen der alten
+  Version, `ACTIVE`-Setzen der neuen Version, `AuditLog`-Eintrag) in einem
+  `BEGIN`/`COMMIT`-Block, `ROLLBACK` bei jedem Fehler dazwischen.
 
 ## 8. AP5 – Questionnaire-Version-Historie & Rollback
 
@@ -339,16 +376,20 @@ liefert hierfür einen expliziten Regressionstest statt neuer Logik.
 
 ## 10. AP7 – Audit
 
+- **Entschieden (ChatGPT, 2026-08-18):** `AuditLog` ist der alleinige
+  Audit-Mechanismus für Phase 8. `ConfigurationChange` bleibt bewusst
+  unangetastet (passt vom Datenmodell her zu skalaren Konfigurationswerten,
+  nicht zu strukturierten Mehrfeld-Entitäten wie Fragen — ChatGPT hat seine
+  ursprüngliche Vorgabe hierzu explizit revidiert).
 - Jede Mutation (CREATE/UPDATE einer Draft-Frage, PUBLISH, ROLLBACK)
-  schreibt einen `AuditLog`-Eintrag (`entityType: "Question"` bzw.
-  `"QuestionnaireVersion"`, `action`, `actorUserId`, `metadata: Json` mit
-  Vorher-/Nachher-Diff) — konsistent mit dem bereits produktiv genutzten
-  `AuditLog`-Muster aus `questionnaire/service.ts`.
-- `ConfigurationChange`-Nutzung: siehe offener Klärungspunkt Abschnitt 15.3
-  — Vorschlag, `ConfigurationChange` in dieser Phase **nicht** für
-  strukturierte Fragen-/Versions-Änderungen zu verwenden (Datenmodell passt
-  nicht gut), sondern `AuditLog` als alleinigen Audit-Mechanismus für Phase
-  8 zu nutzen. Zur Bestätigung an ChatGPT.
+  schreibt einen `AuditLog`-Eintrag mit mindestens: `actorUserId`,
+  `tenantId`, `entityType` (`"Question"` bzw. `"QuestionnaireVersion"`),
+  `entityId`/Versions-ID, `action` (CREATE/UPDATE/PUBLISH/ROLLBACK),
+  `occurredAt`, und `metadata: Json` mit ausreichendem Vorher-/Nachher-
+  Kontext, um die Änderung nachvollziehen zu können (ChatGPT-Auflage: nicht
+  nur "Question X wurde geändert", sondern was sich geändert hat) — ohne
+  unnötige Duplizierung sensibler Daten. Konsistent mit dem bereits
+  produktiv genutzten `AuditLog`-Muster aus `questionnaire/service.ts`.
 - Keine frei editierbaren Audit-Daten — `AuditLog` bleibt append-only wie
   bisher (bestehende DB-Absicherung, keine neue nötig).
 
@@ -365,6 +406,13 @@ liefert hierfür einen expliziten Regressionstest statt neuer Logik.
 - Bestandsschutz-Test aus AP5 (Beratung bleibt auf gepinnter Version).
 - Admin-Login: falsches Passwort, unbekannte E-Mail, abgelaufene Session
   — alle bestehenden Session-Tests aus Phase 5/7 als Regressionsbasis.
+- Atomaritäts-Test (ChatGPT-Auflage, siehe 3.3/AP4): erzwungener Fehler
+  mitten in der Publish-Transaktion → nach `ROLLBACK` müssen beide
+  betroffenen Versionen im jeweiligen Ausgangszustand sein (kein
+  Zwischenzustand "alte Version `EXPIRED`, neue Version nicht `ACTIVE`").
+- Rate-Limiting/Brute-Force-Schutz auf `/api/auth/admin-login`: als
+  expliziter Prüfpunkt (ChatGPT-Auflage) — Ergebnis (vorhanden/bewusst
+  vertagt) im Abschlussbericht dokumentieren.
 - Component-Tests für Admin-UI (Editor, Validate/Publish-Flow,
   "Kein Zugriff"-Fall, read-only-Darstellung nicht-Draft-Versionen).
 
@@ -413,38 +461,46 @@ Kampagnen, Ziele, Provisionsmodelle, Freitext-KI, vollständiger
   `QuestionnaireVersion` gehören, sonst könnten in einer neuen Version
   Sichtbarkeitsregeln auf nicht mehr existierende Fragen zeigen.
 
-## 15. Klärungspunkte für ChatGPT (vor Umsetzungsstart)
+## 15. ChatGPT-Entscheidungen zum Plan (2026-08-18, verbindlich)
 
-1. **Admin-Auth als additive Erweiterung statt Ersatz (3.1, 1.3):** Stimmt
-   ChatGPT zu, dass der neue Credential-Login ausschließlich die
-   Admin-/Konfigurationsflächen schützt, während der bestehende
-   `dev-login` für den Beratungsfluss unverändert bleibt? Alternative wäre
-   ein vollständiger Auth-Ersatz für alle Nutzer, was aber deutlich größer
-   und laut ChatGPTs eigener Vorgabe ("nicht als Phase 8 komplett
-   dazwischenwerfen") vermutlich nicht gewollt ist.
-2. **Passwort-Hash statt externem IdP (1.2):** Bestätigung, dass ein
-   minimaler Ausbau (bcrypt-Hash auf `User`, Seed-basierte
-   Admin-Test-User) für Phase 8 ausreicht und kein externer Identity
-   Provider/SSO angebunden werden soll.
-3. **`ConfigurationChange` vs. `AuditLog` für Fragen-Audit (1.4, AP7):**
-   Vorschlag, `AuditLog` (bereits produktiv, passt strukturell besser zu
-   Mehrfeld-Entitäten) als alleinigen Audit-Mechanismus für Phase 8 zu
-   nutzen und `ConfigurationChange` unangetastet zu lassen (späterer Fokus:
-   echte Skalar-Konfigurationswerte wie Schwellenwerte). Abweichung von
-   "ConfigurationChange endlich produktiv verwenden" — bitte explizit
-   bestätigen oder korrigieren.
-4. **Rollenmodell `config_editor`/`config_publisher` (3.2):** Passt die
-   Zwei-Rollen-Trennung, oder soll es für den synthetischen Pilotbetrieb
-   zunächst nur eine kombinierte Rolle geben (ChatGPT hatte beide Optionen
-   als akzeptabel genannt: "Falls das für das tatsächliche Betriebsmodell
-   zu komplex ist, können beide zunächst dieselbe Rolle bekommen")?
-5. **Scope-Ebene der neuen Rollen:** Bestätigung `TENANT`-Scope für
-   `config.*`-Permissions (Fragen/Fragebögen sind mandantenweit modelliert,
-   kein `storeId`-Bezug im Schema) — analog zur höchsten Stufe aus Phase 7,
-   aber ein eigenständiges Konzept, kein Wiederverwenden von
-   `managementScope`.
+Alle fünf ursprünglichen Klärungspunkte wurden ChatGPT vorgelegt und sind
+entschieden:
 
-Nach Klärung dieser fünf Punkte: Plan geht zur finalen Abnahme an ChatGPT,
-danach explizites Nutzer-Implementierungs-GO (wie in allen Vorphasen) —
-dies ist der im Nutzer-Auftrag vorgesehene erste "wichtige Entscheidung"-
-Haltepunkt.
+1. **Admin-Auth additiv statt Ersatz (3.1, 1.3):** 🟢 GO. Der neue
+   Credential-Login gilt ausschließlich für Admin-/Config-Routen, -UI und
+   Konfigurationsänderungen. Der bestehende `dev-login` für den
+   Beratungsfluss bleibt unangetastet.
+2. **Passwort-Hash statt externem IdP (1.2):** 🟢 GO, mit sechs
+   verbindlichen Zusatzanforderungen (siehe AP1, oben eingearbeitet): kein
+   Klartext-Passwort, kein Hash-Rückgabe an den Client, keine
+   Nutzer-Enumeration über unterschiedliche Fehlermeldungen,
+   Rate-Limiting als AP8-Prüfpunkt, dieselbe Session-Signierung wie
+   `dev-login`, kein Fallback zwischen den beiden Login-Mechanismen.
+3. **`AuditLog` statt `ConfigurationChange` (1.4, AP7):** 🟢 GO — ChatGPT
+   hat seine ursprüngliche Vorgabe ("`ConfigurationChange` produktiv
+   nutzen") ausdrücklich revidiert und der vorgeschlagenen Begründung
+   zugestimmt. Auflage: `AuditLog`-Einträge müssen ausreichend Vorher-/
+   Nachher-Kontext enthalten (siehe AP7, oben eingearbeitet).
+4. **Rollenmodell `config_editor`/`config_publisher` (3.2):** 🟢 GO für die
+   Zwei-Rollen-Trennung (nicht die vereinfachte Ein-Rollen-Alternative).
+   Auflage: `publish`-Recht darf nicht implizit aus `edit`-Recht entstehen.
+5. **`TENANT`-Scope (3.2):** 🟢 GO — Fragen/Fragebögen sind mandantenweit
+   modelliert, kein `storeId`-Bezug. Grundregel aus Phase 7 bleibt
+   erhalten: Permission-Prüfung + Tenant-Kontext vor jeder Mutation.
+
+**Zusätzliche, vom ursprünglichen Plan abweichende Auflage:** Die
+Publish-Transaktion (3.3/AP4) muss explizit als atomare Einheit mit
+`BEGIN`/`COMMIT`/`ROLLBACK` behandelt werden — der Zwischenzustand "alte
+Version `EXPIRED`, neue Version nicht `ACTIVE`" darf nie persistiert
+werden (oben in 3.3, AP4 und AP8 eingearbeitet).
+
+**ChatGPTs explizites finales GO (wörtlich):** "PHASE_8_IMPLEMENTATION_PLAN.md
+fc709b8 kann auf dieser Basis umgesetzt werden. [...] Danach kannst du AP1
+starten. Bei AP1 bitte wie geplant zunächst den vorhandenen Auth-/User-/
+Session-Code exakt gegen den Plan prüfen, bevor du Schema oder Login-Code
+veränderst."
+
+**Status:** Plan vollständig von ChatGPT freigegeben. Ausstehend:
+explizites Implementierungs-GO des Nutzers (wie in allen Vorphasen) — dies
+ist der im Nutzer-Auftrag vorgesehene erste "wichtige Entscheidung"-
+Haltepunkt, da Phase 8 erstmals produktionsnahen Auth-Code betrifft.
