@@ -29,6 +29,17 @@
  * 4. Eine NEU gestartete Session B verwendet ebenfalls v2.
  *
  * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
+ *
+ * WICHTIG (CI #51-Fix, 2026-08-19): `publishRuleSetV2()` durchlaeuft den
+ * ECHTEN Admin-Publish-Workflow (`createDraftRuleSetVersion()` ->
+ * `addEligibilityRuleToDraft()` -> `publishRuleSetVersion()`), der bei jedem
+ * Schritt einen `AuditLog`-Eintrag mit `actorUserId` schreibt -- diese
+ * Spalte ist per FK (`audit_logs_tenant_id_actor_user_id_fkey`) an eine
+ * echte `users`-Zeile desselben Mandanten gebunden. `asTenant()` verwendete
+ * bislang bei jedem Aufruf einen frei erfundenen `randomUUID()` (ohne
+ * zugehoerige `User`-Zeile) als Actor, was diese Constraint verletzt hat.
+ * Fix: `asTenant()` nimmt jetzt einen echten, ueber `createUser()`
+ * angelegten Actor entgegen statt selbst einen zu erfinden.
  */
 
 import { randomUUID } from "node:crypto";
@@ -63,11 +74,18 @@ describe.skipIf(!hasDatabaseUrl)(
       await rawClient.$disconnect();
     });
 
-    function asTenant<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
+    function asTenant<T>(tenantId: string, actorUserId: string, fn: () => Promise<T>): Promise<T> {
       return runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         fn,
       );
+    }
+
+    async function createUser(tenantId: string, key: string) {
+      const user = await rawClient.user.create({
+        data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+      });
+      return user.id;
     }
 
     async function createTenant(key: string) {
@@ -197,8 +215,12 @@ describe.skipIf(!hasDatabaseUrl)(
      * Anwendung ablaeuft (inkl. der mandantenweiten EXPIRED-Ueberfuehrung
      * von v1).
      */
-    async function publishRuleSetV2(tenantId: string, key: string): Promise<string> {
-      return asTenant(tenantId, async () => {
+    async function publishRuleSetV2(
+      tenantId: string,
+      actorUserId: string,
+      key: string,
+    ): Promise<string> {
+      return asTenant(tenantId, actorUserId, async () => {
         const ruleSet = await rawClient.ruleSet.create({
           data: { tenantId, key: `${key}-v2-${suffix}` },
         });
@@ -238,6 +260,7 @@ describe.skipIf(!hasDatabaseUrl)(
 
     it("Session bleibt auf Questionnaire v1 gepinnt; erneute Auswertung verwendet die AKTUELL aktive RuleSetVersion (v2), nicht die zum Session-Start aktive (v1)", async () => {
       const { tenantId, storeId, employeeId } = await createTenant("snapshot");
+      const actorUserId = await createUser(tenantId, "actor");
       const questionnaireVersionId = await createQuestionnaire(tenantId, "snapshot-qv");
       const providerId = await createProvider("snapshot");
       const categoryId = await createCategory(tenantId, "snapshot");
@@ -247,12 +270,12 @@ describe.skipIf(!hasDatabaseUrl)(
       const sessionId = await createSession(tenantId, storeId, employeeId, questionnaireVersionId);
 
       // 1. Erste Auswertung -- RuleSet v1 ist die einzige ACTIVE Version.
-      const firstResult = await asTenant(tenantId, () => evaluate(sessionId));
+      const firstResult = await asTenant(tenantId, actorUserId, () => evaluate(sessionId));
       expect(firstResult.ruleSetVersionId).toBe(ruleSetV1Id);
 
       // 2. RuleSet v2 wird ueber den echten Publish-Workflow veroeffentlicht
       //    -- v1 wird dadurch mandantenweit EXPIRED (AP5-Verhalten).
-      const ruleSetV2Id = await publishRuleSetV2(tenantId, "snapshot-rs");
+      const ruleSetV2Id = await publishRuleSetV2(tenantId, actorUserId, "snapshot-rs");
       expect(ruleSetV2Id).not.toBe(ruleSetV1Id);
 
       const v1AfterPublish = await rawClient.ruleSetVersion.findUniqueOrThrow({
@@ -266,7 +289,7 @@ describe.skipIf(!hasDatabaseUrl)(
       });
       expect(sessionAfterPublish.questionnaireVersionId).toBe(questionnaireVersionId);
 
-      const secondResult = await asTenant(tenantId, () => evaluate(sessionId));
+      const secondResult = await asTenant(tenantId, actorUserId, () => evaluate(sessionId));
 
       // Questionnaire bleibt unveraendert gepinnt (kein neues Feld, keine
       // Aenderung der Session-Referenz).
@@ -289,7 +312,7 @@ describe.skipIf(!hasDatabaseUrl)(
 
       // 4. Eine NEU gestartete Session B verwendet ebenfalls v2.
       const sessionBId = await createSession(tenantId, storeId, employeeId, questionnaireVersionId);
-      const thirdResult = await asTenant(tenantId, () => evaluate(sessionBId));
+      const thirdResult = await asTenant(tenantId, actorUserId, () => evaluate(sessionBId));
       expect(thirdResult.ruleSetVersionId).toBe(ruleSetV2Id);
     });
   },

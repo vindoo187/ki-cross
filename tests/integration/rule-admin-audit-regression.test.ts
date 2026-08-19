@@ -26,6 +26,17 @@
  * noetig.
  *
  * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
+ *
+ * WICHTIG (CI #51-Fix, 2026-08-19): der erste Testfall (vollstaendige
+ * Mutationskette) durchlaeuft ausschliesslich ECHTE Mutationen und schreibt
+ * daher bei jedem Schritt einen `AuditLog`-Eintrag mit `actorUserId` --
+ * diese Spalte ist per FK (`audit_logs_tenant_id_actor_user_id_fkey`) an
+ * eine echte `users`-Zeile desselben Mandanten gebunden. Ein frei
+ * erfundener `randomUUID()` (ohne zugehoerige `User`-Zeile) verletzt diese
+ * Constraint. Die drei uebrigen Testfaelle (403/409/404) brechen jeweils VOR
+ * jeder Mutation ab und schreiben daher bewusst NIE einen AuditLog-Eintrag
+ * -- dort bleibt ein frei erfundener `randomUUID()` unschaedlich und wird
+ * unveraendert beibehalten.
  */
 
 import { randomUUID } from "node:crypto";
@@ -81,6 +92,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP7: Audit-Re-Pruefung", () => {
     return tenant.id;
   }
 
+  async function createUser(tenantId: string, key: string) {
+    const user = await rawClient.user.create({
+      data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+    });
+    return user.id;
+  }
+
   async function createRuleSetWithVersion(
     tenantId: string,
     key: string,
@@ -102,7 +120,8 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP7: Audit-Re-Pruefung", () => {
 
   it("Vollstaendige Mutationskette erzeugt exakt die erwartete, chronologisch korrekte Audit-Abfolge", async () => {
     const tenantId = await createTenant("chain");
-    const ctx = { tenantId, userId: randomUUID(), roles: [], managementScope: null };
+    const actorUserId = await createUser(tenantId, "actor");
+    const ctx = { tenantId, userId: actorUserId, roles: [], managementScope: null };
 
     const { ruleSetId } = await createRuleSetWithVersion(tenantId, "rs", "ACTIVE");
 
