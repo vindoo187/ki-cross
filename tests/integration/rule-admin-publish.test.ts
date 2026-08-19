@@ -318,23 +318,57 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
     const fulfilled = results.filter((r) => r.status === "fulfilled");
     const rejected = results.filter((r) => r.status === "rejected");
 
+    // DIAGNOSE (ChatGPT-Vorgabe 2026-08-19, CI #56): den tatsaechlichen
+    // DB-Endzustand IMMER erfassen, BEVOR die scharfen Assertions unten
+    // werfen koennen -- sonst bricht der Test bei der ersten fehlschlagenden
+    // Assertion ab und die nachfolgenden Diagnosedaten (ACTIVE-Anzahl,
+    // Draft-Status, Audit-Eintraege) werden nie sichtbar. Damit laesst sich
+    // zweifelsfrei zwischen "Lock greift nicht (2 ACTIVE)" und "Lock greift,
+    // aber beide Publishes werden trotzdem sequentiell erfolgreich (1
+    // ACTIVE)" unterscheiden.
+    const finalActiveVersions = await rawClient.ruleSetVersion.findMany({
+      where: { tenantId, status: "ACTIVE" },
+    });
+    const versionXRow = await rawClient.ruleSetVersion.findUniqueOrThrow({
+      where: { id: versionX },
+    });
+    const versionYRow = await rawClient.ruleSetVersion.findUniqueOrThrow({
+      where: { id: versionY },
+    });
+    const activateAuditsForDiagnosis = await rawClient.auditLog.findMany({
+      where: { tenantId, entityType: "RuleSetVersion", action: "ACTIVATE" },
+    });
+    const diagnosis = JSON.stringify(
+      {
+        fulfilledCount: fulfilled.length,
+        rejectedCount: rejected.length,
+        rejectedReasons: rejected.map((r) => (r.status === "rejected" ? String(r.reason) : null)),
+        activeCount: finalActiveVersions.length,
+        activeVersionIds: finalActiveVersions.map((v) => v.id),
+        versionXStatus: versionXRow.status,
+        versionYStatus: versionYRow.status,
+        activateAuditCount: activateAuditsForDiagnosis.length,
+      },
+      null,
+      2,
+    );
+
     // Kernaussage (Datenintegritaet): niemals beide gleichzeitig erfolgreich.
     // Je nach Timing kann im Extremfall sogar BEIDE Versuche scheitern
     // (z. B. wenn beide Transaktionen sich gegenseitig ueber Sperren
     // blockieren und der EXCLUDE-Constraint anschliessend eine von ihnen
     // ablehnt) -- das ist fuer die Kernaussage dieses Tests irrelevant, die
     // einzige Invariante, die zwingend gelten MUSS, ist: NIE beide
-    // erfolgreich.
-    expect(fulfilled.length).toBeLessThanOrEqual(1);
+    // erfolgreich. Die Diagnosedaten werden bei einem Fehlschlag direkt in
+    // die Assertion-Meldung aufgenommen, damit CI sie ohne weitere
+    // Nachbesserung anzeigt.
+    expect(fulfilled.length, `Diagnose:\n${diagnosis}`).toBeLessThanOrEqual(1);
 
-    const finalActiveVersions = await rawClient.ruleSetVersion.findMany({
-      where: { tenantId, status: "ACTIVE" },
-    });
     // Zentrale Invariante: zu KEINEM Zeitpunkt (auch nicht durch das Race)
     // existieren zwei gleichzeitig ACTIVE RuleSetVersions desselben
     // Mandanten -- unabhaengig davon, ob 0 oder 1 der beiden Publishes
     // erfolgreich war.
-    expect(finalActiveVersions.length).toBeLessThanOrEqual(1);
+    expect(finalActiveVersions.length, `Diagnose:\n${diagnosis}`).toBeLessThanOrEqual(1);
 
     if (fulfilled.length === 1) {
       const winnerVersionId = finalActiveVersions[0]?.id;
