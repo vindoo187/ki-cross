@@ -122,13 +122,20 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
    * echten Draft-Mutationsfunktionen wuerden das ablehnen).
    */
   async function addOneRuleOfEachType(tenantId: string, versionId: string) {
+    // attributeKey MUSS ein in der geschlossenen Attribute-Registry
+    // (attribute-registry.ts) eingetragener SESSION_ATTRIBUTE-Key sein --
+    // "consultationType" ist aktuell der einzige. Relevant, weil der
+    // "Rollback-Ergebnis durchlaeuft regulaer den bestehenden AP5-Publish-
+    // Pfad"-Test diese Fixture ueber publishRuleSetVersion() tatsaechlich
+    // validiert (validateDraftRuleSetVersion()); ein frei erfundener Key
+    // wie "region" wuerde dort mit RuleSetVersionInvalidError fehlschlagen.
     const conditionBase = {
       tenantId,
       groupIndex: 0,
       sourceType: "SESSION_ATTRIBUTE" as const,
-      attributeKey: "region",
+      attributeKey: "consultationType",
       operator: "EQUALS" as const,
-      comparisonValue: "nord",
+      comparisonValue: "NEW_CONTRACT",
     };
 
     const eligibilityRule = await rawClient.eligibilityRule.create({
