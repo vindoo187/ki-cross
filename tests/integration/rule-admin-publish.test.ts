@@ -244,6 +244,40 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
     expect(auditEntries).toHaveLength(0);
   });
 
+  /**
+   * DIAGNOSE (ChatGPT 2026-08-19, CI #53-Befund "AP9 Haertung
+   * (Nebenlaeufigkeit)" lieferte 2 statt maximal 1 erfolgreichen Publish):
+   * "erst beweisen, dann fixen" -- bevor an publishRuleSetVersion() etwas
+   * geaendert wird, muss belegt sein, DASS der EXCLUDE-Constraint
+   * rule_set_versions_tenant_active_no_overlap in der CI-Postgres-Instanz
+   * ueberhaupt existiert (Migrationsstatus) und WIE er tatsaechlich lautet
+   * (btree_gist-basierter EXCLUDE ueber tenant_id + Zeitfenster-Ueberlappung
+   * WHERE status='ACTIVE', siehe
+   * prisma/migrations/20260801130000_recommendation_engine/migration.sql).
+   * Faellt dieser Test durch, ist die Ursache ein Migrations-/CI-Problem
+   * und NICHT der in der naechsten it() beobachtete Nebenlaeufigkeitsfall
+   * -- dann darf am Produktcode nichts geaendert werden, sondern nur an
+   * Migration/CI-Setup.
+   */
+  it("DIAGNOSE: EXCLUDE-Constraint rule_set_versions_tenant_active_no_overlap existiert und ist btree_gist-basiert", async () => {
+    const constraints = await rawClient.$queryRaw<Array<{ conname: string; definition: string }>>`
+      SELECT conname, pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conname = 'rule_set_versions_tenant_active_no_overlap'
+    `;
+    expect(constraints).toHaveLength(1);
+    const definition = constraints[0]?.definition ?? "";
+    expect(definition).toContain("EXCLUDE USING gist");
+    expect(definition).toContain("tenant_id");
+    expect(definition).toContain("&&");
+    expect(definition.toUpperCase()).toContain("ACTIVE");
+
+    const extensions = await rawClient.$queryRaw<Array<{ extname: string }>>`
+      SELECT extname FROM pg_extension WHERE extname = 'btree_gist'
+    `;
+    expect(extensions).toHaveLength(1);
+  });
+
   it("AP9 Haertung (Nebenlaeufigkeit): zwei ECHT parallele Publishes verschiedener Drafts (verschiedene RuleSets desselben Mandanten) -- genau einer gewinnt, DB zeigt nie zwei gleichzeitig ACTIVE (rule_set_versions_tenant_active_no_overlap EXCLUDE-Constraint als Backstop)", async () => {
     const tenantId = await createTenant("concurrent-publish");
     const actorUserId = await createUser(tenantId, "actor");
