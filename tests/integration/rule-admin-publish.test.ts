@@ -278,7 +278,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
     expect(extensions).toHaveLength(1);
   });
 
-  it("AP9 Haertung (Nebenlaeufigkeit): zwei ECHT parallele Publishes verschiedener Drafts (verschiedene RuleSets desselben Mandanten) -- genau einer gewinnt, DB zeigt nie zwei gleichzeitig ACTIVE (rule_set_versions_tenant_active_no_overlap EXCLUDE-Constraint als Backstop)", async () => {
+  it("AP9 Haertung (Nebenlaeufigkeit): zwei ECHT parallele Publishes verschiedener Drafts (verschiedene RuleSets desselben Mandanten) -- Tenant-Lock serialisiert korrekt: am Ende genau 1 ACTIVE-Version, jeder erfolgreiche Publish vollstaendig auditiert, keine Dateninkonsistenz (rule_set_versions_tenant_active_no_overlap EXCLUDE-Constraint als Backstop)", async () => {
     const tenantId = await createTenant("concurrent-publish");
     const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId: ruleSetX, versionId: versionX } = await createRuleSetVersion(
@@ -353,47 +353,49 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
       2,
     );
 
-    // Kernaussage (Datenintegritaet): niemals beide gleichzeitig erfolgreich.
-    // Je nach Timing kann im Extremfall sogar BEIDE Versuche scheitern
-    // (z. B. wenn beide Transaktionen sich gegenseitig ueber Sperren
-    // blockieren und der EXCLUDE-Constraint anschliessend eine von ihnen
-    // ablehnt) -- das ist fuer die Kernaussage dieses Tests irrelevant, die
-    // einzige Invariante, die zwingend gelten MUSS, ist: NIE beide
-    // erfolgreich. Die Diagnosedaten werden bei einem Fehlschlag direkt in
-    // die Assertion-Meldung aufgenommen, damit CI sie ohne weitere
-    // Nachbesserung anzeigt.
-    expect(fulfilled.length, `Diagnose:\n${diagnosis}`).toBeLessThanOrEqual(1);
+    // Kernaussage (ChatGPT-Entscheidung 2026-08-19, nach Beweis via CI #57
+    // mit dem obigen Diagnose-Block): Der Tenant-Row-Lock serialisiert alle
+    // Publish-Transaktionen desselben Mandanten korrekt -- das bedeutet aber
+    // NICHT, dass ein zweiter, waehrend der Wartezeit neu entstandener
+    // previousActive abgelehnt wird. publishRuleSetVersion() uebernimmt ihn
+    // stattdessen automatisch (Design: "Publish ersetzt die aktuell aktive
+    // Regelkonfiguration des gesamten Mandanten"). Zwei unabhaengige,
+    // gueltige Publish-Anfragen fuer zwei verschiedene Drafts duerfen
+    // deshalb BEIDE erfolgreich sein (sequentiell serialisiert) -- die
+    // verbindliche Invariante ist NICHT "nur einer darf gewinnen", sondern:
+    // am Ende existiert exakt eine ACTIVE-Version, und jeder tatsaechlich
+    // erfolgreiche Publish ist vollstaendig (und nur einmal) auditiert. Die
+    // urspruengliche "genau ein Gewinner"-Erwartung wurde bewusst NICHT
+    // durch einen Produktcode-Eingriff (Konflikt bei neu entstandenem
+    // previousActive) erzwungen, siehe ChatGPT-Begruendung im
+    // Phase-9-Abschlussbericht.
+    expect(finalActiveVersions, `Diagnose:\n${diagnosis}`).toHaveLength(1);
+    expect(activateAuditsForDiagnosis, `Diagnose:\n${diagnosis}`).toHaveLength(fulfilled.length);
 
-    // Zentrale Invariante: zu KEINEM Zeitpunkt (auch nicht durch das Race)
-    // existieren zwei gleichzeitig ACTIVE RuleSetVersions desselben
-    // Mandanten -- unabhaengig davon, ob 0 oder 1 der beiden Publishes
-    // erfolgreich war.
-    expect(finalActiveVersions.length, `Diagnose:\n${diagnosis}`).toBeLessThanOrEqual(1);
-
-    if (fulfilled.length === 1) {
-      const winnerVersionId = finalActiveVersions[0]?.id;
-      expect([versionX, versionY]).toContain(winnerVersionId);
-      // Der jeweils andere Draft bleibt entweder DRAFT (regulaerer Konflikt,
-      // count!==1-Guard) oder wurde konsistent zurueckgerollt -- in keinem
-      // Fall ACTIVE.
-      const loserVersionId = winnerVersionId === versionX ? versionY : versionX;
-      const loserRow = await rawClient.ruleSetVersion.findUniqueOrThrow({
-        where: { id: loserVersionId },
-      });
-      expect(loserRow.status).not.toBe("ACTIVE");
+    // Bewusst KEINE Erwartung an eine feste Gewinner-Reihenfolge (X vs. Y)
+    // -- bei echter Nebenlaeufigkeit kann je nach Scheduling entweder X oder
+    // Y als letztes committen und damit gewinnen.
+    const winnerVersionId = finalActiveVersions[0]?.id;
+    expect([versionX, versionY]).toContain(winnerVersionId);
+    const loserVersionId = winnerVersionId === versionX ? versionY : versionX;
+    const loserRow = await rawClient.ruleSetVersion.findUniqueOrThrow({
+      where: { id: loserVersionId },
+    });
+    if (fulfilled.length === 2) {
+      // Beide Publishes erfolgreich -> der Verlierer wurde durch den
+      // spaeter committenden, gewinnenden Publish sauber auf EXPIRED
+      // gesetzt (kein Doppel-ACTIVE, keine verwaiste ACTIVE-Version).
+      expect(loserRow.status, `Diagnose:\n${diagnosis}`).toBe("EXPIRED");
+    } else {
+      // Defensiver Fallback fuer einen hier nicht erwarteten Fehlerpfad
+      // (z. B. falls doch nur 1 Promise fulfilled sein sollte): der
+      // Verlierer darf dann keinesfalls ACTIVE sein.
+      expect(loserRow.status, `Diagnose:\n${diagnosis}`).not.toBe("ACTIVE");
     }
 
-    // Auditierung bleibt konsistent mit dem tatsaechlichen Ausgang: exakt so
-    // viele ACTIVATE-Eintraege wie erfolgreiche Publishes, keine
-    // verwaisten/partiellen Eintraege fuer den Verlierer.
-    const activateAudits = await rawClient.auditLog.findMany({
-      where: { tenantId, entityType: "RuleSetVersion", action: "ACTIVATE" },
-    });
-    expect(activateAudits).toHaveLength(fulfilled.length);
-
-    // Dokumentiert (fuer den AP9-Bericht an ChatGPT) was der/die Verlierer
-    // tatsaechlich als Fehler erhaelt -- nicht Teil der Kernassertion oben,
-    // da dies je nach Race-Timing entweder die erwartete
+    // Dokumentiert (fuer den AP9-Bericht an ChatGPT) was ein etwaiger
+    // Verlierer tatsaechlich als Fehler erhaelt -- nicht Teil der
+    // Kernassertion oben, da dies je nach Race-Timing entweder die erwartete
     // RuleSetVersionNotDraftError (Anwendungsebene, updateMany-Guard) ODER
     // ein roher, bislang unuebersetzter Postgres-EXCLUDE-Constraint-Fehler
     // (DB-Ebene, siehe docs/DECISION_LOG.md) sein kann.
