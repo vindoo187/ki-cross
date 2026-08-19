@@ -133,7 +133,7 @@ test.describe("/admin/rules – Regel-Editor (Phase 9 AP9)", () => {
 
   test("DRAFT bearbeiten -> Validate -> Publish (mandantenweite Bestaetigung) -> alte Version read-only -> Historie -> Rollback -> Validate -> Publish", async ({
     page,
-  }) => {
+  }, testInfo) => {
     test.slow();
     const seed = readE2eSeedOutput();
     await loginAsAdmin(page, {
@@ -142,6 +142,16 @@ test.describe("/admin/rules – Regel-Editor (Phase 9 AP9)", () => {
       password: seed.tenantA.configPublisherAdmin.password,
     });
 
+    // ChatGPT-Vorgabe (AP9-E2E-Befund 2026-08-19, CI #59): globalSetup seedet
+    // die Test-DB GENAU EINMAL fuer die GESAMTE Suite, Desktop- und
+    // Tablet-Projekt laufen mit fullyParallel:true gegen denselben
+    // webServer/dieselbe DB -- ein fixes Draft-Label wuerde bei diesem
+    // mutierenden Test also projektuebergreifend kollidieren (zwei Versionen
+    // mit identischem Label im selben RuleSet, Playwright-Strict-Mode-
+    // Violation). Deshalb das Label pro Playwright-Projekt eindeutig machen,
+    // statt den Locator unten mit .first() zu entschaerfen.
+    const draftLabel = `E2E Entwurf v2 (${testInfo.project.name})`;
+
     // --- Neuen Entwurf aus der aktiven Version erstellen. ---
     await page.goto("/admin/rules");
     const ruleSetItem = page
@@ -149,7 +159,7 @@ test.describe("/admin/rules – Regel-Editor (Phase 9 AP9)", () => {
       .filter({ has: page.getByRole("heading", { name: "e2e-standardregeln" }) });
 
     page.once("dialog", async (dialog) => {
-      await dialog.accept("E2E Entwurf v2");
+      await dialog.accept(draftLabel);
     });
     await Promise.all([
       page.waitForURL(DRAFT_VERSION_URL_PATTERN),
@@ -161,7 +171,7 @@ test.describe("/admin/rules – Regel-Editor (Phase 9 AP9)", () => {
       throw new Error(`Unerwartete URL nach Entwurfserstellung: ${draftUrl}`);
     }
 
-    await expect(page.locator("h1")).toContainText("E2E Entwurf v2");
+    await expect(page.locator("h1")).toContainText(draftLabel);
     await expect(page.locator("h1")).toContainText("Entwurf");
     await expect(page.getByRole("button", { name: "Validieren" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Veroeffentlichen" })).toBeVisible();
@@ -238,7 +248,7 @@ test.describe("/admin/rules – Regel-Editor (Phase 9 AP9)", () => {
       page
         .getByRole("listitem")
         .filter({ has: page.getByRole("heading", { name: "e2e-standardregeln" }) })
-        .getByText("E2E Entwurf v2"),
+        .getByText(draftLabel),
     ).toBeVisible();
 
     // --- Historie vollstaendig: alte Version (jetzt EXPIRED) + neue
