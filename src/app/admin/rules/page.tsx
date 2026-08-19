@@ -62,41 +62,53 @@ export default async function AdminRulesPage() {
         )}
 
         <ul className="admin-questions__list">
-          {ruleSets.map((rs) => (
-            <li key={rs.id} className="admin-questions__item">
-              <h2>{rs.key}</h2>
-              <ul className="admin-questions__versions">
-                {rs.versions.map((v) => (
-                  <li key={v.id}>
-                    <Link
-                      href={`/admin/rules/${rs.id}/versions/${v.id}`}
-                      className="admin-questions__version-link"
-                    >
-                      <span>{v.label}</span>
-                      <span
-                        className={`admin-questions__badge admin-questions__badge--${v.status}`}
+          {ruleSets.map((rs) => {
+            // ChatGPT-Auflage (AP9-E2E-Befund 2026-08-19): explizit nur die
+            // ACTIVE-Version als Kopiervorlage verwenden -- kein Fallback auf
+            // eine beliebige (z. B. neueste/erste) historische Version. Gibt
+            // es keine ACTIVE-Version, bleibt copyFromVersionId undefined und
+            // der Button erzeugt bewusst einen leeren Entwurf (bisheriges
+            // Verhalten), statt eine falsche Quelle zu waehlen.
+            const activeVersion = rs.versions.find((version) => version.status === "ACTIVE");
+            return (
+              <li key={rs.id} className="admin-questions__item">
+                <h2>{rs.key}</h2>
+                <ul className="admin-questions__versions">
+                  {rs.versions.map((v) => (
+                    <li key={v.id}>
+                      <Link
+                        href={`/admin/rules/${rs.id}/versions/${v.id}`}
+                        className="admin-questions__version-link"
                       >
-                        {STATUS_LABELS[v.status] ?? v.status}
-                      </span>
-                      <span className="admin-questions__version-meta">
-                        seit {new Date(v.validFrom).toLocaleDateString("de-DE")}
-                        {v.validTo ? ` bis ${new Date(v.validTo).toLocaleDateString("de-DE")}` : ""}
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-                {rs.versions.length === 0 && (
-                  <li className="admin-questions__empty">Keine Versionen vorhanden.</li>
+                        <span>{v.label}</span>
+                        <span
+                          className={`admin-questions__badge admin-questions__badge--${v.status}`}
+                        >
+                          {STATUS_LABELS[v.status] ?? v.status}
+                        </span>
+                        <span className="admin-questions__version-meta">
+                          seit {new Date(v.validFrom).toLocaleDateString("de-DE")}
+                          {v.validTo
+                            ? ` bis ${new Date(v.validTo).toLocaleDateString("de-DE")}`
+                            : ""}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                  {rs.versions.length === 0 && (
+                    <li className="admin-questions__empty">Keine Versionen vorhanden.</li>
+                  )}
+                </ul>
+                {canEdit && (
+                  <CreateDraftRuleSetVersionButton
+                    ruleSetId={rs.id}
+                    copyFromVersionId={activeVersion?.id}
+                    label="Neuen Entwurf erstellen"
+                  />
                 )}
-              </ul>
-              {canEdit && (
-                <CreateDraftRuleSetVersionButton
-                  ruleSetId={rs.id}
-                  label="Neuen Entwurf erstellen"
-                />
-              )}
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
 
         <p className="admin-questions__back">
