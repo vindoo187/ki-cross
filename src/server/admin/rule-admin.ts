@@ -1746,7 +1746,7 @@ export async function publishRuleSetVersion(
       // scoped-client.ts), die Tenant-Scoping-Regel fuer mandantengebundene
       // Modelle gilt dafuer nicht, und `tenantId` stammt bereits aus dem
       // validierten `TenantContext`.
-      await tx.$queryRaw`SELECT id FROM tenants WHERE id = ${tenantId} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM tenants WHERE id = ${tenantId}::uuid FOR UPDATE`;
 
       // Mandantenweiter Scope: bewusst OHNE ruleSetId-Filter (siehe
       // Modulkommentar oben) -- der tenant-gescopte Client injiziert die
