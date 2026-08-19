@@ -8,6 +8,20 @@
  * pro-RuleSet-Scope, siehe rule-admin.ts Modulkommentar zu AP5).
  *
  * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
+ *
+ * WICHTIG (CI #52-Fix, 2026-08-19): jede Mutation (Regel hinzufuegen,
+ * Publish) schreibt innerhalb derselben Transaktion einen `AuditLog`-
+ * Eintrag mit `actorUserId` -- die Spalte ist per FK
+ * (`audit_logs_tenant_id_actor_user_id_fkey`) an eine ECHTE `users`-Zeile
+ * desselben Mandanten gebunden. Ein frei erfundener `randomUUID()` als Actor
+ * (ohne zugehoerige `User`-Zeile) verletzt diese Constraint und laesst die
+ * gesamte Transaktion (inkl. der eigentlich getesteten Mutation)
+ * fehlschlagen -- dieser Fehler blieb bislang unentdeckt, weil
+ * `npx vitest run` im Sandbox nicht lauffaehig ist und diese Datei vor dem
+ * Batch-Push nie tatsaechlich gegen eine echte Postgres-Instanz in CI lief.
+ * Fix: jeder mutierende Aufruf verwendet jetzt einen ueber `createUser()`
+ * echten, dem jeweiligen Mandanten zugeordneten Actor statt eines frei
+ * erfundenen `randomUUID()`.
  */
 
 import { randomUUID } from "node:crypto";
@@ -35,10 +49,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
     await rawClient.$disconnect();
   });
 
-  function baseSessionPayload(tenantId: string): Omit<SessionPayload, "issuedAt"> {
+  function baseSessionPayload(tenantId: string, userId: string): Omit<SessionPayload, "issuedAt"> {
     return {
       tenantId,
-      userId: randomUUID(),
+      userId,
       employeeId: randomUUID(),
       storeId: randomUUID(),
       displayName: "Test",
@@ -53,6 +67,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
       data: { key: `${key}-${suffix}`, name: `Test ${key}`, isSynthetic: true },
     });
     return tenant.id;
+  }
+
+  async function createUser(tenantId: string, key: string) {
+    const user = await rawClient.user.create({
+      data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+    });
+    return user.id;
   }
 
   async function createRuleSetVersion(
@@ -76,9 +97,14 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
   }
 
   /** Fuegt eine minimale, gueltige EligibilityRule ohne Bedingungen hinzu (validierbarer Draft). */
-  async function addMinimalValidRule(tenantId: string, ruleSetId: string, versionId: string) {
+  async function addMinimalValidRule(
+    tenantId: string,
+    actorUserId: string,
+    ruleSetId: string,
+    versionId: string,
+  ) {
     await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () =>
         addEligibilityRuleToDraft(ruleSetId, versionId, {
           key: "elig-1",
@@ -104,11 +130,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
   it("erster Publish ueberhaupt (kein vorheriger ACTIVE-Datensatz) -> previousActiveVersionId: null", async () => {
     const tenantId = await createTenant("first-publish");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "DRAFT");
-    await addMinimalValidRule(tenantId, ruleSetId, versionId);
+    await addMinimalValidRule(tenantId, actorUserId, ruleSetId, versionId);
 
     const result = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () => publishRuleSetVersion(ruleSetId, versionId),
     );
 
@@ -122,6 +149,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
   it("ZENTRALER TEST (ChatGPT 2026-08-18): Draft aus RuleSet B publizieren waehrend RuleSet A aktiv ist -> A wird EXPIRED, B wird ACTIVE (mandantenweiter, nicht pro-RuleSet-Scope)", async () => {
     const tenantId = await createTenant("cross-ruleset");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId: ruleSetA, versionId: versionA } = await createRuleSetVersion(
       tenantId,
       "rs-a",
@@ -133,10 +161,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
       "rs-b",
       "DRAFT",
     );
-    await addMinimalValidRule(tenantId, ruleSetB, versionB);
+    await addMinimalValidRule(tenantId, actorUserId, ruleSetB, versionB);
 
     const result = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () => publishRuleSetVersion(ruleSetB, versionB),
     );
 
@@ -159,16 +187,17 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
   it("Publish schreibt AuditLog-Eintrag (ACTIVATE) mit previousActiveVersionId in metadata", async () => {
     const tenantId = await createTenant("audit");
+    const actorUserId = await createUser(tenantId, "actor");
     const { versionId: versionA } = await createRuleSetVersion(tenantId, "rs-a", "ACTIVE");
     const { ruleSetId: ruleSetB, versionId: versionB } = await createRuleSetVersion(
       tenantId,
       "rs-b",
       "DRAFT",
     );
-    await addMinimalValidRule(tenantId, ruleSetB, versionB);
+    await addMinimalValidRule(tenantId, actorUserId, ruleSetB, versionB);
 
     await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () => publishRuleSetVersion(ruleSetB, versionB),
     );
 
@@ -184,11 +213,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
   it("Publish einer nicht-DRAFT-Version -> RuleSetVersionNotDraftError", async () => {
     const tenantId = await createTenant("not-draft");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "ACTIVE");
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => publishRuleSetVersion(ruleSetId, versionId),
       ),
     ).rejects.toThrow(RuleSetVersionNotDraftError);
@@ -196,11 +226,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
   it("Publish eines ungueltigen Drafts (leer, keine Regeln) -> Validierungsfehler, KEINE Transaktion eroeffnet", async () => {
     const tenantId = await createTenant("invalid-draft");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "DRAFT");
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => publishRuleSetVersion(ruleSetId, versionId),
       ),
     ).rejects.toThrow();
@@ -215,6 +246,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
   it("AP9 Haertung (Nebenlaeufigkeit): zwei ECHT parallele Publishes verschiedener Drafts (verschiedene RuleSets desselben Mandanten) -- genau einer gewinnt, DB zeigt nie zwei gleichzeitig ACTIVE (rule_set_versions_tenant_active_no_overlap EXCLUDE-Constraint als Backstop)", async () => {
     const tenantId = await createTenant("concurrent-publish");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId: ruleSetX, versionId: versionX } = await createRuleSetVersion(
       tenantId,
       "rs-x",
@@ -225,8 +257,8 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
       "rs-y",
       "DRAFT",
     );
-    await addMinimalValidRule(tenantId, ruleSetX, versionX);
-    await addMinimalValidRule(tenantId, ruleSetY, versionY);
+    await addMinimalValidRule(tenantId, actorUserId, ruleSetX, versionX);
+    await addMinimalValidRule(tenantId, actorUserId, ruleSetY, versionY);
 
     // Bewusst KEIN sequentielles await -- beide Publish-Aufrufe werden ECHT
     // gleichzeitig gestartet (zwei unabhaengige Transaktionen), um den in
@@ -240,11 +272,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
     // (tenant_id + Zeitspannen-Ueberlappung WHERE status='ACTIVE').
     const results = await Promise.allSettled([
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => publishRuleSetVersion(ruleSetX, versionX),
       ),
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => publishRuleSetVersion(ruleSetY, versionY),
       ),
     ]);
@@ -307,10 +339,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
   describe("HTTP-Kette", () => {
     it("POST .../publish ohne config.rules.publish -> 403 (config.rules.edit reicht NICHT)", async () => {
       const tenantId = await createTenant("http-403");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "DRAFT");
-      await addMinimalValidRule(tenantId, ruleSetId, versionId);
+      await addMinimalValidRule(tenantId, actorUserId, ruleSetId, versionId);
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.edit"],
       });
       const response = await publishRoute(
@@ -325,10 +358,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
     it("POST .../publish mit config.rules.publish -> 200, Status ACTIVE", async () => {
       const tenantId = await createTenant("http-200");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "DRAFT");
-      await addMinimalValidRule(tenantId, ruleSetId, versionId);
+      await addMinimalValidRule(tenantId, actorUserId, ruleSetId, versionId);
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.publish"],
       });
       const response = await publishRoute(
@@ -346,9 +380,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
     it("POST .../publish fuer bereits ACTIVE Version -> 409", async () => {
       const tenantId = await createTenant("http-409");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "ACTIVE");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.publish"],
       });
       const response = await publishRoute(
@@ -363,9 +398,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
 
     it("POST .../publish fuer leeren Draft -> 422", async () => {
       const tenantId = await createTenant("http-422");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "DRAFT");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.publish"],
       });
       const response = await publishRoute(

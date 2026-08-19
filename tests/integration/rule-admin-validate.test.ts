@@ -23,6 +23,17 @@
  * faelschlicherweise als Verstoss gemeldet wird.
  *
  * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
+ *
+ * WICHTIG (proaktive Pruefung 2026-08-19, siehe CI #51/#52-Fix in
+ * rule-admin-crud.test.ts / rule-admin-publish.test.ts / rule-admin-rollback.test.ts):
+ * `addEligibilityRuleToDraft()` / `addCrossSellingRuleToDraft()` /
+ * `addPrioritizationRuleToDraft()` schreiben (wie alle echten Mutationen)
+ * einen `AuditLog`-Eintrag mit `actorUserId`, per FK an eine echte
+ * `users`-Zeile gebunden. Alle `runWithTenantContext()`-Aufrufe, die eine
+ * dieser Funktionen aufrufen, verwenden daher einen ueber `createUser()`
+ * echten Actor. `validateDraftRuleSetVersion()` selbst ist rein lesend
+ * (siehe Test "ist rein lesend" unten) und bleibt dort, wo sie isoliert
+ * aufgerufen wird, bei `randomUUID()`.
  */
 
 import { randomUUID } from "node:crypto";
@@ -72,6 +83,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
       data: { key: `${key}-${suffix}`, name: `Test ${key}`, isSynthetic: true },
     });
     return tenant.id;
+  }
+
+  async function createUser(tenantId: string, key: string) {
+    const user = await rawClient.user.create({
+      data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+    });
+    return user.id;
   }
 
   async function createDraftRuleSetVersionRaw(tenantId: string, key: string) {
@@ -190,11 +208,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("gueltiger Draft (ANSWER + PRODUCT_ATTRIBUTE + SESSION_ATTRIBUTE, korrekte Werte) -> {valid: true}", async () => {
     const tenantId = await createTenant("valid");
+    const actorUserId = await createUser(tenantId, "actor");
     const { choiceQuestionId } = await createActiveQuestionnaire(tenantId, "qn");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
     const result = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       async () => {
         await addEligibilityRuleToDraft(ruleSetId, versionId, {
           key: "elig-1",
@@ -235,6 +254,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("ANSWER-Bedingung verweist auf Frage ausserhalb der aktiven QuestionnaireVersion -> Issue", async () => {
     const tenantId = await createTenant("foreign-question");
+    const actorUserId = await createUser(tenantId, "actor");
     await createActiveQuestionnaire(tenantId, "qn");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
@@ -270,7 +290,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         async () => {
           await addEligibilityRuleToDraft(ruleSetId, versionId, {
             key: "elig-1",
@@ -300,12 +320,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("ANSWER-Bedingung mit fuer den AnswerType unzulaessigem Operator -> Issue", async () => {
     const tenantId = await createTenant("bad-operator");
+    const actorUserId = await createUser(tenantId, "actor");
     const { boolQuestionId } = await createActiveQuestionnaire(tenantId, "qn");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         async () => {
           await addEligibilityRuleToDraft(ruleSetId, versionId, {
             key: "elig-1",
@@ -333,12 +354,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("ANSWER-Bedingung (SINGLE_CHOICE) mit ungueltigem AnswerOption-Key -> Issue", async () => {
     const tenantId = await createTenant("bad-option");
+    const actorUserId = await createUser(tenantId, "actor");
     const { choiceQuestionId } = await createActiveQuestionnaire(tenantId, "qn");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         async () => {
           await addEligibilityRuleToDraft(ruleSetId, versionId, {
             key: "elig-1",
@@ -366,11 +388,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("PRODUCT_ATTRIBUTE-Bedingung mit unbekanntem attributeKey -> Issue", async () => {
     const tenantId = await createTenant("unknown-attr");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         async () => {
           await addEligibilityRuleToDraft(ruleSetId, versionId, {
             key: "elig-1",
@@ -398,11 +421,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("PRODUCT_ATTRIBUTE-Bedingung mit unparsbarem comparisonValue -> Issue", async () => {
     const tenantId = await createTenant("bad-value");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         async () => {
           await addEligibilityRuleToDraft(ruleSetId, versionId, {
             key: "elig-1",
@@ -430,11 +454,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("EligibilityRule.fitWeight negativ -> Issue (spiegelt Math.max(0,...)-Clamp in fit-score.ts)", async () => {
     const tenantId = await createTenant("neg-fitweight");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         async () => {
           await addEligibilityRuleToDraft(ruleSetId, versionId, {
             key: "elig-1",
@@ -456,11 +481,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("CrossSellingRule.priority negativ -> Issue", async () => {
     const tenantId = await createTenant("neg-priority");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         async () => {
           await addCrossSellingRuleToDraft(ruleSetId, versionId, {
             key: "css-1",
@@ -483,10 +509,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("PrioritizationRule.weight NEGATIV wird bewusst NICHT abgelehnt (reine Summierung in prioritization.ts unterstuetzt negative Werte)", async () => {
     const tenantId = await createTenant("neg-weight-ok");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
 
     const result = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       async () => {
         await addPrioritizationRuleToDraft(ruleSetId, versionId, {
           key: "prio-1",
@@ -531,9 +558,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
       },
     });
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
+    const actorUserId = await createUser(tenantId, "actor");
 
     const result = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       async () => {
         await addCrossSellingRuleToDraft(ruleSetId, versionId, {
           key: "css-1",
@@ -553,9 +581,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
   it("validateDraftRuleSetVersion() ist rein lesend -- Regel-Zaehler unveraendert nach Aufruf", async () => {
     const tenantId = await createTenant("read-only");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
     await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () =>
         addEligibilityRuleToDraft(ruleSetId, versionId, {
           key: "elig-1",
@@ -626,9 +655,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
 
     it("POST .../validate fuer Draft mit gueltiger Regel -> 200 {valid: true}", async () => {
       const tenantId = await createTenant("http-200-valid");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
       await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           addEligibilityRuleToDraft(ruleSetId, versionId, {
             key: "elig-1",

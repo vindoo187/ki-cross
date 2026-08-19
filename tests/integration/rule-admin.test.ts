@@ -12,6 +12,18 @@
  * pro-RuleSet-ACTIVE-Scope, siehe PHASE_9_DISCOVERY.md Abschnitt 1).
  *
  * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
+ *
+ * WICHTIG (CI #52-Folgefix, proaktive Pruefung 2026-08-19): dieselbe
+ * `audit_logs_tenant_id_actor_user_id_fkey`-Problematik wie in
+ * rule-admin-crud.test.ts / rule-admin-publish.test.ts / rule-admin-rollback.test.ts
+ * (siehe dortige Modulkommentare) betrifft auch diese Datei --
+ * `createDraftRuleSetVersion()` schreibt einen AuditLog-Eintrag (action
+ * CREATE, siehe Abschnitt "3. Auditierung" unten) und verlangt daher einen
+ * ECHTEN Actor. Alle `runWithTenantContext()`-Aufrufe verwenden jetzt einen
+ * ueber `createUser()` echten Actor statt eines frei erfundenen
+ * `randomUUID()` -- unabhaengig davon, ob der jeweilige Testfall die
+ * Mutation tatsaechlich erfolgreich abschliesst, um zukuenftige CI-
+ * Ueberraschungen bei Refactorings zu vermeiden.
  */
 
 import { randomUUID } from "node:crypto";
@@ -49,10 +61,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
     await rawClient.$disconnect();
   });
 
-  function baseSessionPayload(tenantId: string): Omit<SessionPayload, "issuedAt"> {
+  function baseSessionPayload(tenantId: string, userId: string): Omit<SessionPayload, "issuedAt"> {
     return {
       tenantId,
-      userId: randomUUID(),
+      userId,
       employeeId: randomUUID(),
       storeId: randomUUID(),
       displayName: "Test",
@@ -267,9 +279,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("createDraftRuleSetVersion() ohne copyFromVersionId liefert eine leere DRAFT-Version", async () => {
       const tenantId = await createTenant("svc-empty");
+      const actorUserId = await createUser(tenantId, "actor");
       const ruleSetId = await createEmptyRuleSet(tenantId, "rs");
       const detail = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => createDraftRuleSetVersion(ruleSetId, { label: "Entwurf 1" }),
       );
       expect(detail.status).toBe("DRAFT");
@@ -281,9 +294,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("createDraftRuleSetVersion() mit copyFromVersionId DESSELBEN RuleSet kopiert alle vier Regeltypen", async () => {
       const tenantId = await createTenant("svc-copy-same");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, activeVersionId } = await createRuleSetWithActiveVersion(tenantId, "rs");
       const detail = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           createDraftRuleSetVersion(ruleSetId, {
             label: "Entwurf aus v1",
@@ -294,7 +308,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
       expect(detail.eligibilityRules[0]?.id).not.toBe(
         (
           await runWithTenantContext(
-            { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+            { tenantId, userId: actorUserId, roles: [], managementScope: null },
             () => getRuleSetVersionDetail(ruleSetId, activeVersionId),
           )
         ).eligibilityRules[0]?.id,
@@ -306,6 +320,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("createDraftRuleSetVersion() mit copyFromVersionId eines ANDEREN RuleSet kopiert dessen Regeln (zentraler AP2-Testfall)", async () => {
       const tenantId = await createTenant("svc-copy-cross");
+      const actorUserId = await createUser(tenantId, "actor");
       const { activeVersionId: sourceVersionId } = await createRuleSetWithActiveVersion(
         tenantId,
         "rs-source",
@@ -313,7 +328,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
       const targetRuleSetId = await createEmptyRuleSet(tenantId, "rs-target");
 
       const detail = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           createDraftRuleSetVersion(targetRuleSetId, {
             label: "Entwurf RuleSet-uebergreifend",
@@ -335,10 +350,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("createDraftRuleSetVersion() mit nicht existierender copyFromVersionId -> CopySourceRuleSetVersionNotFoundError", async () => {
       const tenantId = await createTenant("svc-copy-missing");
+      const actorUserId = await createUser(tenantId, "actor");
       const ruleSetId = await createEmptyRuleSet(tenantId, "rs");
       await expect(
         runWithTenantContext(
-          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
           () =>
             createDraftRuleSetVersion(ruleSetId, {
               label: "Entwurf",
@@ -351,6 +367,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
     it("createDraftRuleSetVersion() mit copyFromVersionId aus FREMDEM Mandanten -> CopySourceRuleSetVersionNotFoundError (Tenant-Isolation)", async () => {
       const tenantA = await createTenant("svc-tenant-a");
       const tenantB = await createTenant("svc-tenant-b");
+      const actorA = await createUser(tenantA, "actor-a");
       const { activeVersionId: foreignVersionId } = await createRuleSetWithActiveVersion(
         tenantB,
         "rs",
@@ -358,7 +375,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
       const ruleSetId = await createEmptyRuleSet(tenantA, "rs");
       await expect(
         runWithTenantContext(
-          { tenantId: tenantA, userId: randomUUID(), roles: [], managementScope: null },
+          { tenantId: tenantA, userId: actorA, roles: [], managementScope: null },
           () =>
             createDraftRuleSetVersion(ruleSetId, {
               label: "Entwurf",
@@ -375,7 +392,8 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
   describe("2. HTTP-Kette", () => {
     it("GET /api/admin/rule-sets ohne config.rules.view -> 403", async () => {
       const tenantId = await createTenant("http-403-list");
-      const token = createSessionToken(baseSessionPayload(tenantId));
+      const actorUserId = await createUser(tenantId, "actor");
+      const token = createSessionToken(baseSessionPayload(tenantId, actorUserId));
       const response = await listRuleSetsRoute(
         requestWithCookie("http://localhost/api/admin/rule-sets", token),
       );
@@ -384,9 +402,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("GET /api/admin/rule-sets mit config.rules.view -> 200 mit Liste", async () => {
       const tenantId = await createTenant("http-200-list");
+      const actorUserId = await createUser(tenantId, "actor");
       await createRuleSetWithActiveVersion(tenantId, "rs");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.view"],
       });
       const response = await listRuleSetsRoute(
@@ -399,9 +418,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("GET .../versions/:versionId mit config.rules.view -> 200 mit Detail", async () => {
       const tenantId = await createTenant("http-200-detail");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, activeVersionId } = await createRuleSetWithActiveVersion(tenantId, "rs");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.view"],
       });
       const response = await getRuleSetVersionDetailRoute(
@@ -418,9 +438,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("POST .../versions ohne config.rules.edit -> 403", async () => {
       const tenantId = await createTenant("http-403-post");
+      const actorUserId = await createUser(tenantId, "actor");
       const ruleSetId = await createEmptyRuleSet(tenantId, "rs");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.view"],
       });
       const response = await createDraftRuleSetVersionRoute(
@@ -435,13 +456,14 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("POST .../versions mit config.rules.edit + RuleSet-uebergreifender Kopie -> 201", async () => {
       const tenantId = await createTenant("http-201-cross");
+      const actorUserId = await createUser(tenantId, "actor");
       const { activeVersionId: sourceVersionId } = await createRuleSetWithActiveVersion(
         tenantId,
         "rs-source",
       );
       const targetRuleSetId = await createEmptyRuleSet(tenantId, "rs-target");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.edit"],
       });
       const response = await createDraftRuleSetVersionRoute(
@@ -470,9 +492,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("POST .../versions mit ungueltigem Body (fehlendes label) -> 400", async () => {
       const tenantId = await createTenant("http-400-post");
+      const actorUserId = await createUser(tenantId, "actor");
       const ruleSetId = await createEmptyRuleSet(tenantId, "rs");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.edit"],
       });
       const response = await createDraftRuleSetVersionRoute(

@@ -10,6 +10,28 @@
  * und -- besonders wichtig -- Ablehnung von Cross-RuleSet-Rollback.
  *
  * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
+ *
+ * WICHTIG (CI #52-Fix, 2026-08-19): zwei unabhaengige Befunde in dieser
+ * Datei, die vor dem heutigen Batch-Push nie gegen eine echte Postgres-
+ * Instanz in CI liefen:
+ *
+ * 1) `addOneRuleOfEachType()` fuegte Regeln bislang ueber die ECHTEN
+ *    Service-Funktionen (`addEligibilityRuleToDraft()` etc.) hinzu -- diese
+ *    verlangen zwingend eine DRAFT-Version (`requireDraftRuleSetVersion()`).
+ *    Alle Aufrufer dieser Datei erzeugen die Quellversion jedoch bewusst als
+ *    ACTIVE (realistisches Rollback-Szenario: man rollt zu einer bereits
+ *    veroeffentlichten Version zurueck). Das fuehrte zu
+ *    `RuleSetVersionNotDraftError`. Fix: die Fixture erzeugt die vier
+ *    Beispielregeln jetzt per RAW Prisma-Create direkt (analog
+ *    `createRuleSetV1()` in recommendation-ruleset-snapshot.test.ts) --
+ *    diese Hilfsfunktion testet die Rollback-Deep-Copy-Logik, nicht das
+ *    Draft-CRUD (das ist rule-admin-crud.test.ts's Aufgabe), daher ist der
+ *    direkte Rohzugriff hier sachlich korrekt und nicht nur ein Workaround.
+ * 2) Jede echte Mutation (Rollback, Publish) schreibt einen `AuditLog`-
+ *    Eintrag mit `actorUserId`, per FK (`audit_logs_tenant_id_actor_user_id_fkey`)
+ *    an eine echte `users`-Zeile desselben Mandanten gebunden. Ein frei
+ *    erfundener `randomUUID()` als Actor verletzt diese Constraint. Fix: alle
+ *    Aufrufe verwenden jetzt einen ueber `createUser()` echten Actor.
  */
 
 import { randomUUID } from "node:crypto";
@@ -23,10 +45,6 @@ import {
   type SessionPayload,
 } from "@/server/auth/session";
 import {
-  addEligibilityRuleToDraft,
-  addExclusionRuleToDraft,
-  addPrioritizationRuleToDraft,
-  addCrossSellingRuleToDraft,
   getRuleSetVersionHistory,
   publishRuleSetVersion,
   rollbackToRuleSetVersion,
@@ -49,10 +67,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
     await rawClient.$disconnect();
   });
 
-  function baseSessionPayload(tenantId: string): Omit<SessionPayload, "issuedAt"> {
+  function baseSessionPayload(tenantId: string, userId: string): Omit<SessionPayload, "issuedAt"> {
     return {
       tenantId,
-      userId: randomUUID(),
+      userId,
       employeeId: randomUUID(),
       storeId: randomUUID(),
       displayName: "Test",
@@ -67,6 +85,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
       data: { key: `${key}-${suffix}`, name: `Test ${key}`, isSynthetic: true },
     });
     return tenant.id;
+  }
+
+  async function createUser(tenantId: string, key: string) {
+    const user = await rawClient.user.create({
+      data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+    });
+    return user.id;
   }
 
   async function createRuleSetVersion(
@@ -90,53 +115,81 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
     return { ruleSetId: ruleSet.id, versionId: version.id };
   }
 
-  /** Fuegt jeweils eine Regel jedes der vier Typen hinzu, inkl. einer Condition je Regel. */
-  async function addOneRuleOfEachType(tenantId: string, ruleSetId: string, versionId: string) {
-    const condition = {
+  /**
+   * Fuegt jeweils eine Regel jedes der vier Typen hinzu, inkl. einer
+   * Condition je Regel -- per RAW Prisma-Create (siehe Modulkommentar oben,
+   * Punkt 1: `versionId` ist hier bewusst haeufig eine ACTIVE-Version, die
+   * echten Draft-Mutationsfunktionen wuerden das ablehnen).
+   */
+  async function addOneRuleOfEachType(tenantId: string, versionId: string) {
+    const conditionBase = {
+      tenantId,
       groupIndex: 0,
       sourceType: "SESSION_ATTRIBUTE" as const,
       attributeKey: "region",
       operator: "EQUALS" as const,
       comparisonValue: "nord",
     };
-    await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
-      async () => {
-        await addEligibilityRuleToDraft(ruleSetId, versionId, {
-          key: "elig-1",
-          description: "Test",
-          isRequired: false,
-          fitWeight: 1,
-          isActive: true,
-          conditions: [condition],
-        });
-        await addExclusionRuleToDraft(ruleSetId, versionId, {
-          key: "excl-1",
-          reasonCode: "REASON_1",
-          description: "Test",
-          isActive: true,
-          conditions: [condition],
-        });
-        await addPrioritizationRuleToDraft(ruleSetId, versionId, {
-          key: "prio-1",
-          description: "Test",
-          weight: 5,
-          commissionRequired: false,
-          isActive: true,
-          conditions: [condition],
-        });
-        await addCrossSellingRuleToDraft(ruleSetId, versionId, {
-          key: "cross-1",
-          description: "Test",
-          needType: "DSL",
-          priority: 1,
-          reasonCode: "CROSS_1",
-          suggestedProductVersionId: null,
-          isActive: true,
-          conditions: [condition],
-        });
+
+    const eligibilityRule = await rawClient.eligibilityRule.create({
+      data: {
+        tenantId,
+        ruleSetVersionId: versionId,
+        key: "elig-1",
+        description: "Test",
+        isRequired: false,
+        fitWeight: 1,
+        isActive: true,
       },
-    );
+    });
+    await rawClient.eligibilityRuleCondition.create({
+      data: { ...conditionBase, eligibilityRuleId: eligibilityRule.id },
+    });
+
+    const exclusionRule = await rawClient.exclusionRule.create({
+      data: {
+        tenantId,
+        ruleSetVersionId: versionId,
+        key: "excl-1",
+        reasonCode: "REASON_1",
+        description: "Test",
+        isActive: true,
+      },
+    });
+    await rawClient.exclusionRuleCondition.create({
+      data: { ...conditionBase, exclusionRuleId: exclusionRule.id },
+    });
+
+    const prioritizationRule = await rawClient.prioritizationRule.create({
+      data: {
+        tenantId,
+        ruleSetVersionId: versionId,
+        key: "prio-1",
+        description: "Test",
+        weight: 5,
+        commissionRequired: false,
+        isActive: true,
+      },
+    });
+    await rawClient.prioritizationRuleCondition.create({
+      data: { ...conditionBase, prioritizationRuleId: prioritizationRule.id },
+    });
+
+    const crossSellingRule = await rawClient.crossSellingRule.create({
+      data: {
+        tenantId,
+        ruleSetVersionId: versionId,
+        key: "cross-1",
+        description: "Test",
+        needType: "DSL",
+        priority: 1,
+        reasonCode: "CROSS_1",
+        isActive: true,
+      },
+    });
+    await rawClient.crossSellingRuleCondition.create({
+      data: { ...conditionBase, crossSellingRuleId: crossSellingRule.id },
+    });
   }
 
   function requestWithCookie(url: string, token: string, method: "GET" | "POST" = "POST") {
@@ -156,6 +209,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
   it("getRuleSetVersionHistory() liefert vollstaendige Historie (alle Status, neueste zuerst)", async () => {
     const tenantId = await createTenant("history");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId: v1 } = await createRuleSetVersion(
       tenantId,
       "rs",
@@ -186,7 +240,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
     });
 
     const history = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () => getRuleSetVersionHistory(ruleSetId),
     );
 
@@ -198,19 +252,20 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
   it("Rollback erzeugt eine neue DRAFT-Version mit Deep-Copy aller vier Regeltypen inkl. Conditions; Quelle bleibt unveraendert", async () => {
     const tenantId = await createTenant("rollback-copy");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId: sourceVersionId } = await createRuleSetVersion(
       tenantId,
       "rs",
       "ACTIVE",
     );
-    await addOneRuleOfEachType(tenantId, ruleSetId, sourceVersionId);
+    await addOneRuleOfEachType(tenantId, sourceVersionId);
 
     const sourceBefore = await rawClient.ruleSetVersion.findUniqueOrThrow({
       where: { id: sourceVersionId },
     });
 
     const rolledBack = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () => rollbackToRuleSetVersion(ruleSetId, sourceVersionId),
     );
 
@@ -238,15 +293,16 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
   it("Rollback schreibt AuditLog-Eintrag (ROLLBACK) mit sourceVersionId in metadata, atomar mit der Tiefkopie", async () => {
     const tenantId = await createTenant("rollback-audit");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId: sourceVersionId } = await createRuleSetVersion(
       tenantId,
       "rs",
       "ACTIVE",
     );
-    await addOneRuleOfEachType(tenantId, ruleSetId, sourceVersionId);
+    await addOneRuleOfEachType(tenantId, sourceVersionId);
 
     const rolledBack = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () => rollbackToRuleSetVersion(ruleSetId, sourceVersionId),
     );
 
@@ -269,20 +325,21 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
   it("Rollback-Ergebnis durchlaeuft regulaer den bestehenden AP5-Publish-Pfad (keine zweite Publish-Implementierung)", async () => {
     const tenantId = await createTenant("rollback-then-publish");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId: sourceVersionId } = await createRuleSetVersion(
       tenantId,
       "rs",
       "ACTIVE",
     );
-    await addOneRuleOfEachType(tenantId, ruleSetId, sourceVersionId);
+    await addOneRuleOfEachType(tenantId, sourceVersionId);
 
     const rolledBack = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () => rollbackToRuleSetVersion(ruleSetId, sourceVersionId),
     );
 
     const published = await runWithTenantContext(
-      { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
       () => publishRuleSetVersion(ruleSetId, rolledBack.id),
     );
 
@@ -292,6 +349,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
   it("Rollback einer DRAFT-Quelle wird abgelehnt (RollbackSourceNotEligibleError)", async () => {
     const tenantId = await createTenant("rollback-draft-source");
+    const actorUserId = await createUser(tenantId, "actor");
     const { ruleSetId, versionId: draftVersionId } = await createRuleSetVersion(
       tenantId,
       "rs",
@@ -300,7 +358,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => rollbackToRuleSetVersion(ruleSetId, draftVersionId),
       ),
     ).rejects.toThrow(RollbackSourceNotEligibleError);
@@ -308,6 +366,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
   it("BESONDERS WICHTIG (ChatGPT 2026-08-18): Cross-RuleSet-Rollback wird abgelehnt (RuleSetVersionNotFoundError)", async () => {
     const tenantId = await createTenant("cross-ruleset-rollback");
+    const actorUserId = await createUser(tenantId, "actor");
     const { versionId: sourceVersionInOtherRuleSet } = await createRuleSetVersion(
       tenantId,
       "rs-source",
@@ -321,7 +380,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
     await expect(
       runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => rollbackToRuleSetVersion(targetRuleSetId, sourceVersionInOtherRuleSet),
       ),
     ).rejects.toThrow(RuleSetVersionNotFoundError);
@@ -330,12 +389,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
   it("Tenant-Isolation: Rollback mit einer sourceVersionId eines FREMDEN Mandanten wird abgelehnt", async () => {
     const tenantA = await createTenant("tenant-a");
     const tenantB = await createTenant("tenant-b");
+    const actorA = await createUser(tenantA, "actor-a");
     const { versionId: versionInTenantB } = await createRuleSetVersion(tenantB, "rs", "ACTIVE");
     const { ruleSetId: ruleSetInTenantA } = await createRuleSetVersion(tenantA, "rs", "DRAFT");
 
     await expect(
       runWithTenantContext(
-        { tenantId: tenantA, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId: tenantA, userId: actorA, roles: [], managementScope: null },
         () => rollbackToRuleSetVersion(ruleSetInTenantA, versionInTenantB),
       ),
     ).rejects.toThrow(RuleSetVersionNotFoundError);
@@ -344,8 +404,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
   describe("HTTP-Kette", () => {
     it("GET .../versions ohne config.rules.view -> 403", async () => {
       const tenantId = await createTenant("http-history-403");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId } = await createRuleSetVersion(tenantId, "rs", "ACTIVE");
-      const token = createSessionToken({ ...baseSessionPayload(tenantId), configPermissions: [] });
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: [],
+      });
       const response = await versionsRoute(
         requestWithCookie(
           `http://localhost/api/admin/rule-sets/${ruleSetId}/versions`,
@@ -359,9 +423,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
     it("GET .../versions mit config.rules.view -> 200, vollstaendige Historie", async () => {
       const tenantId = await createTenant("http-history-200");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId } = await createRuleSetVersion(tenantId, "rs", "ACTIVE");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.view"],
       });
       const response = await versionsRoute(
@@ -379,8 +444,12 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
     it("POST .../rollback ohne config.rules.edit -> 403", async () => {
       const tenantId = await createTenant("http-rollback-403");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "ACTIVE");
-      const token = createSessionToken({ ...baseSessionPayload(tenantId), configPermissions: [] });
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: [],
+      });
       const response = await rollbackRoute(
         requestWithCookie(
           `http://localhost/api/admin/rule-sets/${ruleSetId}/versions/${versionId}/rollback`,
@@ -393,10 +462,11 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
     it("POST .../rollback mit config.rules.edit -> 201, neue DRAFT-Version", async () => {
       const tenantId = await createTenant("http-rollback-201");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "ACTIVE");
-      await addOneRuleOfEachType(tenantId, ruleSetId, versionId);
+      await addOneRuleOfEachType(tenantId, versionId);
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.edit"],
       });
       const response = await rollbackRoute(
@@ -414,9 +484,10 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
     it("POST .../rollback mit DRAFT-Quelle -> 409", async () => {
       const tenantId = await createTenant("http-rollback-409");
+      const actorUserId = await createUser(tenantId, "actor");
       const { ruleSetId, versionId } = await createRuleSetVersion(tenantId, "rs", "DRAFT");
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.edit"],
       });
       const response = await rollbackRoute(
@@ -431,6 +502,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
 
     it("POST .../rollback mit fremder RuleSetId (Cross-RuleSet) -> 404", async () => {
       const tenantId = await createTenant("http-rollback-cross-404");
+      const actorUserId = await createUser(tenantId, "actor");
       const { versionId: sourceInOtherRuleSet } = await createRuleSetVersion(
         tenantId,
         "rs-source",
@@ -442,7 +514,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
         "DRAFT",
       );
       const token = createSessionToken({
-        ...baseSessionPayload(tenantId),
+        ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: ["config.rules.edit"],
       });
       const response = await rollbackRoute(
