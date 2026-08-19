@@ -1614,11 +1614,17 @@ async function loadActiveQuestionAnswerTypeMap(
 // vs. `rule_set_versions_no_overlap`/`rule_set_versions_tenant_active_no_overlap`
 // in prisma/schema.prisma).
 //
-// Transaktionsreihenfolge (identisch zu Phase 8, hier erneut angewendet):
+// Transaktionsreihenfolge (identisch zu Phase 8, hier erneut angewendet,
+// PLUS Schritt 2.0 -- siehe unten, ChatGPT-Befund 2026-08-19):
 // 1. Serverseitige Revalidierung ueber `validateDraftRuleSetVersion()` VOR
 //    der Transaktion (rein lesend) -- ein Validierungsfehler darf keine
 //    Transaktion eroeffnen.
 // 2. Innerhalb EINER Transaktion:
+//    0. TENANT-ROW-LOCK (`SELECT ... FROM tenants WHERE id = $1 FOR UPDATE`,
+//       siehe `RULE_SET_VERSION_ACTIVE_NO_OVERLAP_CONSTRAINT`-Kommentar
+//       unten fuer den vollen Befund) -- serialisiert ALLE Publish-
+//       Transaktionen desselben Mandanten, MUSS als erste Operation der
+//       Transaktion stehen, vor Schritt (a).
 //    a. Bisherige mandantenweite ACTIVE-Version (falls vorhanden, aus
 //       EINEM BELIEBIGEN RuleSet) zuerst auf EXPIRED setzen (`validTo =
 //       now`) -- MUSS vor (b) passieren, sonst schlaegt die EXCLUDE-
@@ -1654,6 +1660,29 @@ export interface PublishRuleSetVersionResult {
  * `PrismaClientUnknownRequestError` mit dem rohen Postgres-Fehlertext.
  * Diese Konstante wird sowohl hier als auch (indirekt, per Instanceof) in
  * Tests referenziert.
+ *
+ * WICHTIGER NACHTRAG (ChatGPT-Befund, CI #53/#54, 2026-08-19): der
+ * EXCLUDE-Constraint allein reicht NICHT als alleiniger Nebenlaeufigkeits-
+ * Schutz, wenn zum Zeitpunkt des Publish noch KEINE vorherige ACTIVE-
+ * Version existiert (`previousActive === null`). In diesem Fall gibt es
+ * keine gemeinsame Zeile, auf die zwei parallele Publish-Transaktionen
+ * sich synchronisieren -- beide `updateMany()`-Aufrufe auf ZWEI
+ * VERSCHIEDENEN Draft-Zeilen koennen dann parallel erfolgreich committen,
+ * bevor der GiST-Index die Ueberlappung erkennt (empirisch bestaetigt:
+ * CI #53 zeigte 2 statt maximal 1 erfolgreichen Publish bei zwei echten
+ * parallelen Aufrufen ohne vorherige ACTIVE-Version). Der
+ * Diagnosetest in `tests/integration/rule-admin-publish.test.ts`
+ * ("DIAGNOSE: EXCLUDE-Constraint ... existiert") bestaetigte, dass der
+ * Constraint korrekt in CI vorhanden und definiert ist -- das Problem ist
+ * also kein Migrations-/CI-Defekt, sondern eine echte Race-Condition-
+ * Luecke. Fix: `publishRuleSetVersion()` sperrt jetzt zusaetzlich die
+ * `tenants`-Zeile des aktuellen Mandanten (`SELECT ... FOR UPDATE`) als
+ * ERSTE Operation der Transaktion -- diese Zeile existiert IMMER
+ * (Voraussetzung fuer jeden aktiven `TenantContext`), anders als eine
+ * vorherige ACTIVE-`RuleSetVersion`. Das serialisiert alle Publish-
+ * Transaktionen desselben Mandanten vollstaendig, unabhaengig vom
+ * jeweiligen `RuleSet`, und macht den EXCLUDE-Constraint zum reinen
+ * Backstop (Verteidigung in der Tiefe) statt zum alleinigen Schutz.
  */
 const RULE_SET_VERSION_ACTIVE_NO_OVERLAP_CONSTRAINT = "rule_set_versions_tenant_active_no_overlap";
 
@@ -1706,6 +1735,19 @@ export async function publishRuleSetVersion(
   let previousActiveVersionId: string | null;
   try {
     previousActiveVersionId = await db.$transaction(async (tx) => {
+      // Schritt 0: Tenant-Row-Lock (siehe RULE_SET_VERSION_ACTIVE_NO_OVERLAP_
+      // CONSTRAINT-Kommentar oben, ChatGPT-Befund 2026-08-19) -- MUSS die
+      // erste Operation dieser Transaktion sein. Serialisiert alle
+      // Publish-Transaktionen desselben Mandanten (unabhaengig vom
+      // jeweiligen RuleSet), da eine `tenants`-Zeile IMMER existiert --
+      // anders als eine vorherige ACTIVE-RuleSetVersion, auf die sich zwei
+      // parallele Publishes sonst nicht synchronisieren koennten. Rohes SQL
+      // ist hier bewusst zulaessig: `Tenant` ist ein GLOBAL_MODEL (siehe
+      // scoped-client.ts), die Tenant-Scoping-Regel fuer mandantengebundene
+      // Modelle gilt dafuer nicht, und `tenantId` stammt bereits aus dem
+      // validierten `TenantContext`.
+      await tx.$queryRaw`SELECT id FROM tenants WHERE id = ${tenantId} FOR UPDATE`;
+
       // Mandantenweiter Scope: bewusst OHNE ruleSetId-Filter (siehe
       // Modulkommentar oben) -- der tenant-gescopte Client injiziert die
       // tenantId bereits automatisch.

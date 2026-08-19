@@ -97,6 +97,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
     tenantId: string,
     key: string,
     validFrom = new Date("2026-01-01T00:00:00Z"),
+    validTo: Date | null = null,
   ) {
     const ruleSet = await rawClient.ruleSet.create({
       data: { tenantId, key: `${key}-${suffix}` },
@@ -108,7 +109,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
         label: "v1",
         status: "ACTIVE",
         validFrom,
-        validTo: null,
+        validTo,
       },
     });
 
@@ -268,14 +269,23 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
 
     it("getRuleSetVersionDetail() mit versionId aus anderem RuleSet -> RuleSetVersionNotFoundError", async () => {
       const tenantId = await createTenant("svc-vnf");
-      const { ruleSetId } = await createRuleSetWithActiveVersion(tenantId, "rs-a");
       // Zweite ACTIVE-Version desselben Mandanten braucht ein
       // nicht-ueberlappendes Zeitfenster, sonst verletzt der zweite Insert
       // den EXCLUDE-Constraint rule_set_versions_tenant_active_no_overlap
       // (mandantenweit hoechstens eine ACTIVE-Version je Zeitspanne, siehe
       // Modulkommentar in rule-admin.ts zu AP5) -- dieser Test prueft
       // ausschliesslich "versionId aus fremdem RuleSet", nicht die
-      // Zeitfenster-Semantik selbst.
+      // Zeitfenster-Semantik selbst. WICHTIG: `validTo: null` bedeutet ein
+      // UNBEGRENZTES Zeitfenster -- ein bloss abweichender validFrom reicht
+      // NICHT, zwei unbegrenzte Intervalle ueberlappen sich immer
+      // (bewiesen durch CI #54). Die erste Version braucht daher zusaetzlich
+      // ein BEGRENZTES validTo vor dem validFrom der zweiten.
+      const { ruleSetId } = await createRuleSetWithActiveVersion(
+        tenantId,
+        "rs-a",
+        new Date("2026-01-01T00:00:00Z"),
+        new Date("2026-06-01T00:00:00Z"),
+      );
       const { activeVersionId: otherVersionId } = await createRuleSetWithActiveVersion(
         tenantId,
         "rs-b",
