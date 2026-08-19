@@ -158,6 +158,25 @@ test.describe("/admin/rules – Regel-Editor (Phase 9 AP9)", () => {
       .getByRole("listitem")
       .filter({ has: page.getByRole("heading", { name: "e2e-standardregeln" }) });
 
+    // ChatGPT-Vorgabe (AP9-E2E-Befund 2026-08-19, CI #60 Attempt 2): die
+    // urspruengliche Seed-Version "E2E Standardregeln v1" ganz zu Testbeginn
+    // -- VOR der ersten Mutation durch dieses ODER das parallele
+    // Playwright-Projekt (Desktop/Tablet teilen sich dieselbe geseedete
+    // RuleSet/DB, siehe Fix fuer draftLabel oben) -- eindeutig ueber ihren
+    // href identifizieren und danach AUSSCHLIESSLICH darueber referenzieren.
+    // Text-/Label-basiertes Re-Identifizieren (auch mit verschaerftem Regex)
+    // ist nicht robust genug: ein Rollback aus dem jeweils ANDEREN Projekt
+    // erzeugt eine neue Version, deren Label den Original-Titel als
+    // Teilstring enthaelt ("Rollback von \"E2E Standardregeln v1\" ..."),
+    // was weiter unten sonst erneut zu einer Playwright-Strict-Mode-
+    // Violation fuehren wuerde.
+    const originalV1Link = ruleSetItem.getByRole("link", { name: /^E2E Standardregeln v1\b/ });
+    await expect(originalV1Link).toBeVisible();
+    const originalV1Href = await originalV1Link.getAttribute("href");
+    if (!originalV1Href) {
+      throw new Error("Konnte href der urspruenglichen v1-Version nicht ermitteln.");
+    }
+
     page.once("dialog", async (dialog) => {
       await dialog.accept(draftLabel);
     });
@@ -258,7 +277,7 @@ test.describe("/admin/rules – Regel-Editor (Phase 9 AP9)", () => {
     const historyPanel = page
       .locator("section")
       .filter({ has: page.getByRole("heading", { name: "Versionshistorie" }) });
-    const oldVersionLink = historyPanel.getByRole("link", { name: /E2E Standardregeln v1/ });
+    const oldVersionLink = historyPanel.locator(`a[href="${originalV1Href}"]`);
     await expect(oldVersionLink).toBeVisible();
     await expect(oldVersionLink.getByText("Abgelaufen")).toBeVisible();
 
@@ -280,7 +299,7 @@ test.describe("/admin/rules – Regel-Editor (Phase 9 AP9)", () => {
       .filter({ has: page.getByRole("heading", { name: "Versionshistorie" }) });
     const v1HistoryItem = historyPanel2
       .getByRole("listitem")
-      .filter({ hasText: "E2E Standardregeln v1" });
+      .filter({ has: page.locator(`a[href="${originalV1Href}"]`) });
 
     page.once("dialog", async (dialog) => {
       expect(dialog.type()).toBe("confirm");
