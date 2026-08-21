@@ -168,7 +168,14 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
         validTo: overrides.validTo ?? null,
         commissionType: overrides.commissionType ?? "FLAT",
         currency: overrides.currency ?? "EUR",
-        commissionAmountMinor: overrides.commissionAmountMinor ?? 1_500,
+        // Bewusst KEIN "??": ein explizit uebergebenes null (z. B. fuer
+        // TIERED-Versionen, bei denen commissionAmountMinor null sein MUSS)
+        // darf nicht durch den 1_500-Default ueberschrieben werden -- ??
+        // behandelt null und undefined identisch, was genau das verhindern
+        // wuerde. Daher: nur bei undefined (Feld gar nicht uebergeben) den
+        // Default verwenden.
+        commissionAmountMinor:
+          overrides.commissionAmountMinor !== undefined ? overrides.commissionAmountMinor : 1_500,
       },
     });
     return { commissionModelId, versionId: version.id };
