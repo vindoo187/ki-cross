@@ -380,6 +380,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
   describe("1b. Feld-CRUD (AP3) -- updateCommissionModelVersionFields()", () => {
     it("aendert nur die uebergebenen Felder (partielles Update, currency)", async () => {
       const tenantId = await createTenant("ap3-partial");
+      const actorUserId = await createUser(tenantId, "actor");
       const productId = await createProduct(tenantId, "p");
       const { commissionModelId, versionId } = await createCommissionModelWithVersion(
         tenantId,
@@ -388,7 +389,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
         { status: "DRAFT" },
       );
       const detail = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () => updateCommissionModelVersionFields(commissionModelId, versionId, { currency: "CHF" }),
       );
       expect(detail.currency).toBe("CHF");
@@ -398,6 +399,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
 
     it("gegen eine nicht-DRAFT-Version -> CommissionModelVersionNotDraftError", async () => {
       const tenantId = await createTenant("ap3-not-draft");
+      const actorUserId = await createUser(tenantId, "actor");
       const productId = await createProduct(tenantId, "p");
       const { commissionModelId, versionId } = await createCommissionModelWithVersion(
         tenantId,
@@ -407,7 +409,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       );
       await expect(
         runWithTenantContext(
-          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
           () =>
             updateCommissionModelVersionFields(commissionModelId, versionId, { currency: "CHF" }),
         ),
@@ -416,6 +418,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
 
     it("commissionType -> PERCENTAGE, wenn commissionAmountMinor aus der bestehenden Version noch gesetzt ist -> CommissionModelVersionInvalidError (Merge-Pruefung, nicht nur Patch-lokal)", async () => {
       const tenantId = await createTenant("ap3-invalid-merge");
+      const actorUserId = await createUser(tenantId, "actor");
       const productId = await createProduct(tenantId, "p");
       const { commissionModelId, versionId } = await createCommissionModelWithVersion(
         tenantId,
@@ -428,7 +431,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       // erkannt werden.
       await expect(
         runWithTenantContext(
-          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
           () =>
             updateCommissionModelVersionFields(commissionModelId, versionId, {
               commissionType: "PERCENTAGE",
@@ -439,6 +442,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
 
     it("commissionType PERCENTAGE + amount/recurringAmount im selben Patch auf null -> Erfolg", async () => {
       const tenantId = await createTenant("ap3-valid-percentage");
+      const actorUserId = await createUser(tenantId, "actor");
       const productId = await createProduct(tenantId, "p");
       const { commissionModelId, versionId } = await createCommissionModelWithVersion(
         tenantId,
@@ -447,7 +451,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
         { status: "DRAFT", commissionType: "FLAT", commissionAmountMinor: 1_000 },
       );
       const detail = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           updateCommissionModelVersionFields(commissionModelId, versionId, {
             commissionType: "PERCENTAGE",
@@ -462,6 +466,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
 
     it("commissionType FLAT mit gleichzeitig gesetztem commissionPercentageBasisPoints -> CommissionModelVersionInvalidError", async () => {
       const tenantId = await createTenant("ap3-invalid-flat-pct");
+      const actorUserId = await createUser(tenantId, "actor");
       const productId = await createProduct(tenantId, "p");
       const { commissionModelId, versionId } = await createCommissionModelWithVersion(
         tenantId,
@@ -471,7 +476,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       );
       await expect(
         runWithTenantContext(
-          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
           () =>
             updateCommissionModelVersionFields(commissionModelId, versionId, {
               commissionPercentageBasisPoints: 250,
@@ -482,6 +487,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
 
     it("commissionType FLAT: commissionAmountMinor UND recurringCommissionAmountMinor GLEICHZEITIG gesetzt ist ERLAUBT (bewusst NICHT exklusiv, siehe computeCommissionAmountMinor()-Kommentar)", async () => {
       const tenantId = await createTenant("ap3-flat-both-amounts");
+      const actorUserId = await createUser(tenantId, "actor");
       const productId = await createProduct(tenantId, "p");
       const { commissionModelId, versionId } = await createCommissionModelWithVersion(
         tenantId,
@@ -490,7 +496,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
         { status: "DRAFT", commissionType: "FLAT", commissionAmountMinor: 1_000 },
       );
       const detail = await runWithTenantContext(
-        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
         () =>
           updateCommissionModelVersionFields(commissionModelId, versionId, {
             recurringCommissionAmountMinor: 300,
@@ -502,6 +508,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
 
     it("gegen fremdes CommissionModel (versionId gehoert nicht zu commissionModelId) -> CommissionModelVersionNotFoundError", async () => {
       const tenantId = await createTenant("ap3-wrong-model");
+      const actorUserId = await createUser(tenantId, "actor");
       const productA = await createProduct(tenantId, "pa");
       const productB = await createProduct(tenantId, "pb");
       const { commissionModelId: modelA } = await createCommissionModelWithVersion(
@@ -518,7 +525,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       );
       await expect(
         runWithTenantContext(
-          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
           () => updateCommissionModelVersionFields(modelA, versionB, { currency: "CHF" }),
         ),
       ).rejects.toThrow(CommissionModelVersionNotFoundError);
