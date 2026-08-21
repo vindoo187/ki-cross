@@ -1544,3 +1544,21 @@ code {
   padding-top: 0;
   border-top: none;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Phase 10 AP8 -- Provisionsverwaltung (/admin/commissions). Reuses the
+   .admin-questions class family above (badges, forms, history, actions)
+   1:1, analog Phase 9's .admin-rules, siehe CommissionDraftEditor.tsx
+   Modulkommentar. Bewusst ruhigere Farbgebung als .admin-rules__publish-
+   warning: der Hinweis ist PRO Provisionsmodell gescoped, keine
+   mandantenweite Warnung (ChatGPT-GO 2026-08-22, "wichtigster Unterschied
+   zu Phase 9"). */
+/* ---------------------------------------------------------------------- */
+
+.admin-commissions__publish-note {
+  padding: 8px 12px;
+  border: 1px solid #9aa5b1;
+  border-radius: 6px;
+  background: #f2f4f6;
+  color: #3a4552;
+}
