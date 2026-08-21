@@ -17,12 +17,17 @@
  * `getCommissionModelVersionDetail()`, `createDraftCommissionModelVersion()`.
  * Das Feld-CRUD (FLAT/PERCENTAGE in AP3, TIERED/`CommissionTier` in AP4:
  * `createCommissionTier()`/`updateCommissionTier()`/`deleteCommissionTier()`)
- * ist mit AP4 vollstaendig implementiert. Publish/Aktivierung folgt erst in
- * AP5 -- `createDraftCommissionModelVersion()` legt daher NIE eine Version
- * mit Status ACTIVE an. Der Mengen-Invarianten-Check ueber alle Stufen einer
- * Version (mind. eine Stufe mit `thresholdMinor = 0` bei TIERED) ist NICHT
- * Teil dieser Datei, sondern von `validateCommissionModelVersion()`
- * (`commission-validator.ts`, AP4).
+ * ist mit AP4 vollstaendig implementiert. Publish/Aktivierung
+ * (`publishCommissionModelVersion()`, PRO-CommissionModel-Scope inkl.
+ * CommissionModel-Row-Lock, siehe Abschnitt 5 unten) ist mit AP5
+ * implementiert -- `createDraftCommissionModelVersion()` legt weiterhin NIE
+ * eine Version mit Status ACTIVE an, das passiert ausschliesslich ueber
+ * `publishCommissionModelVersion()`. Der Mengen-Invarianten-Check ueber alle
+ * Stufen einer Version (mind. eine Stufe mit `thresholdMinor = 0` bei
+ * TIERED) ist NICHT Teil dieser Datei, sondern von
+ * `validateCommissionModelVersion()` (`commission-validator.ts`, AP4) --
+ * wird von `publishCommissionModelVersion()` VOR jeder Publish-Transaktion
+ * aufgerufen.
  *
  * Verwendet ausschliesslich den tenant-gescopten `db`-Client
  * (`src/server/tenant/scoped-client.ts`) -- identisches Isolationsmuster wie
@@ -55,6 +60,7 @@ import {
   CommissionModelVersionInvalidError,
   CommissionModelVersionNotDraftError,
   CommissionModelVersionNotFoundError,
+  CommissionModelVersionPublishConflictError,
   CommissionTierNotFoundError,
 } from "./commission-admin-errors";
 import type {
@@ -63,6 +69,15 @@ import type {
   UpdateCommissionModelVersionFieldsInput,
   UpdateCommissionTierInput,
 } from "./commission-schemas";
+// AP5: `validateCommissionModelVersion()` lebt bewusst in einer eigenen
+// Datei (commission-validator.ts, AP4) und importiert ihrerseits
+// `commissionAdminInternal` aus DIESER Datei (siehe Re-Export am Dateiende)
+// -- das ist ein zyklischer Modul-Import, der hier funktioniert, weil beide
+// Seiten die importierten Bindungen ausschliesslich INNERHALB von
+// Funktionskoerpern verwenden (nie beim Modul-Laden selbst). Dieses Muster
+// ist bereits seit AP4 in CI verifiziert (commission-validator.ts wird dort
+// bereits erfolgreich importiert/verwendet).
+import { validateCommissionModelVersion } from "./commission-validator";
 
 type ScopedTransactionClient = Parameters<Parameters<ScopedPrismaClient["$transaction"]>[0]>[0];
 type QueryClient = ScopedTransactionClient;
@@ -739,6 +754,169 @@ export async function deleteCommissionTier(
       },
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// 5. Publish-Workflow (AP5, siehe PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 7,
+//    ChatGPT-GO 2026-08-21). Analog `publishDraftVersion()`
+//    (question-admin.ts, Phase 8 AP4) -- PRO-CommissionModel-Scope (nicht
+//    mandantenweit wie Phase 9s `publishRuleSetVersion()`), siehe
+//    Modulkommentar oben.
+//
+// LOCK-SCOPE (ChatGPTs explizite AP5-Vorgabe, staerker als der
+// urspruengliche Plantext "kein Tenant-Row-Lock"/Phase-8-Muster): parallele
+// Publishes DESSELBEN CommissionModel muessen sauber serialisiert werden --
+// dafuer sperrt diese Funktion als ERSTE Operation der Transaktion die
+// EINZELNE `commission_models`-Zeile (nicht die `tenants`-Zeile wie Phase 9,
+// da der Scope hier feiner granular ist: pro CommissionModel, nicht
+// mandantenweit). Diese Zeile existiert immer (Voraussetzung: `requireCommissionModel()`
+// oben hat sie bereits gefunden), analog dem Tenant-Row-Lock-Prinzip aus
+// Phase 9 AP5 (siehe `RULE_SET_VERSION_ACTIVE_NO_OVERLAP_CONSTRAINT`-Kommentar
+// in rule-admin.ts fuer den vollen Befund, warum ein reiner
+// EXCLUDE-Constraint bei fehlender vorheriger ACTIVE-Version allein nicht
+// ausreicht). Der bestehende DB-EXCLUDE-Constraint
+// `commission_model_versions_no_overlap` (siehe Migration
+// `20260731000000_init`, bereits PRO CommissionModel gescopt) bleibt
+// zusaetzlich als Backstop bestehen (Verteidigung in der Tiefe).
+//
+// Transaktionsreihenfolge:
+// 1. Serverseitige Revalidierung ueber `validateCommissionModelVersion()` VOR
+//    der Transaktion (rein lesend) -- ein Validierungsfehler darf keine
+//    Transaktion eroeffnen.
+// 2. Innerhalb EINER Transaktion:
+//    0. CommissionModel-Row-Lock (`SELECT id FROM commission_models WHERE
+//       id = $1 AND tenant_id = $2 FOR UPDATE`) -- MUSS die erste Operation
+//       sein, vor Schritt (a).
+//    a. Bisherige ACTIVE-Version DESSELBEN CommissionModel (falls vorhanden)
+//       zuerst auf EXPIRED setzen (`validTo = now`) -- MUSS vor (b)
+//       passieren, sonst schlaegt die EXCLUDE-Constraint sofort fehl.
+//    b. Ziel-Draft ueber `updateMany({where: {id, status: "DRAFT"}})` auf
+//       ACTIVE setzen -- `count !== 1` wirft (paralleler Publish-Versuch
+//       DERSELBEN Version), rollt die GESAMTE Transaktion inkl. Schritt (a)
+//       zurueck.
+//    c. `AuditLog`-Eintrag (ACTIVATE) in DERSELBEN Transaktion.
+// ---------------------------------------------------------------------------
+
+export interface PublishCommissionModelVersionResult {
+  version: CommissionModelVersionDetail;
+  /** ID der zuvor ACTIVE-Version DESSELBEN CommissionModel, die durch diesen Publish auf EXPIRED gesetzt wurde -- `null` beim allerersten Publish dieses CommissionModel. */
+  previousActiveVersionId: string | null;
+}
+
+/**
+ * Name des DB-EXCLUDE-Constraints (Migration `20260731000000_init`), der
+ * strukturell garantiert, dass niemals zwei `CommissionModelVersion`s
+ * DESSELBEN `CommissionModel` gleichzeitig ACTIVE/EXPIRED mit
+ * ueberlappendem Gueltigkeitszeitraum sind (PRO CommissionModel gescopt,
+ * nicht mandantenweit -- siehe `commission_model_versions_no_overlap` in
+ * `prisma/schema.prisma`-Modulkommentar). Analog
+ * `RULE_SET_VERSION_ACTIVE_NO_OVERLAP_CONSTRAINT` (Phase 9, rule-admin.ts).
+ */
+const COMMISSION_MODEL_VERSION_NO_OVERLAP_CONSTRAINT = "commission_model_versions_no_overlap";
+
+/**
+ * Uebersetzt NUR die bekannte, oben benannte EXCLUDE-Constraint-Verletzung
+ * in einen fachlichen `CommissionModelVersionPublishConflictError` (409).
+ * Jeder andere Fehler wird unveraendert weitergeworfen -- ChatGPT-Vorgabe
+ * (Phase 9 AP9, hier identisch angewendet): "keinen pauschalen
+ * PostgreSQL-/Prisma-Fehler auf 409 mappen". Exportiert (statt
+ * modul-privat), damit diese Mapping-Logik deterministisch per Unit-Test
+ * mit synthetischen Prisma-Fehlerobjekten abgedeckt werden kann -- analog
+ * `translatePublishError()` aus rule-admin.ts.
+ */
+export function translatePublishError(error: unknown, versionId: string): never {
+  const message =
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    error instanceof Prisma.PrismaClientUnknownRequestError
+      ? error.message
+      : undefined;
+  if (message?.includes(COMMISSION_MODEL_VERSION_NO_OVERLAP_CONSTRAINT)) {
+    throw new CommissionModelVersionPublishConflictError(versionId);
+  }
+  throw error;
+}
+
+export async function publishCommissionModelVersion(
+  commissionModelId: string,
+  versionId: string,
+): Promise<PublishCommissionModelVersionResult> {
+  await requireCommissionModel(db, commissionModelId);
+  await requireDraftCommissionModelVersion(db, commissionModelId, versionId);
+
+  // Serverseitige Revalidierung -- niemals nur auf eine vorherige
+  // Client-Validierung vertrauen (identisches Prinzip wie Phase 8/9).
+  await validateCommissionModelVersion(commissionModelId, versionId);
+
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+  const now = new Date();
+
+  let previousActiveVersionId: string | null;
+  try {
+    previousActiveVersionId = await db.$transaction(async (tx) => {
+      // Schritt 0: CommissionModel-Row-Lock (siehe Abschnittskommentar oben,
+      // ChatGPT-Vorgabe AP5) -- MUSS die erste Operation dieser Transaktion
+      // sein. Serialisiert alle Publish-Transaktionen DESSELBEN
+      // CommissionModel. Rohes SQL ist hier zulaessig: `commissionModelId`
+      // und `tenantId` stammen bereits aus dem validierten `TenantContext`
+      // bzw. wurden oben ueber `requireCommissionModel()` (tenant-gescopt)
+      // bestaetigt -- der zusaetzliche `tenant_id`-Filter im Raw-SQL ist
+      // trotzdem bewusst gesetzt (anders als bei Phase 9s `tenants`-Zeile,
+      // die ein GLOBAL_MODEL ist, ist `commission_models` mandantengebunden).
+      await tx.$queryRaw`SELECT id FROM commission_models WHERE id = ${commissionModelId}::uuid AND tenant_id = ${tenantId}::uuid FOR UPDATE`;
+
+      // PRO-CommissionModel-Scope: bewusst MIT commissionModelId-Filter
+      // (anders als Phase 9s mandantenweiter Scope) -- der tenant-gescopte
+      // Client injiziert die tenantId bereits automatisch.
+      const previousActive = await tx.commissionModelVersion.findFirst({
+        where: { commissionModelId, status: "ACTIVE", id: { not: versionId } },
+      });
+      if (previousActive) {
+        await tx.commissionModelVersion.update({
+          where: { id: previousActive.id },
+          data: { status: "EXPIRED", validTo: now },
+        });
+      }
+
+      const activated = await tx.commissionModelVersion.updateMany({
+        where: { id: versionId, status: "DRAFT" },
+        data: { status: "ACTIVE", validFrom: now, validTo: null },
+      });
+      if (activated.count !== 1) {
+        // Wurde zwischen der Vorab-Pruefung oben und hier bereits von einem
+        // parallelen Request veroeffentlicht -- ROLLBACK macht Schritt (a)
+        // rueckgaengig, kein Zwischenzustand persistiert.
+        throw new CommissionModelVersionNotDraftError(
+          versionId,
+          "bereits veroeffentlicht (paralleler Publish-Versuch)",
+        );
+      }
+
+      await tx.auditLog.create({
+        data: {
+          tenantId,
+          actorUserId,
+          action: "ACTIVATE",
+          entityType: "CommissionModelVersion",
+          entityId: versionId,
+          metadata: {
+            commissionModelId,
+            previousActiveVersionId: previousActive ? previousActive.id : null,
+          },
+        },
+      });
+
+      return previousActive ? previousActive.id : null;
+    });
+  } catch (error) {
+    // Faengt NUR den in translatePublishError() benannten, bekannten
+    // EXCLUDE-Constraint-Konflikt ab und uebersetzt ihn in eine fachliche
+    // 409-Antwort. Alle anderen Fehler werden unveraendert weitergeworfen.
+    translatePublishError(error, versionId);
+  }
+
+  const version = await getCommissionModelVersionDetail(commissionModelId, versionId);
+  return { version, previousActiveVersionId };
 }
 
 // Re-Export der internen Ladefunktionen unter einem Namespace-Objekt fuer

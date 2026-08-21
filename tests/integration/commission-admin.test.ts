@@ -34,6 +34,7 @@ import {
   deleteCommissionTier,
   getCommissionModelVersionDetail,
   listCommissionModels,
+  publishCommissionModelVersion,
   updateCommissionModelVersionFields,
   updateCommissionTier,
 } from "@/server/admin/commission-admin";
@@ -56,6 +57,7 @@ import {
   DELETE as deleteCommissionTierRoute,
   PATCH as patchCommissionTierRoute,
 } from "@/app/api/admin/commission-models/[id]/versions/[versionId]/tiers/[tierId]/route";
+import { POST as publishCommissionModelVersionRoute } from "@/app/api/admin/commission-models/[id]/versions/[versionId]/publish/route";
 
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 process.env.DEV_AUTH_SECRET ??= "ap2-commission-admin-test-secret-not-for-prod";
@@ -1572,6 +1574,490 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
           () => validateCommissionModelVersion(modelB, versionB),
         ),
       ).rejects.toThrow(CommissionModelNotFoundError);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // 6. Publish-Workflow (AP5, siehe PHASE_10_IMPLEMENTATION_PLAN.md
+  //    Abschnitt 7, ChatGPT-GO 2026-08-21). Analog
+  //    tests/integration/rule-admin-publish.test.ts (Phase 9 AP5) --
+  //    zentraler Unterschied: PRO-CommissionModel-Scope, kein
+  //    mandantenweiter Scope. Der "zentrale Regressionstest" ist daher
+  //    das GENAUE GEGENTEIL von Phase 9s zentralem Testfall: Modell A's
+  //    ACTIVE-Version DARF NICHT expiret werden, wenn Modell B's Draft
+  //    veroeffentlicht wird.
+  // -------------------------------------------------------------------
+  describe("6. Publish-Workflow (AP5) -- publishCommissionModelVersion()", () => {
+    it("erster Publish ueberhaupt (kein vorheriger ACTIVE-Datensatz DESSELBEN CommissionModel) -> previousActiveVersionId: null", async () => {
+      const tenantId = await createTenant("ap5-first-publish");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT" },
+      );
+
+      const result = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => publishCommissionModelVersion(commissionModelId, versionId),
+      );
+
+      expect(result.previousActiveVersionId).toBeNull();
+      expect(result.version.status).toBe("ACTIVE");
+
+      const versionRow = await rawClient.commissionModelVersion.findUnique({
+        where: { id: versionId },
+      });
+      expect(versionRow?.status).toBe("ACTIVE");
+      expect(versionRow?.validTo).toBeNull();
+    });
+
+    it("Publish expiret die bisherige ACTIVE-Version DESSELBEN CommissionModel", async () => {
+      const tenantId = await createTenant("ap5-expire-previous");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId: versionA } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "ACTIVE", validFrom: new Date("2026-01-01T00:00:00Z") },
+      );
+      const versionB = await rawClient.commissionModelVersion.create({
+        data: {
+          tenantId,
+          commissionModelId,
+          versionNumber: 2,
+          status: "DRAFT",
+          validFrom: new Date(),
+          validTo: null,
+          commissionType: "FLAT",
+          currency: "EUR",
+          commissionAmountMinor: 3_000,
+        },
+      });
+
+      const result = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => publishCommissionModelVersion(commissionModelId, versionB.id),
+      );
+
+      expect(result.previousActiveVersionId).toBe(versionA);
+
+      const rowA = await rawClient.commissionModelVersion.findUnique({ where: { id: versionA } });
+      const rowB = await rawClient.commissionModelVersion.findUnique({
+        where: { id: versionB.id },
+      });
+      expect(rowA?.status).toBe("EXPIRED");
+      expect(rowA?.validTo).not.toBeNull();
+      expect(rowB?.status).toBe("ACTIVE");
+      expect(rowB?.validTo).toBeNull();
+    });
+
+    it("Publish schreibt AuditLog-Eintrag (ACTIVATE) mit commissionModelId + previousActiveVersionId in metadata", async () => {
+      const tenantId = await createTenant("ap5-audit");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId: versionA } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "ACTIVE" },
+      );
+      const versionB = await rawClient.commissionModelVersion.create({
+        data: {
+          tenantId,
+          commissionModelId,
+          versionNumber: 2,
+          status: "DRAFT",
+          validFrom: new Date(),
+          validTo: null,
+          commissionType: "FLAT",
+          currency: "EUR",
+          commissionAmountMinor: 3_000,
+        },
+      });
+
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => publishCommissionModelVersion(commissionModelId, versionB.id),
+      );
+
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: {
+          tenantId,
+          entityType: "CommissionModelVersion",
+          entityId: versionB.id,
+          action: "ACTIVATE",
+        },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.metadata).toMatchObject({
+        commissionModelId,
+        previousActiveVersionId: versionA,
+      });
+    });
+
+    it("Publish einer nicht-DRAFT-Version -> CommissionModelVersionNotDraftError", async () => {
+      const tenantId = await createTenant("ap5-not-draft");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "ACTIVE" },
+      );
+
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishCommissionModelVersion(commissionModelId, versionId),
+        ),
+      ).rejects.toThrow(CommissionModelVersionNotDraftError);
+    });
+
+    it("Publish eines ungueltigen Drafts (FLAT ohne commissionAmountMinor/recurringCommissionAmountMinor) -> Validierungsfehler, KEINE Transaktion eroeffnet", async () => {
+      const tenantId = await createTenant("ap5-invalid-draft");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionAmountMinor: null },
+      );
+
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishCommissionModelVersion(commissionModelId, versionId),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+
+      const versionRow = await rawClient.commissionModelVersion.findUnique({
+        where: { id: versionId },
+      });
+      expect(versionRow?.status).toBe("DRAFT");
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "CommissionModelVersion", entityId: versionId },
+      });
+      expect(auditEntries).toHaveLength(0);
+    });
+
+    it("ZENTRALER REGRESSIONSTEST (ChatGPT-Vorgabe AP5, 2026-08-21): Cross-Model-Unabhaengigkeit -- Publish von Modell B's Draft laesst Modell A's ACTIVE-Version UNVERAENDERT (kein mandantenweiter Scope wie Phase 9)", async () => {
+      const tenantId = await createTenant("ap5-cross-model");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productA = await createProduct(tenantId, "pa");
+      const productB = await createProduct(tenantId, "pb");
+      const { commissionModelId: modelA, versionId: versionA } =
+        await createCommissionModelWithVersion(tenantId, productA, "cm-a", { status: "ACTIVE" });
+      const { commissionModelId: modelB, versionId: versionB } =
+        await createCommissionModelWithVersion(tenantId, productB, "cm-b", { status: "DRAFT" });
+
+      const result = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => publishCommissionModelVersion(modelB, versionB),
+      );
+
+      // Modell B's Publish hat KEINE vorherige ACTIVE-Version DESSELBEN
+      // Modells (das ist versionB's allererste Version) -- previousActiveVersionId
+      // muss null sein, NICHT versionA (das waere der mandantenweite
+      // Phase-9-Scope-Fehler).
+      expect(result.previousActiveVersionId).toBeNull();
+
+      const rowA = await rawClient.commissionModelVersion.findUnique({ where: { id: versionA } });
+      const rowB = await rawClient.commissionModelVersion.findUnique({ where: { id: versionB } });
+      expect(
+        rowA?.status,
+        "Modell A's ACTIVE-Version darf durch Modell B's Publish NICHT beruehrt werden",
+      ).toBe("ACTIVE");
+      expect(rowB?.status).toBe("ACTIVE");
+
+      expect(modelA).not.toBe(modelB);
+    });
+
+    it("Nebenlaeufigkeit: zwei ECHT parallele Publishes VERSCHIEDENER CommissionModels duerfen BEIDE unabhaengig erfolgreich sein (kein falscher Cross-Model-Lock)", async () => {
+      const tenantId = await createTenant("ap5-parallel-cross-model");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productX = await createProduct(tenantId, "px");
+      const productY = await createProduct(tenantId, "py");
+      const { commissionModelId: modelX, versionId: versionX } =
+        await createCommissionModelWithVersion(tenantId, productX, "cm-x", { status: "DRAFT" });
+      const { commissionModelId: modelY, versionId: versionY } =
+        await createCommissionModelWithVersion(tenantId, productY, "cm-y", { status: "DRAFT" });
+
+      // Bewusst KEIN sequentielles await -- beide gehoeren zu VERSCHIEDENEN
+      // CommissionModels, duerfen sich also NICHT gegenseitig serialisieren/
+      // blockieren (anders als Test unten fuer DASSELBE CommissionModel).
+      const results = await Promise.allSettled([
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishCommissionModelVersion(modelX, versionX),
+        ),
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishCommissionModelVersion(modelY, versionY),
+        ),
+      ]);
+
+      expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+
+      const rowX = await rawClient.commissionModelVersion.findUnique({ where: { id: versionX } });
+      const rowY = await rawClient.commissionModelVersion.findUnique({ where: { id: versionY } });
+      expect(rowX?.status).toBe("ACTIVE");
+      expect(rowY?.status).toBe("ACTIVE");
+    });
+
+    /**
+     * DIAGNOSE (analog Phase 9 AP9, "erst beweisen, dann fixen"): bevor der
+     * Nebenlaeufigkeitstest unten interpretiert wird, muss belegt sein, DASS
+     * der EXCLUDE-Constraint `commission_model_versions_no_overlap` in der
+     * CI-Postgres-Instanz ueberhaupt existiert (Migrationsstatus, bereits im
+     * init-Migrations-SQL enthalten, siehe
+     * prisma/migrations/20260731000000_init/migration.sql) und WIE er
+     * tatsaechlich lautet.
+     */
+    it("DIAGNOSE: EXCLUDE-Constraint commission_model_versions_no_overlap existiert und ist btree_gist-basiert", async () => {
+      const constraints = await rawClient.$queryRaw<Array<{ conname: string; definition: string }>>`
+        SELECT conname, pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+        WHERE conname = 'commission_model_versions_no_overlap'
+      `;
+      expect(constraints).toHaveLength(1);
+      const definition = constraints[0]?.definition ?? "";
+      expect(definition).toContain("EXCLUDE USING gist");
+      expect(definition).toContain("tenant_id");
+      expect(definition).toContain("commission_model_id");
+      expect(definition).toContain("&&");
+
+      const extensions = await rawClient.$queryRaw<Array<{ extname: string }>>`
+        SELECT extname FROM pg_extension WHERE extname = 'btree_gist'
+      `;
+      expect(extensions).toHaveLength(1);
+    });
+
+    it("Nebenlaeufigkeit: zwei ECHT parallele Publishes DESSELBEN CommissionModels -- CommissionModel-Row-Lock serialisiert korrekt: am Ende genau 1 ACTIVE-Version, jeder erfolgreiche Publish vollstaendig auditiert, keine Dateninkonsistenz (commission_model_versions_no_overlap EXCLUDE-Constraint als Backstop)", async () => {
+      const tenantId = await createTenant("ap5-parallel-same-model");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm-base",
+        {
+          status: "EXPIRED",
+          validFrom: new Date("2020-01-01T00:00:00Z"),
+          validTo: new Date("2020-06-01T00:00:00Z"),
+        },
+      );
+      const versionX = await rawClient.commissionModelVersion.create({
+        data: {
+          tenantId,
+          commissionModelId,
+          versionNumber: 2,
+          status: "DRAFT",
+          validFrom: new Date(),
+          validTo: null,
+          commissionType: "FLAT",
+          currency: "EUR",
+          commissionAmountMinor: 1_000,
+        },
+      });
+      const versionY = await rawClient.commissionModelVersion.create({
+        data: {
+          tenantId,
+          commissionModelId,
+          versionNumber: 3,
+          status: "DRAFT",
+          validFrom: new Date(),
+          validTo: null,
+          commissionType: "FLAT",
+          currency: "EUR",
+          commissionAmountMinor: 2_000,
+        },
+      });
+
+      // Bewusst KEIN sequentielles await -- beide Publish-Aufrufe werden ECHT
+      // gleichzeitig gestartet fuer DASSELBE CommissionModel, um den in
+      // commission-admin.ts dokumentierten CommissionModel-Row-Lock zu pruefen.
+      const results = await Promise.allSettled([
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishCommissionModelVersion(commissionModelId, versionX.id),
+        ),
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishCommissionModelVersion(commissionModelId, versionY.id),
+        ),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+
+      // DIAGNOSE zuerst erfassen (analog Phase 9 AP9, CI #56), BEVOR scharfe
+      // Assertions werfen koennen.
+      const finalActiveVersions = await rawClient.commissionModelVersion.findMany({
+        where: { tenantId, commissionModelId, status: "ACTIVE" },
+      });
+      const versionXRow = await rawClient.commissionModelVersion.findUniqueOrThrow({
+        where: { id: versionX.id },
+      });
+      const versionYRow = await rawClient.commissionModelVersion.findUniqueOrThrow({
+        where: { id: versionY.id },
+      });
+      const activateAuditsForDiagnosis = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "CommissionModelVersion", action: "ACTIVATE" },
+      });
+      const diagnosis = JSON.stringify(
+        {
+          fulfilledCount: fulfilled.length,
+          rejectedCount: rejected.length,
+          rejectedReasons: rejected.map((r) => (r.status === "rejected" ? String(r.reason) : null)),
+          activeCount: finalActiveVersions.length,
+          activeVersionIds: finalActiveVersions.map((v) => v.id),
+          versionXStatus: versionXRow.status,
+          versionYStatus: versionYRow.status,
+          activateAuditCount: activateAuditsForDiagnosis.length,
+        },
+        null,
+        2,
+      );
+
+      // Kernaussage (analog Phase 9 AP9-Entscheidung): Der CommissionModel-
+      // Row-Lock serialisiert alle Publish-Transaktionen DESSELBEN
+      // CommissionModel korrekt -- beide unabhaengigen, gueltigen Publish-
+      // Anfragen duerfen deshalb BEIDE erfolgreich sein (sequentiell
+      // serialisiert). Die verbindliche Invariante: am Ende existiert exakt
+      // eine ACTIVE-Version DIESES CommissionModel, und jeder tatsaechlich
+      // erfolgreiche Publish ist vollstaendig (und nur einmal) auditiert.
+      expect(finalActiveVersions, `Diagnose:\n${diagnosis}`).toHaveLength(1);
+      expect(activateAuditsForDiagnosis, `Diagnose:\n${diagnosis}`).toHaveLength(fulfilled.length);
+
+      // Bewusst KEINE Erwartung an eine feste Gewinner-Reihenfolge (X vs. Y).
+      const winnerVersionId = finalActiveVersions[0]?.id;
+      expect([versionX.id, versionY.id]).toContain(winnerVersionId);
+      const loserVersionId = winnerVersionId === versionX.id ? versionY.id : versionX.id;
+      const loserRow = await rawClient.commissionModelVersion.findUniqueOrThrow({
+        where: { id: loserVersionId },
+      });
+      if (fulfilled.length === 2) {
+        expect(loserRow.status, `Diagnose:\n${diagnosis}`).toBe("EXPIRED");
+      } else {
+        expect(loserRow.status, `Diagnose:\n${diagnosis}`).not.toBe("ACTIVE");
+      }
+
+      for (const r of rejected) {
+        if (r.status === "rejected") {
+          expect(r.reason).toBeInstanceOf(Error);
+        }
+      }
+    });
+
+    describe("HTTP-Kette", () => {
+      it("POST .../publish ohne config.commissions.publish -> 403 (config.commissions.edit reicht NICHT)", async () => {
+        const tenantId = await createTenant("ap5-http-403");
+        const actorUserId = await createUser(tenantId, "actor");
+        const productId = await createProduct(tenantId, "p");
+        const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+          tenantId,
+          productId,
+          "cm",
+          { status: "DRAFT" },
+        );
+        const token = createSessionToken({
+          ...baseSessionPayload(tenantId, actorUserId),
+          configPermissions: ["config.commissions.edit"],
+        });
+        const response = await publishCommissionModelVersionRoute(
+          requestWithCookie(
+            `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}/publish`,
+            token,
+            { method: "POST" },
+          ),
+          routeParams({ id: commissionModelId, versionId }),
+        );
+        expect(response.status).toBe(403);
+      });
+
+      it("POST .../publish mit config.commissions.publish -> 200, Status ACTIVE", async () => {
+        const tenantId = await createTenant("ap5-http-200");
+        const actorUserId = await createUser(tenantId, "actor");
+        const productId = await createProduct(tenantId, "p");
+        const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+          tenantId,
+          productId,
+          "cm",
+          { status: "DRAFT" },
+        );
+        const token = createSessionToken({
+          ...baseSessionPayload(tenantId, actorUserId),
+          configPermissions: ["config.commissions.publish"],
+        });
+        const response = await publishCommissionModelVersionRoute(
+          requestWithCookie(
+            `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}/publish`,
+            token,
+            { method: "POST" },
+          ),
+          routeParams({ id: commissionModelId, versionId }),
+        );
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body.version.status).toBe("ACTIVE");
+        expect(body.previousActiveVersionId).toBeNull();
+      });
+
+      it("POST .../publish fuer bereits ACTIVE Version -> 409", async () => {
+        const tenantId = await createTenant("ap5-http-409");
+        const actorUserId = await createUser(tenantId, "actor");
+        const productId = await createProduct(tenantId, "p");
+        const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+          tenantId,
+          productId,
+          "cm",
+          { status: "ACTIVE" },
+        );
+        const token = createSessionToken({
+          ...baseSessionPayload(tenantId, actorUserId),
+          configPermissions: ["config.commissions.publish"],
+        });
+        const response = await publishCommissionModelVersionRoute(
+          requestWithCookie(
+            `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}/publish`,
+            token,
+            { method: "POST" },
+          ),
+          routeParams({ id: commissionModelId, versionId }),
+        );
+        expect(response.status).toBe(409);
+      });
+
+      it("POST .../publish fuer ungueltigen Draft -> 422", async () => {
+        const tenantId = await createTenant("ap5-http-422");
+        const actorUserId = await createUser(tenantId, "actor");
+        const productId = await createProduct(tenantId, "p");
+        const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+          tenantId,
+          productId,
+          "cm",
+          { status: "DRAFT", commissionAmountMinor: null },
+        );
+        const token = createSessionToken({
+          ...baseSessionPayload(tenantId, actorUserId),
+          configPermissions: ["config.commissions.publish"],
+        });
+        const response = await publishCommissionModelVersionRoute(
+          requestWithCookie(
+            `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}/publish`,
+            token,
+            { method: "POST" },
+          ),
+          routeParams({ id: commissionModelId, versionId }),
+        );
+        expect(response.status).toBe(422);
+      });
     });
   });
 });
