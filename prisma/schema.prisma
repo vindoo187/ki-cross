@@ -596,6 +596,10 @@ model CommissionModelVersion {
   // Modulkommentar auf CommissionTier.
   tiers CommissionTier[]
 
+  // Phase 10 AP6: historische Referenz von DealItem.commissionModelVersionId
+  // (Deal-Historisierung). Siehe Modulkommentar auf DealItem.
+  dealItems DealItem[]
+
   @@unique([tenantId, id])
   @@unique([tenantId, commissionModelId, versionNumber])
   @@index([tenantId])
@@ -1045,19 +1049,37 @@ model Deal {
   @@map("deals")
 }
 
+// Phase 10 AP6 (Deal-Historisierung, siehe PHASE_10_IMPLEMENTATION_PLAN.md
+// Abschnitt 14 Punkt 1, ChatGPT-GO 2026-08-22): `commissionModelVersionId`
+// gehoert bewusst auf `DealItem` (nicht auf `DealFinancialSnapshot`, das nur
+// EIN aggregiertes Skalarfeld pro Deal traegt) -- ein Deal kann mehrere
+// Produkte mit UNTERSCHIEDLICHEN `CommissionModelVersion`-Zeilen enthalten,
+// das laesst sich nur auf Item-Ebene korrekt abbilden (ChatGPT-bestaetigte
+// Korrektur bereits im Implementation Plan festgehalten, siehe
+// PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 0). Nullable, da nicht jedes
+// Produkt zwingend eine aktive `CommissionModelVersion` besitzt (analog
+// `ProductCostVersion` in financial-snapshot.ts -- ein fehlender Eintrag ist
+// fachlich "keine Provision", kein Fehler). Wird EINMALIG beim Anlegen des
+// `DealItem` in `closeDeal()` gesetzt und NIE nachtraeglich veraendert
+// (kein UPDATE-Pfad auf `DealItem` existiert) -- ein spaeteres Publish
+// einer neuen `CommissionModelVersion` kann diese historische Referenz
+// dadurch strukturell nicht mehr beeinflussen.
 model DealItem {
-  id               String   @id @default(uuid()) @db.Uuid
-  tenantId         String   @map("tenant_id") @db.Uuid
-  dealId           String   @map("deal_id") @db.Uuid
-  productVersionId String   @map("product_version_id") @db.Uuid
-  quantity         Int      @default(1)
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                       String   @id @default(uuid()) @db.Uuid
+  tenantId                 String   @map("tenant_id") @db.Uuid
+  dealId                   String   @map("deal_id") @db.Uuid
+  productVersionId         String   @map("product_version_id") @db.Uuid
+  commissionModelVersionId String?  @map("commission_model_version_id") @db.Uuid
+  quantity                 Int      @default(1)
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  deal           Deal           @relation(fields: [tenantId, dealId], references: [tenantId, id], onDelete: Restrict)
-  productVersion ProductVersion @relation(fields: [tenantId, productVersionId], references: [tenantId, id], onDelete: Restrict)
+  deal                   Deal                    @relation(fields: [tenantId, dealId], references: [tenantId, id], onDelete: Restrict)
+  productVersion         ProductVersion          @relation(fields: [tenantId, productVersionId], references: [tenantId, id], onDelete: Restrict)
+  commissionModelVersion CommissionModelVersion? @relation(fields: [tenantId, commissionModelVersionId], references: [tenantId, id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([dealId])
+  @@index([tenantId, commissionModelVersionId])
   @@map("deal_items")
 }
 

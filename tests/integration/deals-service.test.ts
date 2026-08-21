@@ -20,6 +20,11 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runWithTenantContext } from "@/server/tenant/context";
 import { closeDeal } from "@/server/deals/service";
+import { publishCommissionModelVersion } from "@/server/admin/commission-admin";
+import {
+  computeCommissionAmountMinor,
+  type CommissionModelVersionRow,
+} from "@/server/pricing/commission";
 import {
   DealAlreadyExistsForSessionError,
   DealConsultationSessionNotFoundError,
@@ -191,7 +196,7 @@ describe.skipIf(!hasDatabaseUrl)("closeDeal() (Integrationstest, echte Postgres-
     const model = await rawClient.commissionModel.create({
       data: { tenantId, productId, name: `Provision ${productId}` },
     });
-    await rawClient.commissionModelVersion.create({
+    const version = await rawClient.commissionModelVersion.create({
       data: {
         tenantId,
         commissionModelId: model.id,
@@ -204,6 +209,19 @@ describe.skipIf(!hasDatabaseUrl)("closeDeal() (Integrationstest, echte Postgres-
         commissionAmountMinor: amountMinor,
       },
     });
+    // Phase 10 AP6: Rueckgabe der IDs, damit Tests die tatsaechlich
+    // aufgeloeste CommissionModelVersion gegen DealItem.commissionModelVersionId
+    // verifizieren koennen (bestehende Aufrufer ignorieren den Rueckgabewert
+    // unveraendert, rein additive Erweiterung).
+    return { commissionModelId: model.id, commissionModelVersionId: version.id };
+  }
+
+  /** Phase 10 AP6: fuer publishCommissionModelVersion() (Audit-FK auf User). */
+  async function createUser(tenantId: string, key: string) {
+    const user = await rawClient.user.create({
+      data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+    });
+    return user.id;
   }
 
   function asEmployee<T>(tenantId: string, employeeId: string, fn: () => Promise<T>): Promise<T> {
@@ -219,6 +237,8 @@ describe.skipIf(!hasDatabaseUrl)("closeDeal() (Integrationstest, echte Postgres-
   let questionnaireVersionAId: string;
   let productAId: string;
   let productVersionAId: string;
+  let commissionModelAId: string;
+  let commissionModelVersionAId: string;
 
   let tenantBId: string;
   let employeeBId: string;
@@ -244,7 +264,9 @@ describe.skipIf(!hasDatabaseUrl)("closeDeal() (Integrationstest, echte Postgres-
     productAId = productVersion.productId;
     productVersionAId = productVersion.productVersionId;
     await createProductCostVersion(tenantAId, productAId, 2_000);
-    await createCommissionModelVersion(tenantAId, productAId, 300);
+    const commissionA = await createCommissionModelVersion(tenantAId, productAId, 300);
+    commissionModelAId = commissionA.commissionModelId;
+    commissionModelVersionAId = commissionA.commissionModelVersionId;
 
     const b = await createTenant("deals-b");
     tenantBId = b.tenantId;
@@ -539,5 +561,256 @@ describe.skipIf(!hasDatabaseUrl)("closeDeal() (Integrationstest, echte Postgres-
         data: { contributionMarginMinor: 0 },
       }),
     ).rejects.toThrow();
+  });
+
+  // -------------------------------------------------------------------
+  // Phase 10 AP6 -- Deal-Historisierung (DealItem.commissionModelVersionId),
+  // siehe PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 14 Punkt 1, ChatGPT-GO
+  // 2026-08-22.
+  // -------------------------------------------------------------------
+
+  it("closeDeal() setzt DealItem.commissionModelVersionId auf die zum closedAt aufgeloeste CommissionModelVersion", async () => {
+    const sessionId = await createSession(
+      tenantAId,
+      storeAId,
+      employeeAId,
+      questionnaireVersionAId,
+    );
+    const result = await asEmployee(tenantAId, employeeAId, () =>
+      closeDeal({
+        consultationSessionId: sessionId,
+        items: [{ productVersionId: productVersionAId, quantity: 1 }],
+      }),
+    );
+    const dealItems = await rawClient.dealItem.findMany({ where: { dealId: result.dealId } });
+    expect(dealItems).toHaveLength(1);
+    expect(dealItems[0]!.commissionModelVersionId).toBe(commissionModelVersionAId);
+  });
+
+  it("Deal mit mehreren Items UNTERSCHIEDLICHER CommissionModelVersions -- jedes DealItem erhaelt seine EIGENE, korrekte Zuordnung (inkl. NULL fuer ein Produkt ohne Provisionsmodell)", async () => {
+    // Zweites Produkt MIT eigener, anderer CommissionModelVersion.
+    const providerC = await createProvider("deals-c");
+    const categoryC = await createCategory(tenantAId, "deals-c");
+    const productVersionC = await createProductVersion(
+      tenantAId,
+      categoryC,
+      providerC,
+      "deals-c-tarif",
+      2_000,
+      8_000,
+    );
+    const commissionC = await createCommissionModelVersion(
+      tenantAId,
+      productVersionC.productId,
+      777,
+    );
+
+    // Drittes Produkt OHNE jedes Provisionsmodell -- commissionModelVersionId
+    // muss dafuer NULL bleiben (fachlich "keine Provision", kein Fehler).
+    const providerD = await createProvider("deals-d");
+    const categoryD = await createCategory(tenantAId, "deals-d");
+    const productVersionD = await createProductVersion(
+      tenantAId,
+      categoryD,
+      providerD,
+      "deals-d-tarif",
+      1_500,
+      4_000,
+    );
+
+    const sessionId = await createSession(
+      tenantAId,
+      storeAId,
+      employeeAId,
+      questionnaireVersionAId,
+    );
+    const result = await asEmployee(tenantAId, employeeAId, () =>
+      closeDeal({
+        consultationSessionId: sessionId,
+        items: [
+          { productVersionId: productVersionAId, quantity: 1 },
+          { productVersionId: productVersionC.productVersionId, quantity: 1 },
+          { productVersionId: productVersionD.productVersionId, quantity: 1 },
+        ],
+      }),
+    );
+
+    const dealItems = await rawClient.dealItem.findMany({ where: { dealId: result.dealId } });
+    expect(dealItems).toHaveLength(3);
+    const byProductVersion = new Map(dealItems.map((i) => [i.productVersionId, i]));
+    expect(byProductVersion.get(productVersionAId)?.commissionModelVersionId).toBe(
+      commissionModelVersionAId,
+    );
+    expect(byProductVersion.get(productVersionC.productVersionId)?.commissionModelVersionId).toBe(
+      commissionC.commissionModelVersionId,
+    );
+    expect(byProductVersion.get(productVersionD.productVersionId)?.commissionModelVersionId).toBe(
+      null,
+    );
+    // Bekraeftigt explizit, dass die Items unterschiedliche Versionen
+    // referenzieren -- kein einzelnes, gemeinsames Skalarfeld auf dem Deal
+    // koennte das abbilden (ChatGPTs Begruendung fuer commissionModelVersionId
+    // auf DealItem statt DealFinancialSnapshot).
+    expect(commissionC.commissionModelVersionId).not.toBe(commissionModelVersionAId);
+  });
+
+  it("ZENTRALER REGRESSIONSTEST (ChatGPT-Vorgabe AP6, 2026-08-22): ein SPAETERES Publish einer neuen CommissionModelVersion aendert die historische commissionModelVersionId eines bereits abgeschlossenen Deals NICHT", async () => {
+    const actorUserId = await createUser(tenantAId, "publish-actor");
+
+    const sessionId = await createSession(
+      tenantAId,
+      storeAId,
+      employeeAId,
+      questionnaireVersionAId,
+    );
+    const result = await asEmployee(tenantAId, employeeAId, () =>
+      closeDeal({
+        consultationSessionId: sessionId,
+        items: [{ productVersionId: productVersionAId, quantity: 1 }],
+      }),
+    );
+    const dealItemsBefore = await rawClient.dealItem.findMany({
+      where: { dealId: result.dealId },
+    });
+    expect(dealItemsBefore[0]!.commissionModelVersionId).toBe(commissionModelVersionAId);
+
+    // Neue DRAFT-Version DESSELBEN CommissionModel anlegen und veroeffentlichen
+    // -- das MUSS die alte ACTIVE-Version (commissionModelVersionAId) auf
+    // EXPIRED setzen, siehe publishCommissionModelVersion() (Phase 10 AP5).
+    const newDraft = await rawClient.commissionModelVersion.create({
+      data: {
+        tenantId: tenantAId,
+        commissionModelId: commissionModelAId,
+        versionNumber: 2,
+        status: "DRAFT",
+        validFrom: new Date(),
+        validTo: null,
+        commissionType: "FLAT",
+        currency: "EUR",
+        commissionAmountMinor: 999,
+      },
+    });
+
+    const publishResult = await runWithTenantContext(
+      { tenantId: tenantAId, userId: actorUserId, roles: [], managementScope: null },
+      () => publishCommissionModelVersion(commissionModelAId, newDraft.id),
+    );
+    expect(publishResult.previousActiveVersionId).toBe(commissionModelVersionAId);
+
+    const oldVersionRow = await rawClient.commissionModelVersion.findUnique({
+      where: { id: commissionModelVersionAId },
+    });
+    expect(oldVersionRow?.status).toBe("EXPIRED");
+
+    // Die historische Referenz des BEREITS abgeschlossenen Deals darf durch
+    // dieses Publish NICHT veraendert werden -- es gibt keinen UPDATE-Pfad
+    // auf DealItem, der das koennte (kein Code, der dealItem.update()
+    // aufruft, siehe deals/service.ts -- rein strukturell ausgeschlossen).
+    const dealItemsAfter = await rawClient.dealItem.findMany({ where: { dealId: result.dealId } });
+    expect(dealItemsAfter[0]!.commissionModelVersionId).toBe(commissionModelVersionAId);
+    expect(dealItemsAfter[0]!.commissionModelVersionId).not.toBe(newDraft.id);
+
+    // Ein NEUER Deal ab jetzt muss dagegen die NEUE ACTIVE-Version verwenden.
+    const newSessionId = await createSession(
+      tenantAId,
+      storeAId,
+      employeeAId,
+      questionnaireVersionAId,
+    );
+    const newResult = await asEmployee(tenantAId, employeeAId, () =>
+      closeDeal({
+        consultationSessionId: newSessionId,
+        items: [{ productVersionId: productVersionAId, quantity: 1 }],
+      }),
+    );
+    const newDealItems = await rawClient.dealItem.findMany({
+      where: { dealId: newResult.dealId },
+    });
+    expect(newDealItems[0]!.commissionModelVersionId).toBe(newDraft.id);
+  });
+
+  it("TIERED-CommissionModelVersion bleibt ueber die gespeicherte commissionModelVersionId reproduzierbar (nachtraeglich neu berechneter Betrag == im DealFinancialSnapshot gespeicherter Betrag)", async () => {
+    const providerE = await createProvider("deals-e");
+    const categoryE = await createCategory(tenantAId, "deals-e");
+    const productVersionE = await createProductVersion(
+      tenantAId,
+      categoryE,
+      providerE,
+      "deals-e-tarif",
+      0,
+      3_000,
+    );
+    const modelE = await rawClient.commissionModel.create({
+      data: { tenantId: tenantAId, productId: productVersionE.productId, name: "Provision-TIERED" },
+    });
+    const versionE = await rawClient.commissionModelVersion.create({
+      data: {
+        tenantId: tenantAId,
+        commissionModelId: modelE.id,
+        versionNumber: 1,
+        status: "ACTIVE",
+        validFrom: FROM,
+        validTo: null,
+        commissionType: "TIERED",
+        currency: "EUR",
+      },
+    });
+    await rawClient.commissionTier.create({
+      data: {
+        tenantId: tenantAId,
+        commissionModelVersionId: versionE.id,
+        thresholdMinor: 0,
+        tierAmountMinor: 250,
+        sortOrder: 0,
+      },
+    });
+
+    const sessionId = await createSession(
+      tenantAId,
+      storeAId,
+      employeeAId,
+      questionnaireVersionAId,
+    );
+    const result = await asEmployee(tenantAId, employeeAId, () =>
+      closeDeal({
+        consultationSessionId: sessionId,
+        items: [{ productVersionId: productVersionE.productVersionId, quantity: 1 }],
+      }),
+    );
+
+    const dealItems = await rawClient.dealItem.findMany({ where: { dealId: result.dealId } });
+    expect(dealItems[0]!.commissionModelVersionId).toBe(versionE.id);
+
+    const snapshot = await rawClient.dealFinancialSnapshot.findUnique({
+      where: { tenantId_dealId: { tenantId: tenantAId, dealId: result.dealId } },
+    });
+    expect(snapshot!.commissionAmountMinor).toBe(250);
+
+    // Reproduzierbarkeit: die gespeicherte commissionModelVersionId erlaubt
+    // es, die exakt gueltige Stufe erneut nachzuvollziehen -- OHNE auf die
+    // (potenziell inzwischen ueberholte) "aktuell aktive" Version angewiesen
+    // zu sein.
+    const historicalVersion = await rawClient.commissionModelVersion.findUniqueOrThrow({
+      where: { id: dealItems[0]!.commissionModelVersionId! },
+    });
+    const historicalTiers = await rawClient.commissionTier.findMany({
+      where: { commissionModelVersionId: historicalVersion.id },
+    });
+    const reconstructedRow: CommissionModelVersionRow = {
+      id: historicalVersion.id,
+      productId: productVersionE.productId,
+      validFrom: historicalVersion.validFrom,
+      commissionType: historicalVersion.commissionType,
+      commissionAmountMinor: historicalVersion.commissionAmountMinor,
+      commissionPercentageBasisPoints: historicalVersion.commissionPercentageBasisPoints,
+      recurringCommissionAmountMinor: historicalVersion.recurringCommissionAmountMinor,
+      tiers: historicalTiers.map((t) => ({
+        thresholdMinor: t.thresholdMinor,
+        tierAmountMinor: t.tierAmountMinor,
+        tierPercentageBasisPoints: t.tierPercentageBasisPoints,
+      })),
+    };
+    const recomputed = computeCommissionAmountMinor(reconstructedRow, 3_000, null);
+    expect(recomputed).toBe(snapshot!.commissionAmountMinor);
   });
 });

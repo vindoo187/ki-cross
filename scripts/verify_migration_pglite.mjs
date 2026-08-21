@@ -13,6 +13,7 @@ const MIGRATIONS = [
   "prisma/migrations/20260818090000_user_password_hash/migration.sql",
   "prisma/migrations/20260818140000_audit_action_delete/migration.sql",
   "prisma/migrations/20260821190000_commission_tiers/migration.sql",
+  "prisma/migrations/20260822000000_deal_item_commission_model_version/migration.sql",
 ];
 
 const db = new PGlite({ extensions: { btree_gist } });
@@ -282,8 +283,8 @@ await db.query(
 
 const dealItemId = uuid();
 await db.query(
-  `INSERT INTO deal_items (id, tenant_id, deal_id, product_version_id, quantity) VALUES ($1,$2,$3,$4,1)`,
-  [dealItemId, tenantId, dealId, productVersionId],
+  `INSERT INTO deal_items (id, tenant_id, deal_id, product_version_id, commission_model_version_id, quantity) VALUES ($1,$2,$3,$4,$5,1)`,
+  [dealItemId, tenantId, dealId, productVersionId, commissionModelVersionId],
 );
 
 const dealFinancialSnapshotId = uuid();
@@ -571,13 +572,40 @@ await expectRejected(
     ),
 );
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 10 AP6: deal_items.commission_model_version_id --
+// nullable Spalte (bestehende deal_items-Zeile oben wurde bereits MIT
+// gesetztem Wert angelegt, siehe Deal-Erfassung-Block); hier zusaetzlich:
+// eine zweite Zeile OHNE Wert (NULL bleibt gueltig, "kein Provisionsmodell
+// fuer dieses Produkt") sowie die FK-Durchsetzung gegen eine nicht
+// existierende CommissionModelVersion.
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-10-AP6-deal_items.commission_model_version_id ==");
+
+const dealItemWithoutCommissionId = uuid();
+await db.query(
+  `INSERT INTO deal_items (id, tenant_id, deal_id, product_version_id, commission_model_version_id, quantity) VALUES ($1,$2,$3,$4,NULL,1)`,
+  [dealItemWithoutCommissionId, tenantId, dealId, productVersionId],
+);
+console.log("OK: deal_items-Zeile OHNE commission_model_version_id (NULL) end-to-end angelegt.");
+
+await expectRejected(
+  "commission_model_version_id auf nicht existierende Version (deal_items_tenant_id_commission_model_version_id_fkey)",
+  () =>
+    db.query(
+      `INSERT INTO deal_items (id, tenant_id, deal_id, product_version_id, commission_model_version_id, quantity) VALUES ($1,$2,$3,$4,$5,1)`,
+      [uuid(), tenantId, dealId, productVersionId, uuid()],
+    ),
+);
+
 if (failures > 0) {
   console.error(`\n${failures} Smoke-Test-Pruefung(en) FEHLGESCHLAGEN.`);
   process.exit(1);
 }
 
 console.log(
-  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8 + PHASE 10 AP4) ERFOLGREICH.",
+  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8 + PHASE 10 AP4 + PHASE 10 AP6) ERFOLGREICH.",
 );
 
 await db.close();

@@ -21,6 +21,18 @@
  * geschriebenen Snapshot dadurch nie (historische Stabilitaet, ChatGPT-
  * Vorgabe im Plan-Review).
  *
+ * Phase 10 AP6 (Deal-Historisierung, ChatGPT-GO 2026-08-22): zusaetzlich
+ * zum aggregierten `DealFinancialSnapshot` wird JEDEM `DealItem` die
+ * tatsaechlich zum Abschlusszeitpunkt aufgeloeste `CommissionModelVersion`
+ * (`commissionModelVersionId`, nullable) zugeordnet -- dieselbe Aufloesung,
+ * dieselbe Transaktion, kein separater Schreibvorgang. Ein Deal mit
+ * mehreren Produkten kann dadurch je Position unterschiedliche
+ * `CommissionModelVersion`s referenzieren. Diese Referenz wird NIE
+ * nachtraeglich veraendert (kein UPDATE-Pfad auf `DealItem`) -- ein
+ * spaeteres Publish (`publishCommissionModelVersion()`, Phase 10 AP5) kann
+ * die historische Zuordnung eines bereits abgeschlossenen Deals dadurch
+ * strukturell nicht mehr beeinflussen.
+ *
  * SANDBOX-VERIFIKATIONSLUECKE (rein tooling-bedingt): siehe Modulkommentar
  * in questionnaire/service.ts -- identische Fehlerklasse, nur in CI gegen
  * einen echten @prisma/client verifizierbar.
@@ -201,12 +213,31 @@ export async function closeDeal(input: CloseDealInput): Promise<CloseDealResult>
       });
 
       await tx.dealItem.createMany({
-        data: input.items.map((item) => ({
-          tenantId,
-          dealId: createdDeal.id,
-          productVersionId: item.productVersionId,
-          quantity: item.quantity,
-        })),
+        data: input.items.map((item) => {
+          const version = productVersionById.get(item.productVersionId);
+          // Phase 10 AP6 (Deal-Historisierung, ChatGPT-GO 2026-08-22):
+          // dieselbe, bereits oben (VOR der Transaktion) zum `closedAt`-
+          // Zeitpunkt aufgeloeste `commissionRowByProductId`-Map wird hier
+          // EINMALIG in die neu angelegte DealItem-Zeile geschrieben --
+          // atomar mit der Provisionsberechnung (kein separater
+          // Schreibvorgang, keine erneute Aufloesung). `null`, falls fuer
+          // das Produkt keine aktive CommissionModelVersion existiert
+          // (fachlich "keine Provision", kein Fehler, siehe
+          // computeDealFinancialSnapshot()-Modulkommentar). Diese
+          // Zuordnung wird NIE nachtraeglich veraendert -- es gibt keinen
+          // UPDATE-Pfad auf DealItem, ein spaeteres Publish einer neuen
+          // CommissionModelVersion kann die historische Referenz eines
+          // bereits abgeschlossenen Deals dadurch strukturell nicht mehr
+          // beeinflussen.
+          const commissionRow = version ? commissionRowByProductId.get(version.productId) : null;
+          return {
+            tenantId,
+            dealId: createdDeal.id,
+            productVersionId: item.productVersionId,
+            commissionModelVersionId: commissionRow ? commissionRow.id : null,
+            quantity: item.quantity,
+          };
+        }),
       });
 
       await tx.dealFinancialSnapshot.create({
