@@ -813,4 +813,104 @@ describe.skipIf(!hasDatabaseUrl)("closeDeal() (Integrationstest, echte Postgres-
     const recomputed = computeCommissionAmountMinor(reconstructedRow, 3_000, null);
     expect(recomputed).toBe(snapshot!.commissionAmountMinor);
   });
+
+  it(
+    "ZENTRALER AP7-REPRODUZIERBARKEITSTEST (ChatGPT-Vorgabe, 2026-08-22): " +
+      "Version 1 -> Deal schliessen -> Version 2 publishen -> Version 1 UNVERAENDERT " +
+      "rekonstruieren -> gespeicherte Provision exakt reproduzieren, OHNE die aktuell " +
+      "ACTIVE-Version zu benoetigen",
+    async () => {
+      const actorUserId = await createUser(tenantAId, "ap7-repro-actor");
+      const providerF = await createProvider("deals-f");
+      const categoryF = await createCategory(tenantAId, "deals-f");
+      const productVersionF = await createProductVersion(
+        tenantAId,
+        categoryF,
+        providerF,
+        "deals-f-tarif",
+        0,
+        1_500,
+      );
+      const commissionF = await createCommissionModelVersion(
+        tenantAId,
+        productVersionF.productId,
+        400,
+      );
+
+      // Version 1 -> Deal schliessen.
+      const sessionId = await createSession(
+        tenantAId,
+        storeAId,
+        employeeAId,
+        questionnaireVersionAId,
+      );
+      const result = await asEmployee(tenantAId, employeeAId, () =>
+        closeDeal({
+          consultationSessionId: sessionId,
+          items: [{ productVersionId: productVersionF.productVersionId, quantity: 1 }],
+        }),
+      );
+
+      const dealItems = await rawClient.dealItem.findMany({ where: { dealId: result.dealId } });
+      expect(dealItems[0]!.commissionModelVersionId).toBe(commissionF.commissionModelVersionId);
+
+      const snapshot = await rawClient.dealFinancialSnapshot.findUnique({
+        where: { tenantId_dealId: { tenantId: tenantAId, dealId: result.dealId } },
+      });
+      expect(snapshot!.commissionAmountMinor).toBe(400);
+
+      // Version 2 anlegen und publishen -- das setzt Version 1 auf EXPIRED.
+      const newDraft = await rawClient.commissionModelVersion.create({
+        data: {
+          tenantId: tenantAId,
+          commissionModelId: commissionF.commissionModelId,
+          versionNumber: 2,
+          status: "DRAFT",
+          validFrom: new Date(),
+          validTo: null,
+          commissionType: "FLAT",
+          currency: "EUR",
+          commissionAmountMinor: 777,
+        },
+      });
+      await runWithTenantContext(
+        { tenantId: tenantAId, userId: actorUserId, roles: [], managementScope: null },
+        () => publishCommissionModelVersion(commissionF.commissionModelId, newDraft.id),
+      );
+
+      // Version 1 rekonstruieren -- AUSSCHLIESSLICH ueber die auf dem DealItem
+      // gespeicherte commissionModelVersionId, NICHT ueber eine Abfrage nach
+      // der "aktuell aktiven" Version (die ist jetzt Version 2).
+      const historicalVersion = await rawClient.commissionModelVersion.findUniqueOrThrow({
+        where: { id: dealItems[0]!.commissionModelVersionId! },
+      });
+      expect(historicalVersion.id).toBe(commissionF.commissionModelVersionId);
+      expect(historicalVersion.id).not.toBe(newDraft.id);
+      // Beweis, dass die rekonstruierte Version NICHT mehr die aktuell aktive
+      // ist -- die Reproduzierbarkeit haengt also strukturell nicht vom
+      // aktuellen ACTIVE-Status ab.
+      expect(historicalVersion.status).toBe("EXPIRED");
+
+      const reconstructedRow: CommissionModelVersionRow = {
+        id: historicalVersion.id,
+        productId: productVersionF.productId,
+        validFrom: historicalVersion.validFrom,
+        commissionType: historicalVersion.commissionType,
+        commissionAmountMinor: historicalVersion.commissionAmountMinor,
+        commissionPercentageBasisPoints: historicalVersion.commissionPercentageBasisPoints,
+        recurringCommissionAmountMinor: historicalVersion.recurringCommissionAmountMinor,
+        tiers: [],
+      };
+      // FLAT-Berechnung analog computeDealFinancialSnapshot(): die
+      // einmalige Provision ist der dritte Parameter (commissionAmountMinor
+      // der historischen Version), quantity ist hier 1.
+      const recomputed = computeCommissionAmountMinor(
+        reconstructedRow,
+        1_500,
+        reconstructedRow.commissionAmountMinor,
+      );
+      expect(recomputed).toBe(snapshot!.commissionAmountMinor);
+      expect(recomputed).toBe(400);
+    },
+  );
 });

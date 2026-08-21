@@ -2060,4 +2060,122 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       });
     });
   });
+
+  // -------------------------------------------------------------------
+  // 7. AP7 -- Audit-Atomaritaet gegen tatsaechliche Fehlerpfade +
+  //    Cross-Tenant-Isolation des Publish-Workflows (ChatGPT-GO 2026-08-22:
+  //    "Mutation + Audit in derselben Transaktion, fehlgeschlagene Mutation
+  //    -> kein Audit"; "Cross-Tenant-ID -> sauber 404/403 gemaess
+  //    bestehendem Muster"). Kein neuer Feature-Scope -- gezielte
+  //    Beweisfuehrung gegen die bereits in AP1-AP5 implementierten
+  //    Transaktionsbloecke (siehe commission-admin.ts).
+  // -------------------------------------------------------------------
+  describe("7. AP7 -- Audit-Atomaritaet + Cross-Tenant", () => {
+    it("createCommissionTier() P2002-Konflikt (doppeltes thresholdMinor): die fehlgeschlagene zweite Mutation schreibt KEINEN weiteren AuditLog-Eintrag (Rollback der gesamten Transaktion inkl. Audit)", async () => {
+      const tenantId = await createTenant("ap7-audit-atomicity");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      // Zweiter Versuch mit demselben thresholdMinor -> P2002 -> 422,
+      // die GESAMTE Transaktion (inkl. des versuchten AuditLog.create())
+      // wird zurueckgerollt.
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            createCommissionTier(commissionModelId, versionId, {
+              thresholdMinor: 0,
+              tierAmountMinor: 200,
+              sortOrder: 1,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "CommissionTier" },
+      });
+      // Genau EIN Eintrag -- vom ERSTEN, erfolgreichen createCommissionTier()-
+      // Aufruf. Der fehlgeschlagene zweite Versuch hat keine Spur hinterlassen.
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.action).toBe("CREATE");
+
+      // Auch auf DB-Ebene bestaetigt: nur eine einzige CommissionTier-Zeile
+      // existiert tatsaechlich (die zweite wurde nie persistiert).
+      const tiers = await rawClient.commissionTier.findMany({
+        where: { tenantId, commissionModelVersionId: versionId },
+      });
+      expect(tiers).toHaveLength(1);
+    });
+
+    it("publishCommissionModelVersion() gegen einen ungueltigen Draft: die Revalidierung schlaegt VOR jeder Transaktion fehl -> KEIN AuditLog-Eintrag (ACTIVATE) wird geschrieben", async () => {
+      const tenantId = await createTenant("ap7-audit-publish-invalid");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionAmountMinor: null },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => publishCommissionModelVersion(commissionModelId, versionId),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "CommissionModelVersion", entityId: versionId },
+      });
+      expect(auditEntries).toHaveLength(0);
+
+      const versionRow = await rawClient.commissionModelVersion.findUnique({
+        where: { id: versionId },
+      });
+      expect(versionRow?.status).toBe("DRAFT");
+    });
+
+    it("publishCommissionModelVersion() mit commissionModelId aus FREMDEM Mandanten -> CommissionModelNotFoundError, kein Zustand veraendert (Tenant-Isolation, analog validateCommissionModelVersion())", async () => {
+      const tenantA = await createTenant("ap7-cross-tenant-a");
+      const tenantB = await createTenant("ap7-cross-tenant-b");
+      const actorUserId = await createUser(tenantA, "actor");
+      const productBId = await createProduct(tenantB, "p");
+      const { commissionModelId: commissionModelBId, versionId: versionBId } =
+        await createCommissionModelWithVersion(tenantB, productBId, "cm", { status: "DRAFT" });
+
+      // Im TenantContext von Tenant A wird versucht, ein CommissionModel von
+      // Tenant B zu publishen -- der tenant-gescopte `db`-Client liefert dafuer
+      // strukturell 0 Treffer, unabhaengig davon, dass die IDs real existieren.
+      await expect(
+        runWithTenantContext(
+          { tenantId: tenantA, userId: actorUserId, roles: [], managementScope: null },
+          () => publishCommissionModelVersion(commissionModelBId, versionBId),
+        ),
+      ).rejects.toThrow(CommissionModelNotFoundError);
+
+      // Der Zustand in Tenant B bleibt vollstaendig unveraendert.
+      const versionRow = await rawClient.commissionModelVersion.findUnique({
+        where: { id: versionBId },
+      });
+      expect(versionRow?.status).toBe("DRAFT");
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId: tenantB, entityType: "CommissionModelVersion", entityId: versionBId },
+      });
+      expect(auditEntries).toHaveLength(0);
+    });
+  });
 });
