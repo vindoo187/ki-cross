@@ -39,6 +39,13 @@ export type QueryClient = Parameters<Parameters<ScopedPrismaClient["$transaction
 export interface CommissionModelVersionRow {
   id: string;
   productId: string;
+  /**
+   * Phase 10 AP2 (ChatGPT-GO 2026-08-21, siehe PHASE_10_IMPLEMENTATION_PLAN.md
+   * Abschnitt 4/14): Grundlage des neuen, fachlich begruendeten Tie-Breakers
+   * `ORDER BY validFrom DESC, id DESC` in `buildResolveCommission()` --
+   * ersetzt den bisherigen rein technischen "kleinste id gewinnt"-Tie-Breaker.
+   */
+  validFrom: Date;
   commissionType: string;
   commissionAmountMinor: number | null;
   /** NEU fuer Phase 6 (siehe Modulkommentar) -- von der Empfehlungs-Engine ungenutzt. */
@@ -61,6 +68,7 @@ export async function loadActiveCommissionModelVersions(
   return rows.map((r) => ({
     id: r.id,
     productId: r.commissionModel.productId,
+    validFrom: r.validFrom,
     commissionType: r.commissionType as string,
     commissionAmountMinor: r.commissionAmountMinor,
     commissionPercentageBasisPoints: r.commissionPercentageBasisPoints,
@@ -72,11 +80,14 @@ export async function loadActiveCommissionModelVersions(
  * Baut die Provisions-Aufloesungsfunktion fuer prioritization.ts. Existieren
  * fuer ein Produkt mehrere gleichzeitig gueltige CommissionModelVersion-Zeilen
  * (schema-seitig nicht ausgeschlossen, da CommissionModel keinen
- * Unique-Constraint auf productId hat), wird deterministisch die Version mit
- * der lexikographisch kleinsten `id` gewaehlt (siehe Modulkommentar).
- *
- * Unveraendert aus `recommendation/service.ts` uebernommen -- Verhalten fuer
- * bestehende Aufrufer identisch.
+ * Unique-Constraint auf productId hat -- ChatGPT-Entscheidung Phase 10 AP0/AP2:
+ * bewusst KEIN erzwungener Unique-Constraint, mehrere CommissionModels pro
+ * Produkt bleiben fachlich zulaessig), wird deterministisch die Version mit
+ * der JUENGSTEN `validFrom` gewaehlt; bei exakter Zeitgleichheit entscheidet
+ * zusaetzlich die groesste `id` (Phase 10 AP2, ChatGPT-GO 2026-08-21:
+ * "ORDER BY validFrom DESC, id DESC" -- ersetzt den vormaligen rein
+ * technischen "kleinste id gewinnt"-Tie-Breaker aus Phase 3B/6, der KEINE
+ * fachliche Bedeutung hatte).
  */
 export function buildResolveCommission(
   rows: CommissionModelVersionRow[],
@@ -84,7 +95,12 @@ export function buildResolveCommission(
   const byProduct = new Map<string, CommissionModelVersionRow>();
   for (const row of rows) {
     const existing = byProduct.get(row.productId);
-    if (!existing || row.id.localeCompare(existing.id) < 0) {
+    if (!existing) {
+      byProduct.set(row.productId, row);
+      continue;
+    }
+    const validFromDiff = row.validFrom.getTime() - existing.validFrom.getTime();
+    if (validFromDiff > 0 || (validFromDiff === 0 && row.id.localeCompare(existing.id) > 0)) {
       byProduct.set(row.productId, row);
     }
   }

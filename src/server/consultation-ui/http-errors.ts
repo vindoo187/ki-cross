@@ -66,6 +66,16 @@ import {
   RuleSetVersionNotFoundError,
   RuleSetVersionPublishConflictError,
 } from "../admin/rule-admin-errors";
+import {
+  CommissionModelNotFoundError,
+  CommissionModelVersionInvalidError,
+  CommissionModelVersionNotDraftError,
+  CommissionModelVersionNotFoundError,
+  CommissionModelVersionPublishConflictError,
+  CommissionRollbackSourceNotEligibleError,
+  CommissionTierNotFoundError,
+  CopySourceCommissionModelVersionNotFoundError,
+} from "../admin/commission-admin-errors";
 
 interface ErrorBody {
   error: string;
@@ -321,6 +331,50 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // Verstoesse, nicht nur den ersten (siehe rule-admin-errors.ts), analog
   // QuestionnaireVersionInvalidError oben.
   if (error instanceof RuleSetVersionInvalidError) {
+    return NextResponse.json(
+      { error: error.name, message: error.message, issues: error.issues },
+      { status: 422 },
+    );
+  }
+
+  // Commission-Management-API (Phase 10 AP2): 404 -- CommissionModel/Version
+  // (inkl. Kopiervorlage) oder ein CommissionTier nicht gefunden (fremde
+  // Mandant-ID liefert ueber den gescopten `db`-Client 0 Treffer -> 404,
+  // analog Phase 8/9).
+  if (
+    error instanceof CommissionModelNotFoundError ||
+    error instanceof CommissionModelVersionNotFoundError ||
+    error instanceof CopySourceCommissionModelVersionNotFoundError ||
+    error instanceof CommissionTierNotFoundError
+  ) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 404 });
+  }
+
+  // Commission-Management-API: 409 -- Versuch, eine nicht-DRAFT-
+  // CommissionModelVersion zu mutieren (serverseitige Sperre, analog
+  // RuleSetVersionNotDraftError).
+  if (error instanceof CommissionModelVersionNotDraftError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Commission-Management-API (AP4+): 409 -- Rollback-Quelle ist noch eine
+  // DRAFT-Version, analog RuleRollbackSourceNotEligibleError.
+  if (error instanceof CommissionRollbackSourceNotEligibleError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Commission-Management-API (AP5): 409 -- echter Nebenlaeufigkeitskonflikt
+  // beim PRO-CommissionModel-Publish (siehe
+  // CommissionModelVersionPublishConflictError-Kommentar), analog
+  // RuleSetVersionPublishConflictError.
+  if (error instanceof CommissionModelVersionPublishConflictError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Commission-Management-API (AP4): 422 -- validateCommissionModelVersion()
+  // hat fachliche Verstoesse gefunden. `issues` enthaelt ALLE gefundenen
+  // Verstoesse, analog RuleSetVersionInvalidError.
+  if (error instanceof CommissionModelVersionInvalidError) {
     return NextResponse.json(
       { error: error.name, message: error.message, issues: error.issues },
       { status: 422 },

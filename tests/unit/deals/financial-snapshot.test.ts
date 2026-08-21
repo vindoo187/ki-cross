@@ -33,6 +33,7 @@ function commissionRow(
   return {
     id: "cmv-1",
     productId: "prod-1",
+    validFrom: new Date("2026-01-01T00:00:00Z"),
     commissionType: "FLAT",
     commissionAmountMinor: null,
     commissionPercentageBasisPoints: null,

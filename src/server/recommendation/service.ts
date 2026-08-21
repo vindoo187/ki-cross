@@ -29,8 +29,11 @@
  *   Schema-Unique-Constraint auf `productId` - theoretisch koennten fuer ein
  *   Produkt mehrere CommissionModel-Zeilen mit je einer ACTIVE Version
  *   gleichzeitig existieren. Fuer deterministische, reproduzierbare Ergebnisse
- *   waehlt der Resolver in diesem Fall die Version mit der lexikographisch
- *   kleinsten `id` je `productId` (siehe `buildResolveCommission`).
+ *   waehlt der Resolver in diesem Fall je `productId` die Version mit der
+ *   juengsten `validFrom` (bei exakter Zeitgleichheit zusaetzlich die groesste
+ *   `id`) -- Phase 10 AP2 (ChatGPT-GO 2026-08-21), siehe
+ *   `buildResolveCommission`. Ersetzt den vormaligen rein technischen
+ *   "kleinste id gewinnt"-Tie-Breaker aus Phase 3B/6.
  * - `SalesOpportunity`-Erzeugung aus einem RecommendationCrossSellingSignal
  *   ist ein SEPARATER, von der Schreib-Transaktion ENTKOPPELTER Schritt (siehe
  *   sales-opportunity.ts) und laeuft AUSSCHLIESSLICH auf dem Pfad einer

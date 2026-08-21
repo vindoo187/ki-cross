@@ -9,12 +9,15 @@
  * es gibt (anders als bei `rule-admin.ts`) keine
  * `requireAnyCommissionModelVersionInTenant()`-Abweichung.
  *
- * AP1 liefert bewusst nur das Grundgeruest: oeffentliche DTOs und die
- * tenant-gescopten Ladefunktionen (`requireCommissionModel()`,
- * `requireCommissionModelVersion()`, `requireDraftCommissionModelVersion()`).
- * Die eigentliche CommissionModel-/Version-Management-API (Liste, Detail,
- * Draft-Erstellung inkl. Kardinalitaets-Tie-Breaker) folgt in AP2, das
- * Feld-CRUD (FLAT/PERCENTAGE/TIERED) in AP3/AP4, Publish in AP5.
+ * AP1 lieferte das Grundgeruest: oeffentliche DTOs und die tenant-gescopten
+ * Ladefunktionen (`requireCommissionModel()`, `requireCommissionModelVersion()`,
+ * `requireDraftCommissionModelVersion()`). AP2 (siehe
+ * PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 4) ergaenzt die eigentliche
+ * CommissionModel-/Version-Management-API: `listCommissionModels()`,
+ * `getCommissionModelVersionDetail()`, `createDraftCommissionModelVersion()`.
+ * Das Feld-CRUD (FLAT/PERCENTAGE/TIERED, `CommissionTier`) folgt in AP3/AP4,
+ * Publish/Aktivierung in AP5 -- `createDraftCommissionModelVersion()` legt
+ * daher NIE eine Version mit Status ACTIVE an.
  *
  * Verwendet ausschliesslich den tenant-gescopten `db`-Client
  * (`src/server/tenant/scoped-client.ts`) -- identisches Isolationsmuster wie
@@ -25,14 +28,28 @@
  * `requireConfigPermission("config.commissions.*")` wird bewusst NICHT
  * hier, sondern in der Route-Schicht aufgerufen (AP2+), identisches Muster
  * wie Phase 8/9.
+ *
+ * KARDINALITAET (ChatGPT-Leitplanke AP2, 2026-08-21): mehrere
+ * `CommissionModel`s pro Produkt bleiben bewusst zulaessig, KEIN
+ * Unique-Constraint auf `productId` -- diese Datei erzwingt keine 1:1-
+ * Beziehung und warnt/blockt nicht beim Anlegen eines zweiten
+ * `CommissionModel` fuer ein bereits belegtes Produkt (das ist Aufgabe der
+ * Admin-UI in AP8: bestehendes Modell anzeigen und zur Wiederverwendung
+ * anbieten, keine Server-seitige Sperre). Die fachliche Aufloesung bei der
+ * Provisionsberechnung nutzt den deterministischen Tie-Breaker in
+ * `src/server/pricing/commission.ts::buildResolveCommission()`
+ * (`validFrom DESC, id DESC`).
  */
 
+import { db } from "../db/client";
+import { getTenantContext, getTenantId } from "../tenant/context";
 import type { ScopedPrismaClient } from "../tenant/scoped-client";
 import {
   CommissionModelNotFoundError,
   CommissionModelVersionNotDraftError,
   CommissionModelVersionNotFoundError,
 } from "./commission-admin-errors";
+import type { CreateDraftCommissionModelVersionInput } from "./commission-schemas";
 
 type ScopedTransactionClient = Parameters<Parameters<ScopedPrismaClient["$transaction"]>[0]>[0];
 type QueryClient = ScopedTransactionClient;
@@ -115,8 +132,168 @@ async function requireDraftCommissionModelVersion(
   return version;
 }
 
+type CommissionModelVersionRow = {
+  id: string;
+  commissionModelId: string;
+  versionNumber: number;
+  status: string;
+  validFrom: Date;
+  validTo: Date | null;
+  commissionType: string;
+  currency: string;
+  commissionAmountMinor: number | null;
+  commissionPercentageBasisPoints: number | null;
+  recurringCommissionAmountMinor: number | null;
+};
+
+function toVersionSummary(v: CommissionModelVersionRow): CommissionModelVersionSummary {
+  return {
+    id: v.id,
+    versionNumber: v.versionNumber,
+    status: v.status,
+    validFrom: v.validFrom.toISOString(),
+    validTo: v.validTo ? v.validTo.toISOString() : null,
+  };
+}
+
+function toVersionDetail(v: CommissionModelVersionRow): CommissionModelVersionDetail {
+  return {
+    id: v.id,
+    commissionModelId: v.commissionModelId,
+    versionNumber: v.versionNumber,
+    status: v.status,
+    validFrom: v.validFrom.toISOString(),
+    validTo: v.validTo ? v.validTo.toISOString() : null,
+    commissionType: v.commissionType,
+    currency: v.currency,
+    commissionAmountMinor: v.commissionAmountMinor,
+    commissionPercentageBasisPoints: v.commissionPercentageBasisPoints,
+    recurringCommissionAmountMinor: v.recurringCommissionAmountMinor,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 1. CommissionModel-Liste (mit allen Versionen, Historie)
+// ---------------------------------------------------------------------------
+
+export async function listCommissionModels(): Promise<CommissionModelSummary[]> {
+  const rows = await db.commissionModel.findMany({
+    orderBy: { name: "asc" },
+    include: { versions: { orderBy: { validFrom: "desc" } } },
+  });
+  return rows.map((m) => ({
+    id: m.id,
+    productId: m.productId,
+    name: m.name,
+    versions: m.versions.map(toVersionSummary),
+  }));
+}
+
+/** Vollstaendige Versionshistorie EINES `CommissionModel` (alle Status, neueste zuerst). */
+export async function getCommissionModelVersionHistory(
+  commissionModelId: string,
+): Promise<CommissionModelVersionSummary[]> {
+  await requireCommissionModel(db, commissionModelId);
+  const versions = await db.commissionModelVersion.findMany({
+    where: { commissionModelId },
+    orderBy: { validFrom: "desc" },
+  });
+  return versions.map(toVersionSummary);
+}
+
+// ---------------------------------------------------------------------------
+// 2. Versions-Detailansicht
+// ---------------------------------------------------------------------------
+
+export async function getCommissionModelVersionDetail(
+  commissionModelId: string,
+  versionId: string,
+): Promise<CommissionModelVersionDetail> {
+  await requireCommissionModel(db, commissionModelId);
+  const version = await requireCommissionModelVersion(db, commissionModelId, versionId);
+  return toVersionDetail(version);
+}
+
+// ---------------------------------------------------------------------------
+// 3. Neue DRAFT-Version anlegen (leer oder als Kopie)
+// ---------------------------------------------------------------------------
+
+/**
+ * `copyFromVersionId` (falls gesetzt) muss zu DEMSELBEN `commissionModelId`
+ * gehoeren (per-Entity-Publish-Scope, siehe Modulkommentar) -- anders als bei
+ * `createDraftRuleSetVersion()` (Phase 9, mandantenweiter Scope) gibt es hier
+ * keine Cross-Model-Kopiervorlage. Die tatsaechlichen Feldwerte (commissionType/
+ * currency/Betraege) kommen immer aus `input` (siehe commission-schemas.ts
+ * Modulkommentar) -- `copyFromVersionId` dient hier primaer der Audit-
+ * Nachvollziehbarkeit ("basiert auf Version X") und der Zugehoerigkeitspruefung,
+ * nicht einem automatischen Feld-Copy.
+ */
+export async function createDraftCommissionModelVersion(
+  commissionModelId: string,
+  input: CreateDraftCommissionModelVersionInput,
+): Promise<CommissionModelVersionDetail> {
+  await requireCommissionModel(db, commissionModelId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  if (input.copyFromVersionId) {
+    await requireCommissionModelVersion(db, commissionModelId, input.copyFromVersionId);
+  }
+
+  const now = new Date();
+
+  const newVersionId = await db.$transaction(async (tx) => {
+    const lastVersion = await tx.commissionModelVersion.findFirst({
+      where: { commissionModelId },
+      orderBy: { versionNumber: "desc" },
+      select: { versionNumber: true },
+    });
+    const nextVersionNumber = (lastVersion?.versionNumber ?? 0) + 1;
+
+    const newVersion = await tx.commissionModelVersion.create({
+      data: {
+        tenantId,
+        commissionModelId,
+        versionNumber: nextVersionNumber,
+        status: "DRAFT",
+        validFrom: now,
+        validTo: null,
+        commissionType: input.commissionType,
+        currency: input.currency,
+        commissionAmountMinor: input.commissionAmountMinor ?? null,
+        commissionPercentageBasisPoints: input.commissionPercentageBasisPoints ?? null,
+        recurringCommissionAmountMinor: input.recurringCommissionAmountMinor ?? null,
+      },
+    });
+
+    // Phase 10 AP7 haerten wir die Audit-Vollstaendigkeit gegen die
+    // tatsaechlichen Mutationspfade ab (analog Phase 8 AP7/Phase 9 AP7) --
+    // hier bereits im selben Transaktionsschritt wie die Mutation protokolliert,
+    // schlaegt die Transaktion spaeter fehl, wird auch dieser Eintrag
+    // zurueckgerollt.
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "CREATE",
+        entityType: "CommissionModelVersion",
+        entityId: newVersion.id,
+        metadata: {
+          commissionModelId,
+          copyFromVersionId: input.copyFromVersionId ?? null,
+          versionNumber: nextVersionNumber,
+        },
+      },
+    });
+
+    return newVersion.id;
+  });
+
+  return getCommissionModelVersionDetail(commissionModelId, newVersionId);
+}
+
 // Re-Export der internen Ladefunktionen unter einem Namespace-Objekt fuer
-// AP2+ (vermeidet Umbenennung/Re-Import-Kollisionen mit gleichnamigen
+// AP3+ (vermeidet Umbenennung/Re-Import-Kollisionen mit gleichnamigen
 // Helfern in rule-admin.ts/question-admin.ts, falls beide Module einmal im
 // selben Aufrufkontext importiert werden).
 export const commissionAdminInternal = {
