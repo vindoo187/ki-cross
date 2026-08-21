@@ -359,6 +359,23 @@ export async function createDraftCommissionModelVersion(
   const now = new Date();
 
   const newVersionId = await db.$transaction(async (tx) => {
+    // Schritt 0: CommissionModel-Row-Lock (identisches Muster wie
+    // publishCommissionModelVersion(), AP5, siehe Kommentar dort) -- MUSS die
+    // erste Operation dieser Transaktion sein. Ohne diesen Lock lesen zwei
+    // parallele createDraftCommissionModelVersion()-Aufrufe fuer DASSELBE
+    // CommissionModel unter READ COMMITTED denselben MAX(versionNumber),
+    // bevor einer der beiden committet -- beide versuchen dann dieselbe
+    // naechste versionNumber zu vergeben, die zweite Transaktion scheitert am
+    // UNIQUE-Constraint (tenant_id, commission_model_id, version_number) mit
+    // P2002 statt sauber die naechste freie Nummer zu erhalten (gefunden
+    // durch den E2E-Concurrency-Test in Phase 10 AP9, CI #75; Root-Cause-
+    // Bestaetigung + Fix-GO von ChatGPT, 2026-08-22). Der Lock serialisiert
+    // NUR Vorgaenge fuer DIESES CommissionModel -- zwei parallele
+    // Draft-Erstellungen fuer UNTERSCHIEDLICHE CommissionModels bleiben
+    // unabhaengig voneinander moeglich (kein Tenant-weiter Lock, anders als
+    // Phase 9s RuleSet-Serialisierung).
+    await tx.$queryRaw`SELECT id FROM commission_models WHERE id = ${commissionModelId}::uuid AND tenant_id = ${tenantId}::uuid FOR UPDATE`;
+
     const lastVersion = await tx.commissionModelVersion.findFirst({
       where: { commissionModelId },
       orderBy: { versionNumber: "desc" },

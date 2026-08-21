@@ -424,6 +424,102 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
         ),
       ).rejects.toThrow(CommissionModelVersionNotFoundError);
     });
+
+    /**
+     * Regressionstest fuer den in Phase 10 AP9 (E2E-Suite, CI #75) gefundenen
+     * Concurrency-Bug: createDraftCommissionModelVersion() ermittelte die
+     * naechste versionNumber urspruenglich OHNE Row-Lock auf das
+     * CommissionModel -- zwei echt parallele Aufrufe fuer DASSELBE Modell
+     * lasen unter READ COMMITTED denselben MAX(versionNumber), bevor einer
+     * committete, und der zweite Versuch scheiterte am UNIQUE-Constraint
+     * (tenant_id, commission_model_id, version_number) mit P2002 statt
+     * sauber die naechste freie Nummer zu erhalten. Fix (analog AP5s
+     * publishCommissionModelVersion()): SELECT ... FOR UPDATE auf
+     * commission_models als erste Transaktionsoperation. ChatGPT-Root-Cause-
+     * Bestaetigung + Fix-GO: 2026-08-22.
+     */
+    it("Nebenlaeufigkeit: zwei ECHT parallele createDraftCommissionModelVersion()-Aufrufe DESSELBEN CommissionModel sind BEIDE erfolgreich und erhalten unterschiedliche versionNumber (Row-Lock-Regressionstest, Phase 10 AP9 CI #75)", async () => {
+      const tenantId = await createTenant("ap9-parallel-draft-same-model");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm-base",
+      );
+
+      // Bewusst KEIN sequentielles await -- beide Draft-Erstellungen werden
+      // ECHT gleichzeitig fuer DASSELBE CommissionModel gestartet, um den in
+      // commission-admin.ts dokumentierten CommissionModel-Row-Lock zu
+      // pruefen.
+      const results = await Promise.allSettled([
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => createDraftCommissionModelVersion(commissionModelId, draftInput),
+        ),
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => createDraftCommissionModelVersion(commissionModelId, draftInput),
+        ),
+      ]);
+
+      expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+      const fulfilled = results as PromiseFulfilledResult<
+        Awaited<ReturnType<typeof createDraftCommissionModelVersion>>
+      >[];
+      const versionNumbers = fulfilled.map((r) => r.value.versionNumber).sort();
+      // Basisversion (AP1) ist bereits versionNumber 1 -- beide neuen Drafts
+      // muessen 2 und 3 erhalten, in irgendeiner Reihenfolge.
+      expect(versionNumbers).toEqual([2, 3]);
+
+      const draftVersions = await rawClient.commissionModelVersion.findMany({
+        where: { tenantId, commissionModelId, status: "DRAFT" },
+      });
+      expect(draftVersions).toHaveLength(2);
+
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "CommissionModelVersion", action: "CREATE" },
+      });
+      expect(auditEntries).toHaveLength(2);
+    });
+
+    it("Gegenprobe: zwei ECHT parallele createDraftCommissionModelVersion()-Aufrufe fuer VERSCHIEDENE CommissionModels duerfen sich NICHT gegenseitig blockieren (kein falscher Tenant-weiter Lock)", async () => {
+      const tenantId = await createTenant("ap9-parallel-draft-cross-model");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productX = await createProduct(tenantId, "px");
+      const productY = await createProduct(tenantId, "py");
+      const { commissionModelId: modelX } = await createCommissionModelWithVersion(
+        tenantId,
+        productX,
+        "cm-x",
+      );
+      const { commissionModelId: modelY } = await createCommissionModelWithVersion(
+        tenantId,
+        productY,
+        "cm-y",
+      );
+
+      const results = await Promise.allSettled([
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => createDraftCommissionModelVersion(modelX, draftInput),
+        ),
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => createDraftCommissionModelVersion(modelY, draftInput),
+        ),
+      ]);
+
+      expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+      const draftX = await rawClient.commissionModelVersion.findFirst({
+        where: { tenantId, commissionModelId: modelX, status: "DRAFT" },
+      });
+      const draftY = await rawClient.commissionModelVersion.findFirst({
+        where: { tenantId, commissionModelId: modelY, status: "DRAFT" },
+      });
+      expect(draftX?.versionNumber).toBe(2);
+      expect(draftY?.versionNumber).toBe(2);
+    });
   });
 
   // -------------------------------------------------------------------
