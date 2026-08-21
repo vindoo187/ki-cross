@@ -46,10 +46,14 @@ import { getTenantContext, getTenantId } from "../tenant/context";
 import type { ScopedPrismaClient } from "../tenant/scoped-client";
 import {
   CommissionModelNotFoundError,
+  CommissionModelVersionInvalidError,
   CommissionModelVersionNotDraftError,
   CommissionModelVersionNotFoundError,
 } from "./commission-admin-errors";
-import type { CreateDraftCommissionModelVersionInput } from "./commission-schemas";
+import type {
+  CreateDraftCommissionModelVersionInput,
+  UpdateCommissionModelVersionFieldsInput,
+} from "./commission-schemas";
 
 type ScopedTransactionClient = Parameters<Parameters<ScopedPrismaClient["$transaction"]>[0]>[0];
 type QueryClient = ScopedTransactionClient;
@@ -290,6 +294,127 @@ export async function createDraftCommissionModelVersion(
   });
 
   return getCommissionModelVersionDetail(commissionModelId, newVersionId);
+}
+
+// ---------------------------------------------------------------------------
+// 4. Feld-CRUD: Skalarfelder einer DRAFT-Version aendern (AP3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Partielles Update der Skalarfelder EINER bestehenden DRAFT-
+ * `CommissionModelVersion` (`commissionType`, `currency`,
+ * `commissionAmountMinor`, `commissionPercentageBasisPoints`,
+ * `recurringCommissionAmountMinor`) -- analog `updateQuestionInDraft()`
+ * (Phase 8 AP3): nur uebergebene Felder werden geaendert, Audit im selben
+ * Transaktionsschritt, `changedFields` im Audit-Metadata enthaelt bewusst
+ * nur die NAMEN der geaenderten Felder (Muster aus Phase 8 AP7).
+ *
+ * AMOUNT/PERCENTAGE-EXKLUSIVITAET (ChatGPT-Leitplanke AP3, 2026-08-21,
+ * analog der spaeteren TIERED-Entscheidung `tierAmountMinor` XOR
+ * `tierPercentageBasisPoints` pro `CommissionTier`-Zeile): bei
+ * `commissionType: "PERCENTAGE"` duerfen `commissionAmountMinor` UND
+ * `recurringCommissionAmountMinor` nicht gesetzt sein; bei `"FLAT"` darf
+ * `commissionPercentageBasisPoints` nicht gesetzt sein. Diese Pruefung
+ * erfolgt auf dem ZUSAMMENGEFUEHRTEN Ergebniszustand (bestehende Version +
+ * `patch`), NICHT nur auf den im Patch enthaltenen Feldern -- ein Patch mit
+ * nur `{ commissionType: "PERCENTAGE" }` muss z. B. auch dann fehlschlagen,
+ * wenn `commissionAmountMinor` aus einer frueheren Mutation noch gesetzt
+ * ist. `commissionAmountMinor` (einmalig) und `recurringCommissionAmountMinor`
+ * (wiederkehrend) sind bei FLAT AUSDRUECKLICH NICHT gegenseitig exklusiv
+ * (siehe `computeCommissionAmountMinor()`-Modulkommentar in
+ * `src/server/pricing/commission.ts`: die Deal-Erfassung braucht bei FLAT
+ * ggf. beide Betraege gleichzeitig).
+ */
+export async function updateCommissionModelVersionFields(
+  commissionModelId: string,
+  versionId: string,
+  patch: UpdateCommissionModelVersionFieldsInput,
+): Promise<CommissionModelVersionDetail> {
+  await requireCommissionModel(db, commissionModelId);
+  const current = await requireDraftCommissionModelVersion(db, commissionModelId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const resultingType = patch.commissionType ?? current.commissionType;
+  const resultingAmount =
+    patch.commissionAmountMinor !== undefined
+      ? patch.commissionAmountMinor
+      : current.commissionAmountMinor;
+  const resultingRecurringAmount =
+    patch.recurringCommissionAmountMinor !== undefined
+      ? patch.recurringCommissionAmountMinor
+      : current.recurringCommissionAmountMinor;
+  const resultingPercentage =
+    patch.commissionPercentageBasisPoints !== undefined
+      ? patch.commissionPercentageBasisPoints
+      : current.commissionPercentageBasisPoints;
+
+  const issues: string[] = [];
+  if (resultingType === "FLAT" && resultingPercentage != null) {
+    issues.push(
+      "commissionPercentageBasisPoints muss bei commissionType FLAT null bzw. nicht gesetzt sein.",
+    );
+  }
+  if (
+    resultingType === "PERCENTAGE" &&
+    (resultingAmount != null || resultingRecurringAmount != null)
+  ) {
+    issues.push(
+      "commissionAmountMinor und recurringCommissionAmountMinor muessen bei commissionType " +
+        "PERCENTAGE null bzw. nicht gesetzt sein.",
+    );
+  }
+  if (issues.length > 0) {
+    throw new CommissionModelVersionInvalidError(versionId, issues);
+  }
+
+  const hasVersionFieldChanges =
+    patch.commissionType !== undefined ||
+    patch.currency !== undefined ||
+    patch.commissionAmountMinor !== undefined ||
+    patch.commissionPercentageBasisPoints !== undefined ||
+    patch.recurringCommissionAmountMinor !== undefined;
+
+  if (hasVersionFieldChanges) {
+    await db.$transaction(async (tx) => {
+      await tx.commissionModelVersion.update({
+        where: { id: versionId },
+        data: {
+          ...(patch.commissionType !== undefined ? { commissionType: patch.commissionType } : {}),
+          ...(patch.currency !== undefined ? { currency: patch.currency } : {}),
+          ...(patch.commissionAmountMinor !== undefined
+            ? { commissionAmountMinor: patch.commissionAmountMinor }
+            : {}),
+          ...(patch.commissionPercentageBasisPoints !== undefined
+            ? { commissionPercentageBasisPoints: patch.commissionPercentageBasisPoints }
+            : {}),
+          ...(patch.recurringCommissionAmountMinor !== undefined
+            ? { recurringCommissionAmountMinor: patch.recurringCommissionAmountMinor }
+            : {}),
+        },
+      });
+
+      // Phase 10 AP3 (analog Phase 8 AP7-Auflage): Audit im selben
+      // Transaktionsschritt wie die Mutation, Metadata enthaelt nur die
+      // NAMEN der geaenderten Felder, keine vollstaendige Kopie der neuen
+      // Werte.
+      await tx.auditLog.create({
+        data: {
+          tenantId,
+          actorUserId,
+          action: "UPDATE",
+          entityType: "CommissionModelVersion",
+          entityId: versionId,
+          metadata: {
+            commissionModelId,
+            changedFields: Object.keys(patch),
+          },
+        },
+      });
+    });
+  }
+
+  return getCommissionModelVersionDetail(commissionModelId, versionId);
 }
 
 // Re-Export der internen Ladefunktionen unter einem Namespace-Objekt fuer

@@ -32,14 +32,20 @@ import {
   createDraftCommissionModelVersion,
   getCommissionModelVersionDetail,
   listCommissionModels,
+  updateCommissionModelVersionFields,
 } from "@/server/admin/commission-admin";
 import {
   CommissionModelNotFoundError,
+  CommissionModelVersionInvalidError,
+  CommissionModelVersionNotDraftError,
   CommissionModelVersionNotFoundError,
 } from "@/server/admin/commission-admin-errors";
 import { GET as listCommissionModelsRoute } from "@/app/api/admin/commission-models/route";
 import { POST as createDraftCommissionModelVersionRoute } from "@/app/api/admin/commission-models/[id]/versions/route";
-import { GET as getCommissionModelVersionDetailRoute } from "@/app/api/admin/commission-models/[id]/versions/[versionId]/route";
+import {
+  GET as getCommissionModelVersionDetailRoute,
+  PATCH as patchCommissionModelVersionRoute,
+} from "@/app/api/admin/commission-models/[id]/versions/[versionId]/route";
 
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 process.env.DEV_AUTH_SECRET ??= "ap2-commission-admin-test-secret-not-for-prod";
@@ -369,6 +375,157 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
   });
 
   // -------------------------------------------------------------------
+  // 1b. Feld-CRUD (AP3)
+  // -------------------------------------------------------------------
+  describe("1b. Feld-CRUD (AP3) -- updateCommissionModelVersionFields()", () => {
+    it("aendert nur die uebergebenen Felder (partielles Update, currency)", async () => {
+      const tenantId = await createTenant("ap3-partial");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT" },
+      );
+      const detail = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => updateCommissionModelVersionFields(commissionModelId, versionId, { currency: "CHF" }),
+      );
+      expect(detail.currency).toBe("CHF");
+      expect(detail.commissionType).toBe("FLAT");
+      expect(detail.commissionAmountMinor).toBe(1_500);
+    });
+
+    it("gegen eine nicht-DRAFT-Version -> CommissionModelVersionNotDraftError", async () => {
+      const tenantId = await createTenant("ap3-not-draft");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "ACTIVE" },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () =>
+            updateCommissionModelVersionFields(commissionModelId, versionId, { currency: "CHF" }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionNotDraftError);
+    });
+
+    it("commissionType -> PERCENTAGE, wenn commissionAmountMinor aus der bestehenden Version noch gesetzt ist -> CommissionModelVersionInvalidError (Merge-Pruefung, nicht nur Patch-lokal)", async () => {
+      const tenantId = await createTenant("ap3-invalid-merge");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "FLAT", commissionAmountMinor: 1_000 },
+      );
+      // Patch enthaelt NUR commissionType -- commissionAmountMinor bleibt aus
+      // dem bestehenden Datensatz bestehen und muss dennoch als Verstoss
+      // erkannt werden.
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () =>
+            updateCommissionModelVersionFields(commissionModelId, versionId, {
+              commissionType: "PERCENTAGE",
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("commissionType PERCENTAGE + amount/recurringAmount im selben Patch auf null -> Erfolg", async () => {
+      const tenantId = await createTenant("ap3-valid-percentage");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "FLAT", commissionAmountMinor: 1_000 },
+      );
+      const detail = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          updateCommissionModelVersionFields(commissionModelId, versionId, {
+            commissionType: "PERCENTAGE",
+            commissionAmountMinor: null,
+            commissionPercentageBasisPoints: 500,
+          }),
+      );
+      expect(detail.commissionType).toBe("PERCENTAGE");
+      expect(detail.commissionAmountMinor).toBeNull();
+      expect(detail.commissionPercentageBasisPoints).toBe(500);
+    });
+
+    it("commissionType FLAT mit gleichzeitig gesetztem commissionPercentageBasisPoints -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap3-invalid-flat-pct");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT" },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () =>
+            updateCommissionModelVersionFields(commissionModelId, versionId, {
+              commissionPercentageBasisPoints: 250,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("commissionType FLAT: commissionAmountMinor UND recurringCommissionAmountMinor GLEICHZEITIG gesetzt ist ERLAUBT (bewusst NICHT exklusiv, siehe computeCommissionAmountMinor()-Kommentar)", async () => {
+      const tenantId = await createTenant("ap3-flat-both-amounts");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "FLAT", commissionAmountMinor: 1_000 },
+      );
+      const detail = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () =>
+          updateCommissionModelVersionFields(commissionModelId, versionId, {
+            recurringCommissionAmountMinor: 300,
+          }),
+      );
+      expect(detail.commissionAmountMinor).toBe(1_000);
+      expect(detail.recurringCommissionAmountMinor).toBe(300);
+    });
+
+    it("gegen fremdes CommissionModel (versionId gehoert nicht zu commissionModelId) -> CommissionModelVersionNotFoundError", async () => {
+      const tenantId = await createTenant("ap3-wrong-model");
+      const productA = await createProduct(tenantId, "pa");
+      const productB = await createProduct(tenantId, "pb");
+      const { commissionModelId: modelA } = await createCommissionModelWithVersion(
+        tenantId,
+        productA,
+        "cm-a",
+        { status: "DRAFT" },
+      );
+      const { versionId: versionB } = await createCommissionModelWithVersion(
+        tenantId,
+        productB,
+        "cm-b",
+        { status: "DRAFT" },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => updateCommissionModelVersionFields(modelA, versionB, { currency: "CHF" }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionNotFoundError);
+    });
+  });
+
+  // -------------------------------------------------------------------
   // 2. HTTP-Kette
   // -------------------------------------------------------------------
   describe("2. HTTP-Kette", () => {
@@ -486,6 +643,133 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       );
       expect(response.status).toBe(400);
     });
+
+    it("PATCH .../versions/:versionId ohne config.commissions.edit -> 403", async () => {
+      const tenantId = await createTenant("http-403-patch");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT" },
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: ["config.commissions.view"],
+      });
+      const response = await patchCommissionModelVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}`,
+          token,
+          { method: "PATCH", body: JSON.stringify({ currency: "CHF" }) },
+        ),
+        routeParams({ id: commissionModelId, versionId }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it("PATCH .../versions/:versionId mit config.commissions.edit -> 200 mit aktualisiertem Detail", async () => {
+      const tenantId = await createTenant("http-200-patch");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT" },
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: ["config.commissions.edit"],
+      });
+      const response = await patchCommissionModelVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}`,
+          token,
+          { method: "PATCH", body: JSON.stringify({ currency: "CHF" }) },
+        ),
+        routeParams({ id: commissionModelId, versionId }),
+      );
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.version.currency).toBe("CHF");
+    });
+
+    it("PATCH .../versions/:versionId gegen eine ACTIVE-Version -> 409", async () => {
+      const tenantId = await createTenant("http-409-patch");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "ACTIVE" },
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: ["config.commissions.edit"],
+      });
+      const response = await patchCommissionModelVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}`,
+          token,
+          { method: "PATCH", body: JSON.stringify({ currency: "CHF" }) },
+        ),
+        routeParams({ id: commissionModelId, versionId }),
+      );
+      expect(response.status).toBe(409);
+    });
+
+    it("PATCH .../versions/:versionId mit Amount/Percentage-Verstoss -> 422", async () => {
+      const tenantId = await createTenant("http-422-patch");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "FLAT", commissionAmountMinor: 1_000 },
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: ["config.commissions.edit"],
+      });
+      const response = await patchCommissionModelVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}`,
+          token,
+          { method: "PATCH", body: JSON.stringify({ commissionType: "PERCENTAGE" }) },
+        ),
+        routeParams({ id: commissionModelId, versionId }),
+      );
+      expect(response.status).toBe(422);
+    });
+
+    it("PATCH .../versions/:versionId mit ungueltigem Body (falscher Typ) -> 400", async () => {
+      const tenantId = await createTenant("http-400-patch");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT" },
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: ["config.commissions.edit"],
+      });
+      const response = await patchCommissionModelVersionRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}`,
+          token,
+          { method: "PATCH", body: JSON.stringify({ currency: "TOOLONG" }) },
+        ),
+        routeParams({ id: commissionModelId, versionId }),
+      );
+      expect(response.status).toBe(400);
+    });
   });
 
   // -------------------------------------------------------------------
@@ -507,6 +791,58 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       expect(auditEntries).toHaveLength(1);
       expect(auditEntries[0]?.action).toBe("CREATE");
       expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
+    });
+
+    it("updateCommissionModelVersionFields() schreibt einen AuditLog-Eintrag (action UPDATE, changedFields nur die Feldnamen)", async () => {
+      const tenantId = await createTenant("audit-update");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT" },
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => updateCommissionModelVersionFields(commissionModelId, versionId, { currency: "CHF" }),
+      );
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: {
+          tenantId,
+          entityType: "CommissionModelVersion",
+          entityId: versionId,
+          action: "UPDATE",
+        },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.actorUserId).toBe(actorUserId);
+      expect(auditEntries[0]?.metadata).toMatchObject({ changedFields: ["currency"] });
+    });
+
+    it("updateCommissionModelVersionFields() OHNE tatsaechliche Feldaenderungen (leerer Patch) schreibt KEINEN AuditLog-Eintrag", async () => {
+      const tenantId = await createTenant("audit-empty-patch");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT" },
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => updateCommissionModelVersionFields(commissionModelId, versionId, {}),
+      );
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: {
+          tenantId,
+          entityType: "CommissionModelVersion",
+          entityId: versionId,
+          action: "UPDATE",
+        },
+      });
+      expect(auditEntries).toHaveLength(0);
     });
   });
 });

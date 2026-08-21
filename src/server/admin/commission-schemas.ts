@@ -42,6 +42,32 @@ export type CreateDraftCommissionModelVersionInput = z.infer<
 >;
 
 /**
+ * Feld-CRUD (Phase 10 AP3, siehe PHASE_10_IMPLEMENTATION_PLAN.md
+ * Abschnitt 5) -- partielles Update der Skalarfelder EINER bestehenden
+ * DRAFT-`CommissionModelVersion` (analog `updateQuestionSchema` aus Phase 8
+ * AP3: `.partial()` auf denselben Feldern wie bei der Draft-Erstellung,
+ * `copyFromVersionId` ausgenommen -- das ist kein mutierbares Feld einer
+ * bestehenden Version).
+ *
+ * Alle Felder sind einzeln optional (partielles Update: nur uebergebene
+ * Felder werden geaendert, `updateCommissionModelVersionFields()` in
+ * `commission-admin.ts` prueft NACH dem Zusammenfuehren mit dem
+ * bestehenden Stand die fachliche Amount/Percentage-Exklusivitaet, die
+ * dieses Schema allein nicht pruefen kann, da ein Patch z. B. nur
+ * `commissionType` ohne die Betragsfelder enthalten darf).
+ */
+export const updateCommissionModelVersionFieldsSchema = z.object({
+  commissionType: commissionTypeSchema.optional(),
+  currency: z.string().length(3).optional(),
+  commissionAmountMinor: z.number().int().nonnegative().nullable().optional(),
+  commissionPercentageBasisPoints: z.number().int().min(0).max(10000).nullable().optional(),
+  recurringCommissionAmountMinor: z.number().int().nonnegative().nullable().optional(),
+});
+export type UpdateCommissionModelVersionFieldsInput = z.infer<
+  typeof updateCommissionModelVersionFieldsSchema
+>;
+
+/**
  * Rollback-Eingabe (AP-Pendant zu `rollbackRuleSetVersionSchema`). Bewusst
  * leer -- `CommissionModelVersion` hat kein `label`-Feld, das ein Rollback
  * ueberschreiben koennte. Platzhalter fuer eine spaetere AP, sobald
