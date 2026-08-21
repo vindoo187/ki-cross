@@ -79,9 +79,21 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
     return user.id;
   }
 
+  /**
+   * `Provider.key` ist GLOBAL eindeutig (kein `tenantId`-Bezug, anders als
+   * `ProductCategory`/`Product`) -- viele Testfaelle rufen `createProduct()`
+   * mit demselben kurzen `key` (z. B. "p") in JEWEILS eigenen Tenants auf.
+   * Der gemeinsame Datei-`suffix` allein reicht daher NICHT aus, um
+   * Provider-Key-Kollisionen ueber alle Testfaelle hinweg zu vermeiden --
+   * zusaetzlich ein frischer Per-Call-Suffix (CI #65-Fix).
+   */
   async function createProvider(key: string) {
     const provider = await rawClient.provider.create({
-      data: { key: `provider-${key}-${suffix}`, name: `Provider ${key}`, isSynthetic: true },
+      data: {
+        key: `provider-${key}-${suffix}-${randomUUID().slice(0, 8)}`,
+        name: `Provider ${key}`,
+        isSynthetic: true,
+      },
     });
     return provider.id;
   }
