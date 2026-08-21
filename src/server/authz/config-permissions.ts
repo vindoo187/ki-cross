@@ -1,20 +1,26 @@
 /**
- * Configuration-RBAC fuer die Fach-Fragen-/Fragebogen- UND (seit Phase 9
- * AP1) Regel-Administration. Ursprünglich Phase 8 AP2 (siehe
- * PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 3.2/5), um `config.rules.*`
- * erweitert in Phase 9 AP1 (ChatGPT-GO 2026-08-18, additive Erweiterung der
- * bestehenden `config_editor`/`config_publisher`-Rollen statt neuer Rollen
- * -- siehe PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 2.1). Getrennt von der
+ * Configuration-RBAC fuer die Fach-Fragen-/Fragebogen-, (seit Phase 9 AP1)
+ * Regel- UND (seit Phase 10 AP1) Provisionsmodell-Administration.
+ * Ursprünglich Phase 8 AP2 (siehe PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt
+ * 3.2/5), um `config.rules.*` erweitert in Phase 9 AP1 (ChatGPT-GO
+ * 2026-08-18) und um `config.commissions.*` erweitert in Phase 10 AP1
+ * (ChatGPT-GO 2026-08-21, siehe PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt
+ * 3/14 Punkt 4 -- "config.commissions.*", NICHT "config.pricing.*", da der
+ * fachliche Gegenstand Provision/Commission ist, nicht Pricing).
+ * Durchgaengig additive Erweiterung der bestehenden `config_editor`/
+ * `config_publisher`-Rollen statt neuer Rollen -- siehe
+ * PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 2.1. Getrennt von der
  * Management-Analytics-Scope-Architektur aus Phase 7
  * (`src/server/authz/management-scope.ts`) -- ChatGPT wörtlich: "Die
  * bestehende Phase-7-Management-Scope-Architektur bleibt davon getrennt."
  *
- * Verbindliche Leitplanken (ChatGPT-GO, 2026-08-18, gelten fuer BEIDE
+ * Verbindliche Leitplanken (ChatGPT-GO, 2026-08-18, gelten fuer ALLE DREI
  * Permission-Gruppen gleichermassen):
  * - Config-Permissions sind ausschliesslich TENANT-scoped (Fragen/
- *   Fragebögen UND Regeln/RuleSets sind mandantenweit modelliert, kein
- *   `storeId`-Bezug im Schema) -- STORE-/COMPANY-Zuweisungen tragen NIE zu
- *   Config-Permissions bei, kein "künstlicher Store-Scope".
+ *   Fragebögen, Regeln/RuleSets UND Provisionsmodelle sind mandantenweit
+ *   modelliert, kein `storeId`-Bezug im Schema) -- STORE-/COMPANY-
+ *   Zuweisungen tragen NIE zu Config-Permissions bei, kein "künstlicher
+ *   Store-Scope".
  * - Deny-by-default: keine qualifizierende Zuweisung -> leere Permission-
  *   Menge, NIE ein impliziter Vollzugriff.
  * - `publish` darf nicht implizit aus `edit` entstehen -- alle Keys werden
@@ -35,10 +41,18 @@ export const CONFIG_RULES_PERMISSION_KEYS = [
   "config.rules.publish",
 ] as const;
 
-/** Kombinierter Katalog aller Config-Permission-Keys (Fragen + Regeln). */
+/** Phase 10 AP1 (ChatGPT-GO 2026-08-21): Permission-Keys fuer den Provisionsmodell-Editor. */
+export const CONFIG_COMMISSIONS_PERMISSION_KEYS = [
+  "config.commissions.view",
+  "config.commissions.edit",
+  "config.commissions.publish",
+] as const;
+
+/** Kombinierter Katalog aller Config-Permission-Keys (Fragen + Regeln + Provisionsmodelle). */
 export const ALL_CONFIG_PERMISSION_KEYS = [
   ...CONFIG_QUESTIONS_PERMISSION_KEYS,
   ...CONFIG_RULES_PERMISSION_KEYS,
+  ...CONFIG_COMMISSIONS_PERMISSION_KEYS,
 ] as const;
 
 export type ConfigPermissionKey = (typeof ALL_CONFIG_PERMISSION_KEYS)[number];
@@ -60,9 +74,9 @@ export interface ConfigPermissionCandidate {
 
 /**
  * Reine Auswahllogik (kein DB-Zugriff, keine Seiteneffekte): vereinigt die
- * `config.questions.*`- UND `config.rules.*`-Permission-Keys aller
- * TENANT-scoped Kandidaten-Zuweisungen. STORE-/COMPANY-Zuweisungen werden
- * ignoriert (siehe
+ * `config.questions.*`-, `config.rules.*`- UND `config.commissions.*`-
+ * Permission-Keys aller TENANT-scoped Kandidaten-Zuweisungen. STORE-/
+ * COMPANY-Zuweisungen werden ignoriert (siehe
  * Modul-Kommentar). Liefert ein leeres Array bei fehlender Berechtigung
  * (deny-by-default) statt `null` -- ein leeres Array ist hier bereits
  * eindeutig "keine Config-Berechtigung", es gibt (anders als bei
@@ -100,9 +114,10 @@ export class ConfigAccessDeniedError extends Error {
 
 /**
  * Zentrale Autorisierungsprüfung fuer alle Admin-/Konfigurations-Routen
- * (AP3+, sowie Phase 9 AP2+ fuer Regeln): prüft, ob die übergebene Session
- * die geforderte `config.questions.*`- oder `config.rules.*`-Permission
- * besitzt. Wirft `ConfigAccessDeniedError`
+ * (AP3+, Phase 9 AP2+ fuer Regeln, Phase 10 AP1+ fuer Provisionsmodelle):
+ * prüft, ob die übergebene Session die geforderte `config.questions.*`-,
+ * `config.rules.*`- oder `config.commissions.*`-Permission besitzt. Wirft
+ * `ConfigAccessDeniedError`
  * bei fehlender Berechtigung -- es gibt keinen Codepfad, der eine
  * Config-Mutation ohne diese Prüfung ausführt (ChatGPT-Leitplanke:
  * "Permission + Tenant-Kontext müssen gemeinsam erfüllt sein", der

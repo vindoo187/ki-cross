@@ -31,6 +31,17 @@ import { ALL_CONFIG_PERMISSION_KEYS } from "./config-permissions";
  * zusaetzlich config.rules.view+edit+publish. Dieselbe
  * `sales_employee`-Ausschlussregel gilt fuer `config.rules.*` genauso wie
  * fuer `config.questions.*`.
+ *
+ * Phase 10 AP1 (ChatGPT-GO 2026-08-21) erweitert config_editor/
+ * config_publisher additiv um die neuen `config.commissions.*`-Keys (keine
+ * neuen Rollen, siehe PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 3):
+ * config_editor -> zusaetzlich config.commissions.view+edit,
+ * config_publisher -> zusaetzlich config.commissions.view+edit+publish
+ * (config_publisher erhaelt das automatisch ueber `ALL_CONFIG_PERMISSION_
+ * KEYS`, siehe switch-case unten -- nur config_editor muss explizit
+ * erweitert werden). Dieselbe `sales_employee`-Ausschlussregel gilt fuer
+ * `config.commissions.*` genauso wie fuer `config.questions.*`/
+ * `config.rules.*`.
  */
 
 export const SEED_ROLE_KEYS = [
@@ -64,9 +75,10 @@ export function permissionKeysForSeedRole(
   switch (roleKey) {
     case "sales_employee":
       // Alle Permissions AUSSER den drei Management-Analytics-Rechten UND
-      // allen config.questions.*/config.rules.*-Rechten -- ein normaler
-      // Verkaufsberater darf weder die Management-Sicht noch die
-      // Fragen-/Regel-Administration sehen.
+      // allen config.questions.*/config.rules.*/config.commissions.*-
+      // Rechten -- ein normaler Verkaufsberater darf weder die
+      // Management-Sicht noch die Fragen-/Regel-/Provisionsmodell-
+      // Administration sehen.
       return allPermissionKeys.filter(
         (key) =>
           !(MANAGEMENT_ANALYTICS_PERMISSION_KEYS as readonly string[]).includes(key) &&
@@ -84,7 +96,9 @@ export function permissionKeysForSeedRole(
           key === "config.questions.view" ||
           key === "config.questions.edit" ||
           key === "config.rules.view" ||
-          key === "config.rules.edit",
+          key === "config.rules.edit" ||
+          key === "config.commissions.view" ||
+          key === "config.commissions.edit",
       );
     case "config_publisher":
       return allPermissionKeys.filter((key) =>

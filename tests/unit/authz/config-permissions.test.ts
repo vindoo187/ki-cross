@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ALL_CONFIG_PERMISSION_KEYS,
+  CONFIG_COMMISSIONS_PERMISSION_KEYS,
   CONFIG_QUESTIONS_PERMISSION_KEYS,
   CONFIG_RULES_PERMISSION_KEYS,
   ConfigAccessDeniedError,
@@ -13,10 +14,12 @@ import {
  * Regressionstests fuer die reine Auswahllogik aus Phase 8 AP2 (siehe
  * PHASE_8_IMPLEMENTATION_PLAN.md Abschnitt 3.2/5), erweitert um
  * `config.rules.*` in Phase 9 AP1 (ChatGPT-GO 2026-08-18, siehe
- * PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 2.1). Deckt die von ChatGPT
+ * PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 2.1) und um
+ * `config.commissions.*` in Phase 10 AP1 (ChatGPT-GO 2026-08-21, siehe
+ * PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 3). Deckt die von ChatGPT
  * verbindlich vorgegebenen Leitplanken ab: ausschliesslich TENANT-Scope
  * (kein "kuenstlicher Store-Scope"), deny-by-default, `publish` entsteht
- * nicht implizit aus `edit` -- fuer BEIDE Permission-Gruppen gleichermassen.
+ * nicht implizit aus `edit` -- fuer ALLE DREI Permission-Gruppen gleichermassen.
  */
 describe("deriveConfigPermissions", () => {
   it("liefert ein leeres Array (deny-by-default), wenn keine Kandidaten vorhanden sind", () => {
@@ -110,7 +113,7 @@ describe("deriveConfigPermissions", () => {
     ]);
   });
 
-  it("liefert alle sechs Permissions fuer eine TENANT-Zuweisung mit allen config_publisher-Rechten (Fragen + Regeln)", () => {
+  it("liefert alle neun Permissions fuer eine TENANT-Zuweisung mit allen config_publisher-Rechten (Fragen + Regeln + Provisionsmodelle)", () => {
     const candidates: ConfigPermissionCandidate[] = [
       { scopeType: "TENANT", permissionKeys: [...ALL_CONFIG_PERMISSION_KEYS] },
     ];
@@ -132,6 +135,36 @@ describe("deriveConfigPermissions", () => {
   it("liefert ein leeres Array fuer eine STORE-Zuweisung mit config.rules.*-Permissions", () => {
     const candidates: ConfigPermissionCandidate[] = [
       { scopeType: "STORE", permissionKeys: [...CONFIG_RULES_PERMISSION_KEYS] },
+    ];
+    expect(deriveConfigPermissions(candidates)).toEqual([]);
+  });
+
+  it("liefert genau view+edit fuer eine TENANT-Zuweisung mit config.commissions.*-Editor-Permissions (Phase 10 AP1)", () => {
+    const candidates: ConfigPermissionCandidate[] = [
+      {
+        scopeType: "TENANT",
+        permissionKeys: ["config.commissions.view", "config.commissions.edit"],
+      },
+    ];
+    expect(deriveConfigPermissions(candidates).sort()).toEqual([
+      "config.commissions.edit",
+      "config.commissions.view",
+    ]);
+  });
+
+  it("vereinigt config.rules.*- und config.commissions.*-Permissions unabhaengig voneinander (kein implizites Bundling, Phase 10 AP1)", () => {
+    const candidates: ConfigPermissionCandidate[] = [
+      { scopeType: "TENANT", permissionKeys: ["config.rules.view", "config.commissions.edit"] },
+    ];
+    expect(deriveConfigPermissions(candidates).sort()).toEqual([
+      "config.commissions.edit",
+      "config.rules.view",
+    ]);
+  });
+
+  it("liefert ein leeres Array fuer eine STORE-Zuweisung mit config.commissions.*-Permissions (Phase 10 AP1)", () => {
+    const candidates: ConfigPermissionCandidate[] = [
+      { scopeType: "STORE", permissionKeys: [...CONFIG_COMMISSIONS_PERMISSION_KEYS] },
     ];
     expect(deriveConfigPermissions(candidates)).toEqual([]);
   });
@@ -181,6 +214,25 @@ describe("requireConfigPermission", () => {
     ).not.toThrow();
     expect(() =>
       requireConfigPermission(rulesEditorSession as never, "config.rules.publish"),
+    ).toThrow(ConfigAccessDeniedError);
+  });
+
+  it("config.commissions.*-Fall (Phase 10 AP1): edit erlaubt, publish verweigert, unabhaengig von config.questions.*/config.rules.*", () => {
+    const commissionsEditorSession = {
+      configPermissions: [
+        "config.questions.view",
+        "config.questions.edit",
+        "config.rules.view",
+        "config.rules.edit",
+        "config.commissions.view",
+        "config.commissions.edit",
+      ],
+    };
+    expect(() =>
+      requireConfigPermission(commissionsEditorSession as never, "config.commissions.edit"),
+    ).not.toThrow();
+    expect(() =>
+      requireConfigPermission(commissionsEditorSession as never, "config.commissions.publish"),
     ).toThrow(ConfigAccessDeniedError);
   });
 });

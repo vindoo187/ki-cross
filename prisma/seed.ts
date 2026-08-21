@@ -102,6 +102,14 @@ async function seedGlobalCatalog() {
     "config.rules.view",
     "config.rules.edit",
     "config.rules.publish",
+    // Phase 10 AP1 (ChatGPT-GO 2026-08-21): Configuration-RBAC fuer den
+    // Provisionsmodell-Editor, siehe src/server/authz/config-permissions.ts
+    // (CONFIG_COMMISSIONS_PERMISSION_KEYS). Additive Erweiterung derselben
+    // config_editor/config_publisher-Rollen (keine neuen Rollen, siehe
+    // PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 3).
+    "config.commissions.view",
+    "config.commissions.edit",
+    "config.commissions.publish",
   ];
   const permissions = await Promise.all(
     permissionKeys.map((key) =>
