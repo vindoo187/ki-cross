@@ -21,9 +21,21 @@ export interface E2eSeedOutput {
     questionnaireKey: string;
     /** RuleSet mit einer ACTIVE-Version (Phase 9 AP9, /admin/rules-E2E-Suite). */
     ruleSetId: string;
-    /** config.rules.view+edit, KEIN .publish. */
+    /**
+     * CommissionModel mit einer ACTIVE-Version (Phase 10 AP9,
+     * /admin/commissions-E2E-Suite).
+     */
+    commissionModelId: string;
+    commissionModelVersionId: string;
+    /**
+     * Ein ZWEITES CommissionModel desselben Tenants/Produkts -- fuer den
+     * model-scoped-Publish-Test (Publish von commissionModelId darf dieses
+     * Modell NICHT veraendern).
+     */
+    commissionModelSecondaryId: string;
+    /** config.rules.view+edit + config.commissions.view+edit, KEIN .publish. */
     configEditorAdmin: E2eAdminCredentials;
-    /** config.rules.view+edit+publish. */
+    /** config.rules.view+edit+publish + config.commissions.view+edit+publish. */
     configPublisherAdmin: E2eAdminCredentials;
   };
   tenantB: {
@@ -33,6 +45,9 @@ export interface E2eSeedOutput {
     /** Fuer den negativen /admin/rules-Tenant-Isolationstest (Phase 9 AP9). */
     ruleSetId: string;
     ruleSetVersionId: string;
+    /** Fuer den negativen /admin/commissions-Tenant-Isolationstest (Phase 10 AP9). */
+    commissionModelId: string;
+    commissionModelVersionId: string;
   };
 }
 

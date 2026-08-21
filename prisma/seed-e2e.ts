@@ -73,11 +73,19 @@ async function seedGlobalCatalog() {
     create: { key: "o2-telefonica", name: "O2 / Telefonica (synthetisch)", isSynthetic: true },
   });
 
-  // Phase 9 AP9: nur die Regel-Administrations-Permissions werden fuer
-  // diese E2E-Suite benoetigt (die Fragenverwaltung ist nicht Teil des
-  // /admin/rules-E2E-Umfangs) -- bewusst minimal, kein voller
+  // Phase 9 AP9 + Phase 10 AP9: nur die Regel- und Provisionsmodell-
+  // Administrations-Permissions werden fuer diese E2E-Suiten benoetigt (die
+  // Fragenverwaltung ist nicht Teil des /admin/rules- bzw.
+  // /admin/commissions-E2E-Umfangs) -- bewusst minimal, kein voller
   // config.questions.*-Katalog wie in prisma/seed.ts.
-  const rulePermissionKeys = ["config.rules.view", "config.rules.edit", "config.rules.publish"];
+  const rulePermissionKeys = [
+    "config.rules.view",
+    "config.rules.edit",
+    "config.rules.publish",
+    "config.commissions.view",
+    "config.commissions.edit",
+    "config.commissions.publish",
+  ];
   const permissions = await Promise.all(
     rulePermissionKeys.map((key) =>
       prisma.permission.upsert({
@@ -226,7 +234,7 @@ async function seedTenantA(
   const commissionModel = await prisma.commissionModel.create({
     data: { tenantId, productId: product.id, name: "E2E Standardprovision Mobil M" },
   });
-  await prisma.commissionModelVersion.create({
+  const commissionModelVersion = await prisma.commissionModelVersion.create({
     data: {
       tenantId,
       commissionModelId: commissionModel.id,
@@ -237,6 +245,27 @@ async function seedTenantA(
       currency: "EUR",
       commissionAmountMinor: 3000,
       recurringCommissionAmountMinor: 100,
+    },
+  });
+
+  // Phase 10 AP9: ZWEITES CommissionModel fuer denselben Tenant/dasselbe
+  // Produkt -- dient dem E2E-Test "Publish ersetzt nur DIESES
+  // CommissionModel, ein anderes Modell desselben Mandanten bleibt
+  // unveraendert" (Kardinalitaets-Tie-Breaker aus AP2 erlaubt mehrere
+  // CommissionModels pro Produkt, siehe commission.ts).
+  const commissionModelSecondary = await prisma.commissionModel.create({
+    data: { tenantId, productId: product.id, name: "E2E Zweitprovision Mobil M" },
+  });
+  await prisma.commissionModelVersion.create({
+    data: {
+      tenantId,
+      commissionModelId: commissionModelSecondary.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      validFrom: VALID_FROM,
+      commissionType: CommissionType.FLAT,
+      currency: "EUR",
+      commissionAmountMinor: 4200,
     },
   });
 
@@ -630,6 +659,9 @@ async function seedTenantA(
       familienmitglieder: { questionKey: familienmitgliederQuestion.key },
     },
     ruleSetId: ruleSet.id,
+    commissionModelId: commissionModel.id,
+    commissionModelVersionId: commissionModelVersion.id,
+    commissionModelSecondaryId: commissionModelSecondary.id,
     configEditorAdmin: { email: configEditorEmail, password: E2E_ADMIN_PASSWORD },
     configPublisherAdmin: { email: configPublisherEmail, password: E2E_ADMIN_PASSWORD },
   };
@@ -709,11 +741,51 @@ async function seedTenantB() {
     },
   });
 
+  // Phase 10 AP9: minimales Produkt + CommissionModel/-Version fuer den
+  // negativen /admin/commissions-Tenant-Isolationstest (Tenant-A-Admin
+  // versucht per manipulierter URL auf ein CommissionModel von Tenant B
+  // zuzugreifen).
+  const providerB = await prisma.provider.upsert({
+    where: { key: "o2-telefonica" },
+    update: {},
+    create: { key: "o2-telefonica", name: "O2 / Telefonica (synthetisch)", isSynthetic: true },
+  });
+  const categoryB = await prisma.productCategory.create({
+    data: { tenantId, key: "mobilfunk-b", name: "Mobilfunk B" },
+  });
+  const productB = await prisma.product.create({
+    data: {
+      tenantId,
+      providerId: providerB.id,
+      categoryId: categoryB.id,
+      productType: ProductType.MOBILE_NEW_CONTRACT,
+      name: "E2E TestTel B Mobil (synthetisch)",
+      isSynthetic: true,
+    },
+  });
+  const commissionModelB = await prisma.commissionModel.create({
+    data: { tenantId, productId: productB.id, name: "E2E B Provision" },
+  });
+  const commissionModelVersionB = await prisma.commissionModelVersion.create({
+    data: {
+      tenantId,
+      commissionModelId: commissionModelB.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      validFrom: VALID_FROM,
+      commissionType: CommissionType.FLAT,
+      currency: "EUR",
+      commissionAmountMinor: 1000,
+    },
+  });
+
   return {
     ...base,
     consultationSessionId: session.id,
     ruleSetId: ruleSet.id,
     ruleSetVersionId: ruleSetVersion.id,
+    commissionModelId: commissionModelB.id,
+    commissionModelVersionId: commissionModelVersionB.id,
   };
 }
 
@@ -742,6 +814,9 @@ async function main() {
       employeeDisplayName: tenantA.displayName,
       questionnaireKey: tenantA.questionnaireKey,
       ruleSetId: tenantA.ruleSetId,
+      commissionModelId: tenantA.commissionModelId,
+      commissionModelVersionId: tenantA.commissionModelVersionId,
+      commissionModelSecondaryId: tenantA.commissionModelSecondaryId,
       configEditorAdmin: tenantA.configEditorAdmin,
       configPublisherAdmin: tenantA.configPublisherAdmin,
     },
@@ -751,6 +826,8 @@ async function main() {
       consultationSessionId: tenantB.consultationSessionId,
       ruleSetId: tenantB.ruleSetId,
       ruleSetVersionId: tenantB.ruleSetVersionId,
+      commissionModelId: tenantB.commissionModelId,
+      commissionModelVersionId: tenantB.commissionModelVersionId,
     },
   };
   writeFileSync(SEED_OUTPUT_PATH, JSON.stringify(output, null, 2), "utf-8");
