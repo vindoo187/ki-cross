@@ -232,18 +232,63 @@ Analog dem Muster aus `ABSCHLUSSBERICHT_PHASE9.md`.
 - Ziele-Modell, Freitext-KI (spätere, bereits vom Nutzer bestätigte
   Folgephasen).
 
-## 14. Offene Punkte, die vor Implementierungs-GO explizit zu bestätigen sind
+## 14. ChatGPT-Rückmeldung zu den drei offenen Punkten (2026-08-21, alle GO, mit Präzisierungen)
 
-1. **Abschnitt 1**: `DealItem.commissionModelVersionId` statt
-   `DealFinancialSnapshot.commissionModelVersionId` — Korrektur zur
-   ursprünglichen ChatGPT-Formulierung.
-2. **Abschnitt 4**: konkretes `CommissionTier`-Tabellendesign für
-   TIERED — Vorschlag, kein fixierter Beschluss.
-3. **Abschnitt 4 (AP2)**: neuer fachlicher Tie-Breaker "jüngste
-   `validFrom` gewinnt" statt "kleinste `id`" bei mehreren
-   `CommissionModel`s pro Produkt — Vorschlag, kein fixierter Beschluss.
+**Punkt 1 — `DealItem.commissionModelVersionId`: GO, unverändert
+übernommen.** Zusätzliche Vorgaben: FK referenziert die konkret
+verwendete Version, wird bei der Deal-Erfassung **atomar** mit der
+Provisionsermittlung geschrieben (dieselbe Transaktion wie
+`dealItem.createMany()`), die historische Referenz wird **niemals**
+nachträglich neu aufgelöst. `DealFinancialSnapshot` bleibt unverändert
+als reines Aggregat, `DealItem.productVersionId` bleibt zusätzlich
+bestehen.
 
-Dieser Plan geht jetzt an ChatGPT zur Prüfung. Nach dessen Rückmeldung
-zu den drei offenen Punkten (Abschnitt 14) wird der Plan final
-korrigiert und dem Nutzer zur Implementierungs-GO-Freigabe für AP1
-vorgelegt.
+**Punkt 2 — `CommissionTier`: GO, mit Präzisierung der Validierung.**
+Pro Tier-Zeile ist **genau eines** von `tierAmountMinor` oder
+`tierPercentageBasisPoints` gesetzt (nicht "eines von beiden
+optional", sondern exklusiv — Validator muss das erzwingen).
+Zusätzliche verbindliche Validierungsregeln: `thresholdMinor >= 0`,
+keine doppelten Schwellen innerhalb einer Version, `sortOrder`
+eindeutig und konsistent aufsteigend mit `thresholdMinor`, mindestens
+eine Stufe, **erste Stufe zwingend `thresholdMinor = 0`**, Änderungen
+nur an DRAFT-Versionen möglich. `CommissionTier` gehört immer zu genau
+einer `CommissionModelVersion` — ältere Versionen (und die Deals, die
+sie referenzieren) behalten dadurch unverändert ihre eigene
+Berechnungsgrundlage, auch wenn eine neuere Version andere Staffeln
+definiert.
+
+**Punkt 3 — Tie-Breaker: GO für die Grundidee, aber verschärft.**
+Nicht nur `validFrom DESC`, sondern **`validFrom DESC, id DESC`** als
+deterministischer zweiter Tie-Breaker (falls zwei `CommissionModel`s
+exakt denselben `validFrom`-Zeitpunkt haben, wäre eine reine
+`validFrom`-Sortierung nicht eindeutig). Zusätzlich explizit
+festgehalten (unverändert gegenüber Discovery Abschnitt 2, hier nur
+noch einmal ausdrücklich bestätigt): `evaluationTime` ist bei der
+Deal-Ermittlung `closedAt`, bei der Recommendation Engine
+`session.startedAt` — diese Zeitsemantik wird durch den neuen
+Tie-Breaker nicht verändert.
+
+**Explizites GO für AP1** unter diesen drei Präzisierungen. Damit ist
+dieser Implementierungsplan aus ChatGPT-Sicht implementierungsreif.
+
+## 15. Finaler Regel-Katalog (verbindlich für AP1ff., konsolidiert aus Abschnitt 14)
+
+| Thema                                   | Entscheidung                                                                                                          |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Historische Commission-Version          | FK auf `DealItem`, atomar mit Provisionsermittlung geschrieben, nie nachträglich neu aufgelöst                        |
+| `DealFinancialSnapshot`                 | unverändert, bleibt reines Aggregat                                                                                   |
+| TIERED                                  | eigene `CommissionTier`-Tabelle, gehört zu genau einer `CommissionModelVersion`                                       |
+| Tier-Berechnung                         | höchste Schwelle `<= baseAmountMinor` gewinnt                                                                         |
+| Tier-Basis                              | genau `tierAmountMinor` ODER `tierPercentageBasisPoints`, nie beide/keins                                             |
+| Mindest-Tier                            | `thresholdMinor = 0` als erste Stufe zwingend                                                                         |
+| Weitere Tier-Validierung                | `thresholdMinor >= 0`, keine doppelten Schwellen, `sortOrder` eindeutig + konsistent aufsteigend, nur DRAFT mutierbar |
+| `CommissionModel`-Auswahl (Tie-Breaker) | `ORDER BY validFrom DESC, id DESC LIMIT 1`                                                                            |
+| Deal-Zeitpunkt                          | `closedAt` (unverändert)                                                                                              |
+| Recommendation-Zeitpunkt                | `session.startedAt` (unverändert)                                                                                     |
+
+## 16. Nächster Schritt
+
+Dieser Plan geht jetzt an den Nutzer zur expliziten Implementierungs-
+GO-Freigabe für AP1 — analog dem etablierten Muster aus Phase 7/8/9
+(ChatGPT-GO allein startet noch keinen Code, der Nutzer muss zusätzlich
+explizit zustimmen).
