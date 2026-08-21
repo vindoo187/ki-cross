@@ -592,11 +592,66 @@ model CommissionModelVersion {
   // ueber den zusammengesetzten Tenant-FK - dafuer @@unique([tenantId, id]).
   recommendationRationales RecommendationRationale[]
 
+  // Phase 10 AP4: nur relevant, wenn commissionType = TIERED. Siehe
+  // Modulkommentar auf CommissionTier.
+  tiers CommissionTier[]
+
   @@unique([tenantId, id])
   @@unique([tenantId, commissionModelId, versionNumber])
   @@index([tenantId])
   @@index([commissionModelId, validFrom, validTo])
   @@map("commission_model_versions")
+}
+
+/**
+ * Phase 10 AP4 (TIERED-Provisionsstaffeln, siehe
+ * PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 6, ChatGPT-GO 2026-08-21 mit
+ * Praezisierungen). Gehoert immer zu genau EINER CommissionModelVersion und
+ * ist nur fachlich relevant, wenn deren commissionType = TIERED ist.
+ *
+ * Berechnungssemantik (NICHT progressiv): fuer einen gegebenen
+ * baseAmountMinor gewinnt die Stufe mit der HOECHSTEN thresholdMinor, die
+ * <= baseAmountMinor ist. Deren tierAmountMinor (fix) ODER
+ * tierPercentageBasisPoints (prozentual auf baseAmountMinor) bestimmt den
+ * VOLLSTAENDIGEN Provisionsbetrag fuer den gesamten Betrag -- keine
+ * abschnittsweise/progressive Staffelung ueber mehrere Stufen hinweg
+ * (ChatGPT-Praezisierung AP4).
+ *
+ * Jede Zeile ist entweder Fix-ODER-Prozent (nie beides, nie keins) --
+ * durchgesetzt per DB-CHECK-Constraint
+ * commission_tiers_amount_xor_percentage_check (siehe Migration). Eine
+ * gueltige TIERED-Version braucht mindestens eine Stufe mit
+ * thresholdMinor = 0 (deckt jeden Betrag ab) -- diese Vollstaendigkeits-
+ * regel ist NICHT per DB-Constraint abbildbar (bezieht sich auf die Menge
+ * aller Zeilen einer Version) und wird stattdessen in
+ * validateCommissionModelVersion() geprueft.
+ *
+ * FK auf CommissionModelVersion mit onDelete RESTRICT (nicht CASCADE wie im
+ * urspruenglichen Plan-Vorschlag skizziert) -- konsistent mit allen
+ * uebrigen ~90 FKs in diesem Schema (append-only-Philosophie,
+ * CommissionModelVersion-Zeilen werden nie geloescht, ein versehentliches
+ * Cascade-Delete waere hier ein Sicherheitsrisiko ohne fachlichen Nutzen).
+ * Nur DRAFT-Versionen sind mutierbar (requireDraftCommissionModelVersion()
+ * in commission-admin.ts), Aenderungen an bereits geplublishten Versionen
+ * erfordern wie bei allen anderen Feldern eine neue DRAFT-Version.
+ */
+model CommissionTier {
+  id                        String   @id @default(uuid()) @db.Uuid
+  tenantId                  String   @map("tenant_id") @db.Uuid
+  commissionModelVersionId  String   @map("commission_model_version_id") @db.Uuid
+  thresholdMinor            Int      @map("threshold_minor")
+  tierAmountMinor           Int?     @map("tier_amount_minor")
+  tierPercentageBasisPoints Int?     @map("tier_percentage_basis_points")
+  sortOrder                 Int      @map("sort_order")
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  commissionModelVersion CommissionModelVersion @relation(fields: [tenantId, commissionModelVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, commissionModelVersionId, thresholdMinor])
+  @@unique([tenantId, commissionModelVersionId, sortOrder])
+  @@index([tenantId, commissionModelVersionId])
+  @@map("commission_tiers")
 }
 
 model ProductCostVersion {

@@ -36,6 +36,20 @@ import type { ScopedPrismaClient } from "../tenant/scoped-client";
 // unveraendert uebergeben werden koennen.
 export type QueryClient = Parameters<Parameters<ScopedPrismaClient["$transaction"]>[0]>[0];
 
+/**
+ * Phase 10 AP4: eine einzelne Stufe einer TIERED-`CommissionModelVersion`,
+ * fuer die Berechnung auf das fuer `computeCommissionAmountMinor()`
+ * relevante Minimum reduziert (kein `id`/`sortOrder` -- `sortOrder` ist
+ * reine Anzeige-/Bearbeitungsreihenfolge im Admin-UI, siehe
+ * `CommissionTier`-Modulkommentar in `prisma/schema.prisma`, fuer die
+ * Berechnung selbst zaehlt ausschliesslich `thresholdMinor`).
+ */
+export interface CommissionTierRow {
+  thresholdMinor: number;
+  tierAmountMinor: number | null;
+  tierPercentageBasisPoints: number | null;
+}
+
 export interface CommissionModelVersionRow {
   id: string;
   productId: string;
@@ -51,6 +65,13 @@ export interface CommissionModelVersionRow {
   /** NEU fuer Phase 6 (siehe Modulkommentar) -- von der Empfehlungs-Engine ungenutzt. */
   commissionPercentageBasisPoints: number | null;
   recurringCommissionAmountMinor: number | null;
+  /**
+   * NEU fuer Phase 10 AP4 -- nur bei `commissionType = "TIERED"` befuellt
+   * (sonst `[]`), von der Empfehlungs-Engine ungenutzt (analog
+   * `commissionPercentageBasisPoints`: zum Empfehlungszeitpunkt ist der
+   * finale Preis noch nicht bekannt, siehe `buildResolveCommission()`).
+   */
+  tiers: CommissionTierRow[];
 }
 
 export async function loadActiveCommissionModelVersions(
@@ -63,7 +84,7 @@ export async function loadActiveCommissionModelVersions(
       validFrom: { lte: atTime },
       OR: [{ validTo: null }, { validTo: { gt: atTime } }],
     },
-    include: { commissionModel: { select: { productId: true } } },
+    include: { commissionModel: { select: { productId: true } }, tiers: true },
   });
   return rows.map((r) => ({
     id: r.id,
@@ -73,6 +94,11 @@ export async function loadActiveCommissionModelVersions(
     commissionAmountMinor: r.commissionAmountMinor,
     commissionPercentageBasisPoints: r.commissionPercentageBasisPoints,
     recurringCommissionAmountMinor: r.recurringCommissionAmountMinor,
+    tiers: r.tiers.map((t) => ({
+      thresholdMinor: t.thresholdMinor,
+      tierAmountMinor: t.tierAmountMinor,
+      tierPercentageBasisPoints: t.tierPercentageBasisPoints,
+    })),
   }));
 }
 
@@ -88,6 +114,13 @@ export async function loadActiveCommissionModelVersions(
  * "ORDER BY validFrom DESC, id DESC" -- ersetzt den vormaligen rein
  * technischen "kleinste id gewinnt"-Tie-Breaker aus Phase 3B/6, der KEINE
  * fachliche Bedeutung hatte).
+ *
+ * TIERED (Phase 10 AP4): liefert -- wie PERCENTAGE -- bewusst
+ * `commissionValueMinor = null`. Welche Stufe greift, haengt vom finalen
+ * Basisbetrag ab, den die Empfehlungs-Engine zum Empfehlungszeitpunkt noch
+ * nicht kennt (identische Begruendung wie bei PERCENTAGE); erst
+ * `computeCommissionAmountMinor()` (Deal-Erfassung, kennt den finalen Preis)
+ * loest TIERED tatsaechlich auf.
  */
 export function buildResolveCommission(
   rows: CommissionModelVersionRow[],
@@ -109,7 +142,7 @@ export function buildResolveCommission(
     const row = byProduct.get(productId);
     if (!row) return null;
     const commissionValueMinor =
-      row.commissionType === "PERCENTAGE"
+      row.commissionType === "PERCENTAGE" || row.commissionType === "TIERED"
         ? null
         : (row.commissionAmountMinor ?? row.recurringCommissionAmountMinor ?? null);
     return { commissionModelVersionId: row.id, commissionValueMinor };
@@ -135,15 +168,31 @@ export function buildResolveCommission(
  * Fall derselbe Basis-Points-Satz, angewendet auf den jeweils uebergebenen
  * `baseAmountMinor` (einmalig ODER monatlich, je nach Aufruf).
  *
+ * TIERED (Phase 10 AP4): fuer den gegebenen `baseAmountMinor` gewinnt die
+ * Stufe mit der HOECHSTEN `thresholdMinor <= baseAmountMinor` -- deren
+ * `tierAmountMinor` (fix) ODER `tierPercentageBasisPoints` (prozentual,
+ * angewendet auf den GESAMTEN `baseAmountMinor`) bestimmt den
+ * VOLLSTAENDIGEN Provisionsbetrag. Bewusst NICHT progressiv/abschnittsweise
+ * gestaffelt -- die gewinnende Stufe gilt fuer den kompletten Betrag, nicht
+ * nur fuer den ueber ihrer Schwelle liegenden Anteil (ChatGPT-Praezisierung
+ * AP4, siehe `CommissionTier`-Modulkommentar in `prisma/schema.prisma`).
+ * Liefert `null`, falls `row.tiers` leer ist ODER keine Stufe mit
+ * `thresholdMinor <= baseAmountMinor` existiert (strukturell sollte
+ * Letzteres durch die `thresholdMinor = 0`-Pflichtstufe aus
+ * `validateCommissionModelVersion()` bei jeder VEROEFFENTLICHTEN Version
+ * ausgeschlossen sein -- diese Funktion selbst verlaesst sich darauf aber
+ * NICHT und bleibt defensiv `null`-sicher).
+ *
  * @param row Aufgeloeste CommissionModelVersion-Zeile fuer das Produkt.
  * @param baseAmountMinor Betrag, auf den sich `commissionType` bei
- *   PERCENTAGE bezieht (z. B. `oneTimePriceMinor` oder `monthlyPriceMinor`).
- * @param fixedAmountMinor Bei FIXED zu verwendender Betrag -- vom Aufrufer
- *   explizit `row.commissionAmountMinor` (einmalig) oder
+ *   PERCENTAGE/TIERED bezieht (z. B. `oneTimePriceMinor` oder `monthlyPriceMinor`).
+ * @param fixedAmountMinor Bei FIXED (FLAT) zu verwendender Betrag -- vom
+ *   Aufrufer explizit `row.commissionAmountMinor` (einmalig) oder
  *   `row.recurringCommissionAmountMinor` (wiederkehrend) uebergeben.
  * @returns Provisions-Minor-Betrag, oder `null` falls sich mangels
  *   Basisdaten kein Betrag berechnen laesst (z. B. PERCENTAGE ohne
- *   `commissionPercentageBasisPoints`, oder FIXED ohne den uebergebenen Wert).
+ *   `commissionPercentageBasisPoints`, FIXED ohne den uebergebenen Wert,
+ *   oder TIERED ohne passende Stufe).
  */
 export function computeCommissionAmountMinor(
   row: CommissionModelVersionRow,
@@ -154,6 +203,19 @@ export function computeCommissionAmountMinor(
     if (row.commissionPercentageBasisPoints == null) return null;
     // Basis Points: 10000 = 100.00%. Kaufmaennische Rundung auf ganze Minor-Einheiten.
     return Math.round((baseAmountMinor * row.commissionPercentageBasisPoints) / 10000);
+  }
+  if (row.commissionType === "TIERED") {
+    let winningTier: CommissionTierRow | null = null;
+    for (const tier of row.tiers) {
+      if (tier.thresholdMinor > baseAmountMinor) continue;
+      if (winningTier == null || tier.thresholdMinor > winningTier.thresholdMinor) {
+        winningTier = tier;
+      }
+    }
+    if (winningTier == null) return null;
+    if (winningTier.tierAmountMinor != null) return winningTier.tierAmountMinor;
+    if (winningTier.tierPercentageBasisPoints == null) return null;
+    return Math.round((baseAmountMinor * winningTier.tierPercentageBasisPoints) / 10000);
   }
   return fixedAmountMinor;
 }

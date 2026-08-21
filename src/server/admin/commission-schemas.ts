@@ -23,11 +23,18 @@ import { z } from "zod";
  * ist -- die Werte des Aufrufers gewinnen; ein UI wuerde die
  * Quellversions-Werte typischerweise vorab per `getCommissionModelVersionDetail()`
  * laden und in das Formular vorbefuellen, analog jedem normalen "Kopieren"-Flow).
- * `TIERED` ist hier bewusst NOCH NICHT erlaubt (`commissionTypeSchema` unten)
- * -- Validator und `CommissionTier`-CRUD kommen erst in AP4, ein DRAFT mit
- * `commissionType: "TIERED"` waere bis dahin strukturell unbefuellbar.
+ * `TIERED` war bis AP3 bewusst NICHT erlaubt (`commissionTypeSchema` unten) --
+ * seit AP4 vollstaendig implementiert (`CommissionTier`-CRUD weiter unten,
+ * `validateCommissionModelVersion()` in `commission-validator.ts`,
+ * TIERED-Berechnung in `src/server/pricing/commission.ts`). Bei TIERED
+ * bleiben ALLE drei Skalarfelder (`commissionAmountMinor`,
+ * `commissionPercentageBasisPoints`, `recurringCommissionAmountMinor`) auf
+ * der Version-Zeile selbst null -- die eigentlichen Werte liegen
+ * ausschliesslich in den `CommissionTier`-Kind-Zeilen (siehe
+ * `updateCommissionModelVersionFields()`-Modulkommentar in
+ * `commission-admin.ts`).
  */
-const commissionTypeSchema = z.enum(["FLAT", "PERCENTAGE"]);
+const commissionTypeSchema = z.enum(["FLAT", "PERCENTAGE", "TIERED"]);
 
 export const createDraftCommissionModelVersionSchema = z.object({
   commissionType: commissionTypeSchema,
@@ -79,3 +86,39 @@ export const rollbackCommissionModelVersionSchema = z.object({});
 export type RollbackCommissionModelVersionInput = z.infer<
   typeof rollbackCommissionModelVersionSchema
 >;
+
+/**
+ * `CommissionTier`-CRUD (Phase 10 AP4, siehe
+ * PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 6, ChatGPT-GO 2026-08-21 mit
+ * Praezisierungen). Jede Stufe gehoert zu genau einer DRAFT-
+ * `CommissionModelVersion` und ist entweder Fix (`tierAmountMinor`) ODER
+ * Prozent (`tierPercentageBasisPoints`) -- die exklusive ODER-Bedingung
+ * (genau eines von beiden gesetzt) wird sowohl DB-seitig (CHECK-Constraint
+ * `commission_tiers_amount_xor_percentage_check`) als auch anwendungsseitig
+ * geprueft (`createCommissionTier()`/`updateCommissionTier()` in
+ * `commission-admin.ts`, ZUSAMMENGEFUEHRTER Zustand analog AP3), da ein
+ * Zod-Schema allein bei PARTIELLEN Updates (`updateCommissionTierSchema`)
+ * diese wechselseitige Abhaengigkeit nicht pruefen kann.
+ *
+ * `thresholdMinor` (>= 0, inklusive Untergrenze) und `sortOrder` sind je
+ * Version zusaetzlich DB-seitig UNIQUE (keine doppelten Werte) -- ebenfalls
+ * bewusst redundant anwendungsseitig NICHT re-geprueft (anders als beim
+ * Amount/Percentage-Fall gibt es hier keine sinnvolle Vor-Ort-Fehlermeldung
+ * ohne einen zusaetzlichen DB-Read; der P2002-Unique-Constraint-Fehler wird
+ * stattdessen in `http-errors.ts` in eine 409-Antwort uebersetzt).
+ */
+export const createCommissionTierSchema = z.object({
+  thresholdMinor: z.number().int().nonnegative(),
+  tierAmountMinor: z.number().int().nonnegative().nullable().optional(),
+  tierPercentageBasisPoints: z.number().int().min(0).max(10000).nullable().optional(),
+  sortOrder: z.number().int(),
+});
+export type CreateCommissionTierInput = z.infer<typeof createCommissionTierSchema>;
+
+export const updateCommissionTierSchema = z.object({
+  thresholdMinor: z.number().int().nonnegative().optional(),
+  tierAmountMinor: z.number().int().nonnegative().nullable().optional(),
+  tierPercentageBasisPoints: z.number().int().min(0).max(10000).nullable().optional(),
+  sortOrder: z.number().int().optional(),
+});
+export type UpdateCommissionTierInput = z.infer<typeof updateCommissionTierSchema>;

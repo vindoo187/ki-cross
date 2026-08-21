@@ -15,9 +15,14 @@
  * PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 4) ergaenzt die eigentliche
  * CommissionModel-/Version-Management-API: `listCommissionModels()`,
  * `getCommissionModelVersionDetail()`, `createDraftCommissionModelVersion()`.
- * Das Feld-CRUD (FLAT/PERCENTAGE/TIERED, `CommissionTier`) folgt in AP3/AP4,
- * Publish/Aktivierung in AP5 -- `createDraftCommissionModelVersion()` legt
- * daher NIE eine Version mit Status ACTIVE an.
+ * Das Feld-CRUD (FLAT/PERCENTAGE in AP3, TIERED/`CommissionTier` in AP4:
+ * `createCommissionTier()`/`updateCommissionTier()`/`deleteCommissionTier()`)
+ * ist mit AP4 vollstaendig implementiert. Publish/Aktivierung folgt erst in
+ * AP5 -- `createDraftCommissionModelVersion()` legt daher NIE eine Version
+ * mit Status ACTIVE an. Der Mengen-Invarianten-Check ueber alle Stufen einer
+ * Version (mind. eine Stufe mit `thresholdMinor = 0` bei TIERED) ist NICHT
+ * Teil dieser Datei, sondern von `validateCommissionModelVersion()`
+ * (`commission-validator.ts`, AP4).
  *
  * Verwendet ausschliesslich den tenant-gescopten `db`-Client
  * (`src/server/tenant/scoped-client.ts`) -- identisches Isolationsmuster wie
@@ -41,6 +46,7 @@
  * (`validFrom DESC, id DESC`).
  */
 
+import { Prisma } from "@prisma/client";
 import { db } from "../db/client";
 import { getTenantContext, getTenantId } from "../tenant/context";
 import type { ScopedPrismaClient } from "../tenant/scoped-client";
@@ -49,10 +55,13 @@ import {
   CommissionModelVersionInvalidError,
   CommissionModelVersionNotDraftError,
   CommissionModelVersionNotFoundError,
+  CommissionTierNotFoundError,
 } from "./commission-admin-errors";
 import type {
+  CreateCommissionTierInput,
   CreateDraftCommissionModelVersionInput,
   UpdateCommissionModelVersionFieldsInput,
+  UpdateCommissionTierInput,
 } from "./commission-schemas";
 
 type ScopedTransactionClient = Parameters<Parameters<ScopedPrismaClient["$transaction"]>[0]>[0];
@@ -89,6 +98,24 @@ export interface CommissionModelVersionDetail {
   commissionAmountMinor: number | null;
   commissionPercentageBasisPoints: number | null;
   recurringCommissionAmountMinor: number | null;
+  /**
+   * Phase 10 AP4: nur befuellt (nicht-leeres Array), wenn `commissionType`
+   * TIERED ist -- bei FLAT/PERCENTAGE strukturell immer `[]`, da unter
+   * diesen Versionen keine `CommissionTier`-Zeilen angelegt werden koennen
+   * (siehe `createCommissionTier()`). Immer nach `sortOrder` aufsteigend
+   * sortiert.
+   */
+  tiers: CommissionTierDetail[];
+}
+
+/** Phase 10 AP4 -- eine einzelne Stufe einer TIERED-`CommissionModelVersion`. */
+export interface CommissionTierDetail {
+  id: string;
+  commissionModelVersionId: string;
+  thresholdMinor: number;
+  tierAmountMinor: number | null;
+  tierPercentageBasisPoints: number | null;
+  sortOrder: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +187,10 @@ function toVersionSummary(v: CommissionModelVersionRow): CommissionModelVersionS
   };
 }
 
-function toVersionDetail(v: CommissionModelVersionRow): CommissionModelVersionDetail {
+function toVersionDetail(
+  v: CommissionModelVersionRow,
+  tiers: CommissionTierDetail[],
+): CommissionModelVersionDetail {
   return {
     id: v.id,
     commissionModelId: v.commissionModelId,
@@ -173,7 +203,73 @@ function toVersionDetail(v: CommissionModelVersionRow): CommissionModelVersionDe
     commissionAmountMinor: v.commissionAmountMinor,
     commissionPercentageBasisPoints: v.commissionPercentageBasisPoints,
     recurringCommissionAmountMinor: v.recurringCommissionAmountMinor,
+    tiers,
   };
+}
+
+type CommissionTierRow = {
+  id: string;
+  commissionModelVersionId: string;
+  thresholdMinor: number;
+  tierAmountMinor: number | null;
+  tierPercentageBasisPoints: number | null;
+  sortOrder: number;
+};
+
+function toTierDetail(t: CommissionTierRow): CommissionTierDetail {
+  return {
+    id: t.id,
+    commissionModelVersionId: t.commissionModelVersionId,
+    thresholdMinor: t.thresholdMinor,
+    tierAmountMinor: t.tierAmountMinor,
+    tierPercentageBasisPoints: t.tierPercentageBasisPoints,
+    sortOrder: t.sortOrder,
+  };
+}
+
+/** Laedt alle `CommissionTier`-Zeilen EINER Version, aufsteigend nach `sortOrder`. */
+async function loadCommissionTiers(
+  client: QueryClient,
+  commissionModelVersionId: string,
+): Promise<CommissionTierDetail[]> {
+  const rows = await client.commissionTier.findMany({
+    where: { commissionModelVersionId },
+    orderBy: { sortOrder: "asc" },
+  });
+  return rows.map(toTierDetail);
+}
+
+/** Laedt eine `CommissionTier`-Zeile und prueft, dass sie zur angegebenen Version gehoert. */
+async function requireCommissionTier(
+  client: QueryClient,
+  commissionModelVersionId: string,
+  tierId: string,
+) {
+  const tier = await client.commissionTier.findUnique({ where: { id: tierId } });
+  if (!tier || tier.commissionModelVersionId !== commissionModelVersionId) {
+    throw new CommissionTierNotFoundError(tierId, commissionModelVersionId);
+  }
+  return tier;
+}
+
+/**
+ * Prueft die tierAmountMinor/tierPercentageBasisPoints-XOR-Bedingung auf dem
+ * ZUSAMMENGEFUEHRTEN Ergebniszustand (analog dem Amount/Percentage-Muster
+ * aus AP3) -- genau eines von beiden muss gesetzt sein, nie beides, nie
+ * keins.
+ */
+function validateTierAmountExclusivity(
+  resultingAmount: number | null,
+  resultingPercentage: number | null,
+): string[] {
+  const hasAmount = resultingAmount != null;
+  const hasPercentage = resultingPercentage != null;
+  if (hasAmount === hasPercentage) {
+    return [
+      "Genau eines von tierAmountMinor oder tierPercentageBasisPoints muss gesetzt sein (nie beides, nie keins).",
+    ];
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +311,8 @@ export async function getCommissionModelVersionDetail(
 ): Promise<CommissionModelVersionDetail> {
   await requireCommissionModel(db, commissionModelId);
   const version = await requireCommissionModelVersion(db, commissionModelId, versionId);
-  return toVersionDetail(version);
+  const tiers = await loadCommissionTiers(db, versionId);
+  return toVersionDetail(version, tiers);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +421,18 @@ export async function createDraftCommissionModelVersion(
  * (siehe `computeCommissionAmountMinor()`-Modulkommentar in
  * `src/server/pricing/commission.ts`: die Deal-Erfassung braucht bei FLAT
  * ggf. beide Betraege gleichzeitig).
+ *
+ * TIERED (AP4, ChatGPT-GO 2026-08-21): bei `commissionType: "TIERED"`
+ * muessen ALLE DREI Skalarfelder (`commissionAmountMinor`,
+ * `commissionPercentageBasisPoints`, `recurringCommissionAmountMinor`) null
+ * bzw. nicht gesetzt sein -- die eigentlichen Werte liegen ausschliesslich
+ * in den `CommissionTier`-Kind-Zeilen (`createCommissionTier()`/
+ * `updateCommissionTier()`/`deleteCommissionTier()` weiter unten). Ob
+ * mindestens eine Stufe mit `thresholdMinor = 0` existiert (Mengen-
+ * Invariante, nicht auf Feld-Ebene pruefbar) ist NICHT Aufgabe dieser
+ * Funktion, sondern von `validateCommissionModelVersion()`
+ * (`commission-validator.ts`), da Publish (AP5) diese Pruefung vor jeder
+ * Veroeffentlichung ohnehin durchlaufen muss.
  */
 export async function updateCommissionModelVersionFields(
   commissionModelId: string,
@@ -362,6 +471,17 @@ export async function updateCommissionModelVersionFields(
     issues.push(
       "commissionAmountMinor und recurringCommissionAmountMinor muessen bei commissionType " +
         "PERCENTAGE null bzw. nicht gesetzt sein.",
+    );
+  }
+  if (
+    resultingType === "TIERED" &&
+    (resultingAmount != null || resultingPercentage != null || resultingRecurringAmount != null)
+  ) {
+    issues.push(
+      "commissionAmountMinor, commissionPercentageBasisPoints und " +
+        "recurringCommissionAmountMinor muessen bei commissionType TIERED alle null bzw. " +
+        "nicht gesetzt sein -- die Werte liegen bei TIERED ausschliesslich in den " +
+        "CommissionTier-Kind-Zeilen.",
     );
   }
   if (issues.length > 0) {
@@ -417,6 +537,210 @@ export async function updateCommissionModelVersionFields(
   return getCommissionModelVersionDetail(commissionModelId, versionId);
 }
 
+// ---------------------------------------------------------------------------
+// 5. Tier-CRUD: CommissionTier-Zeilen einer DRAFT-Version (AP4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Legt eine neue `CommissionTier`-Stufe fuer eine bestehende DRAFT-
+ * `CommissionModelVersion` an -- nur zulaessig, wenn `commissionType` der
+ * Version bereits TIERED ist (fruehes, klares Fehlerbild statt einer
+ * strukturell unbefuellbaren Zwischenmenge; die Mengen-Invariante
+ * "mindestens eine Stufe mit thresholdMinor = 0" prueft weiterhin
+ * `validateCommissionModelVersion()`, da sie sich erst nach dem Anlegen
+ * ALLER Stufen einer Version beurteilen laesst). Audit im selben
+ * Transaktionsschritt wie die Mutation (Muster aus AP2/AP3).
+ */
+export async function createCommissionTier(
+  commissionModelId: string,
+  versionId: string,
+  input: CreateCommissionTierInput,
+): Promise<CommissionTierDetail> {
+  await requireCommissionModel(db, commissionModelId);
+  const version = await requireDraftCommissionModelVersion(db, commissionModelId, versionId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  if (version.commissionType !== "TIERED") {
+    throw new CommissionModelVersionInvalidError(versionId, [
+      "CommissionTier-Zeilen koennen nur zu einer Version mit commissionType TIERED " +
+        "hinzugefuegt werden.",
+    ]);
+  }
+
+  const issues = validateTierAmountExclusivity(
+    input.tierAmountMinor ?? null,
+    input.tierPercentageBasisPoints ?? null,
+  );
+  if (issues.length > 0) {
+    throw new CommissionModelVersionInvalidError(versionId, issues);
+  }
+
+  let tier;
+  try {
+    tier = await db.$transaction(async (tx) => {
+      const created = await tx.commissionTier.create({
+        data: {
+          tenantId,
+          commissionModelVersionId: versionId,
+          thresholdMinor: input.thresholdMinor,
+          tierAmountMinor: input.tierAmountMinor ?? null,
+          tierPercentageBasisPoints: input.tierPercentageBasisPoints ?? null,
+          sortOrder: input.sortOrder,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId,
+          actorUserId,
+          action: "CREATE",
+          entityType: "CommissionTier",
+          entityId: created.id,
+          metadata: { commissionModelId, commissionModelVersionId: versionId },
+        },
+      });
+
+      return created;
+    });
+  } catch (err) {
+    // Uebersetzt die DB-UNIQUE-Constraints commission_tiers_..._threshold_minor_key
+    // und commission_tiers_..._sort_order_key (siehe Migration
+    // 20260821190000_commission_tiers) in eine saubere 422-Antwort statt eines
+    // rohen P2002-Fehlers -- analog dem etablierten Muster in
+    // deals/service.ts/recommendation/outcome.ts.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      throw new CommissionModelVersionInvalidError(versionId, [
+        "Es existiert bereits eine CommissionTier-Zeile mit demselben thresholdMinor " +
+          "oder sortOrder innerhalb dieser Version.",
+      ]);
+    }
+    throw err;
+  }
+
+  return toTierDetail(tier);
+}
+
+/**
+ * Partielles Update EINER bestehenden `CommissionTier`-Zeile (analog
+ * `updateCommissionModelVersionFields()` aus AP3: Amount/Percentage-XOR
+ * wird auf dem ZUSAMMENGEFUEHRTEN Ergebniszustand geprueft, nicht nur
+ * patch-lokal). Nur auf DRAFT-Versionen zulaessig.
+ */
+export async function updateCommissionTier(
+  commissionModelId: string,
+  versionId: string,
+  tierId: string,
+  patch: UpdateCommissionTierInput,
+): Promise<CommissionTierDetail> {
+  await requireCommissionModel(db, commissionModelId);
+  await requireDraftCommissionModelVersion(db, commissionModelId, versionId);
+  const current = await requireCommissionTier(db, versionId, tierId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  const resultingAmount =
+    patch.tierAmountMinor !== undefined ? patch.tierAmountMinor : current.tierAmountMinor;
+  const resultingPercentage =
+    patch.tierPercentageBasisPoints !== undefined
+      ? patch.tierPercentageBasisPoints
+      : current.tierPercentageBasisPoints;
+
+  const issues = validateTierAmountExclusivity(resultingAmount, resultingPercentage);
+  if (issues.length > 0) {
+    throw new CommissionModelVersionInvalidError(versionId, issues);
+  }
+
+  const hasChanges =
+    patch.thresholdMinor !== undefined ||
+    patch.tierAmountMinor !== undefined ||
+    patch.tierPercentageBasisPoints !== undefined ||
+    patch.sortOrder !== undefined;
+
+  if (hasChanges) {
+    try {
+      await db.$transaction(async (tx) => {
+        await tx.commissionTier.update({
+          where: { id: tierId },
+          data: {
+            ...(patch.thresholdMinor !== undefined ? { thresholdMinor: patch.thresholdMinor } : {}),
+            ...(patch.tierAmountMinor !== undefined
+              ? { tierAmountMinor: patch.tierAmountMinor }
+              : {}),
+            ...(patch.tierPercentageBasisPoints !== undefined
+              ? { tierPercentageBasisPoints: patch.tierPercentageBasisPoints }
+              : {}),
+            ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            tenantId,
+            actorUserId,
+            action: "UPDATE",
+            entityType: "CommissionTier",
+            entityId: tierId,
+            metadata: {
+              commissionModelId,
+              commissionModelVersionId: versionId,
+              changedFields: Object.keys(patch),
+            },
+          },
+        });
+      });
+    } catch (err) {
+      // Siehe P2002-Uebersetzungskommentar in createCommissionTier().
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        throw new CommissionModelVersionInvalidError(versionId, [
+          "Es existiert bereits eine CommissionTier-Zeile mit demselben thresholdMinor " +
+            "oder sortOrder innerhalb dieser Version.",
+        ]);
+      }
+      throw err;
+    }
+  }
+
+  const updated = await db.commissionTier.findUniqueOrThrow({ where: { id: tierId } });
+  return toTierDetail(updated);
+}
+
+/**
+ * Loescht EINE bestehende `CommissionTier`-Zeile -- anders als bei den
+ * uebrigen Kern-Entitaeten (append-only-Philosophie) ist ein echtes Loeschen
+ * hier bewusst zulaessig, da `CommissionTier`-Zeilen ausschliesslich
+ * innerhalb einer noch NICHT veroeffentlichten DRAFT-Version existieren
+ * (nach Publish ist die Version -- inkl. ihrer Stufen -- unveraenderlich,
+ * ein Loeschen ist dann strukturell nicht mehr moeglich, da
+ * `requireDraftCommissionModelVersion()` bereits vorher mit 409 blockt).
+ */
+export async function deleteCommissionTier(
+  commissionModelId: string,
+  versionId: string,
+  tierId: string,
+): Promise<void> {
+  await requireCommissionModel(db, commissionModelId);
+  await requireDraftCommissionModelVersion(db, commissionModelId, versionId);
+  await requireCommissionTier(db, versionId, tierId);
+  const tenantId = getTenantId();
+  const actorUserId = getTenantContext().userId;
+
+  await db.$transaction(async (tx) => {
+    await tx.commissionTier.delete({ where: { id: tierId } });
+
+    await tx.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId,
+        action: "DELETE",
+        entityType: "CommissionTier",
+        entityId: tierId,
+        metadata: { commissionModelId, commissionModelVersionId: versionId },
+      },
+    });
+  });
+}
+
 // Re-Export der internen Ladefunktionen unter einem Namespace-Objekt fuer
 // AP3+ (vermeidet Umbenennung/Re-Import-Kollisionen mit gleichnamigen
 // Helfern in rule-admin.ts/question-admin.ts, falls beide Module einmal im
@@ -425,4 +749,5 @@ export const commissionAdminInternal = {
   requireCommissionModel,
   requireCommissionModelVersion,
   requireDraftCommissionModelVersion,
+  loadCommissionTiers,
 };

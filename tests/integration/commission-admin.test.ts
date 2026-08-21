@@ -29,16 +29,21 @@ import {
   type SessionPayload,
 } from "@/server/auth/session";
 import {
+  createCommissionTier,
   createDraftCommissionModelVersion,
+  deleteCommissionTier,
   getCommissionModelVersionDetail,
   listCommissionModels,
   updateCommissionModelVersionFields,
+  updateCommissionTier,
 } from "@/server/admin/commission-admin";
+import { validateCommissionModelVersion } from "@/server/admin/commission-validator";
 import {
   CommissionModelNotFoundError,
   CommissionModelVersionInvalidError,
   CommissionModelVersionNotDraftError,
   CommissionModelVersionNotFoundError,
+  CommissionTierNotFoundError,
 } from "@/server/admin/commission-admin-errors";
 import { GET as listCommissionModelsRoute } from "@/app/api/admin/commission-models/route";
 import { POST as createDraftCommissionModelVersionRoute } from "@/app/api/admin/commission-models/[id]/versions/route";
@@ -46,6 +51,11 @@ import {
   GET as getCommissionModelVersionDetailRoute,
   PATCH as patchCommissionModelVersionRoute,
 } from "@/app/api/admin/commission-models/[id]/versions/[versionId]/route";
+import { POST as createCommissionTierRoute } from "@/app/api/admin/commission-models/[id]/versions/[versionId]/tiers/route";
+import {
+  DELETE as deleteCommissionTierRoute,
+  PATCH as patchCommissionTierRoute,
+} from "@/app/api/admin/commission-models/[id]/versions/[versionId]/tiers/[tierId]/route";
 
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 process.env.DEV_AUTH_SECRET ??= "ap2-commission-admin-test-secret-not-for-prod";
@@ -162,6 +172,39 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       },
     });
     return { commissionModelId, versionId: version.id };
+  }
+
+  /**
+   * Direkter DB-Bypass fuer die Validator-Tests (AP4) -- legt eine
+   * `CommissionTier`-Zeile OHNE die App-Schicht-Guards aus
+   * `createCommissionTier()` an (insbesondere OHNE die
+   * "nur bei commissionType TIERED"-Pruefung). Damit lassen sich
+   * `validateCommissionModelVersion()`-Faelle testen, die die App-Schicht
+   * selbst gar nicht erst zulaesst (z. B. Tier-Zeilen unter einer FLAT-
+   * Version) -- die tier-INTERNEN DB-CHECK-Constraints (Amount-XOR-
+   * Percentage, threshold >= 0, UNIQUE threshold/sortOrder) bleiben dabei
+   * unveraendert in Kraft und koennen daher NICHT umgangen werden.
+   */
+  async function createRawCommissionTier(
+    tenantId: string,
+    commissionModelVersionId: string,
+    overrides: Partial<{
+      thresholdMinor: number;
+      tierAmountMinor: number | null;
+      tierPercentageBasisPoints: number | null;
+      sortOrder: number;
+    }> = {},
+  ) {
+    return rawClient.commissionTier.create({
+      data: {
+        tenantId,
+        commissionModelVersionId,
+        thresholdMinor: overrides.thresholdMinor ?? 0,
+        tierAmountMinor: overrides.tierAmountMinor ?? 100,
+        tierPercentageBasisPoints: overrides.tierPercentageBasisPoints ?? null,
+        sortOrder: overrides.sortOrder ?? 0,
+      },
+    });
   }
 
   function requestWithCookie(
@@ -850,6 +893,678 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
         },
       });
       expect(auditEntries).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // 4. Tier-CRUD (AP4) -- createCommissionTier()/updateCommissionTier()/
+  //    deleteCommissionTier()
+  // -------------------------------------------------------------------
+  describe("4. Tier-CRUD (AP4)", () => {
+    it("createCommissionTier() gegen eine NICHT-TIERED-Version -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-not-tiered");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "FLAT" },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            createCommissionTier(commissionModelId, versionId, {
+              thresholdMinor: 0,
+              tierAmountMinor: 100,
+              sortOrder: 0,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("createCommissionTier() gegen eine nicht-DRAFT-Version -> CommissionModelVersionNotDraftError", async () => {
+      const tenantId = await createTenant("ap4-not-draft");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "ACTIVE", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            createCommissionTier(commissionModelId, versionId, {
+              thresholdMinor: 0,
+              tierAmountMinor: 100,
+              sortOrder: 0,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionNotDraftError);
+    });
+
+    it("createCommissionTier() mit tierAmountMinor UND tierPercentageBasisPoints gleichzeitig gesetzt -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-both-set");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            createCommissionTier(commissionModelId, versionId, {
+              thresholdMinor: 0,
+              tierAmountMinor: 100,
+              tierPercentageBasisPoints: 500,
+              sortOrder: 0,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("createCommissionTier() mit weder tierAmountMinor NOCH tierPercentageBasisPoints gesetzt -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-neither-set");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            createCommissionTier(commissionModelId, versionId, {
+              thresholdMinor: 0,
+              sortOrder: 0,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("createCommissionTier() legt eine gueltige Amount-Stufe an, sichtbar in getCommissionModelVersionDetail().tiers", async () => {
+      const tenantId = await createTenant("ap4-create-valid");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const tier = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      expect(tier.thresholdMinor).toBe(0);
+      expect(tier.tierAmountMinor).toBe(100);
+      expect(tier.tierPercentageBasisPoints).toBeNull();
+
+      const detail = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => getCommissionModelVersionDetail(commissionModelId, versionId),
+      );
+      expect(detail.tiers).toHaveLength(1);
+      expect(detail.tiers[0]?.id).toBe(tier.id);
+    });
+
+    it("createCommissionTier() mit doppeltem thresholdMinor innerhalb derselben Version -> CommissionModelVersionInvalidError (P2002-Uebersetzung)", async () => {
+      const tenantId = await createTenant("ap4-dup-threshold");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            createCommissionTier(commissionModelId, versionId, {
+              thresholdMinor: 0,
+              tierAmountMinor: 200,
+              sortOrder: 1,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("createCommissionTier() mit doppeltem sortOrder innerhalb derselben Version -> CommissionModelVersionInvalidError (P2002-Uebersetzung)", async () => {
+      const tenantId = await createTenant("ap4-dup-sortorder");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            createCommissionTier(commissionModelId, versionId, {
+              thresholdMinor: 1_000,
+              tierPercentageBasisPoints: 500,
+              sortOrder: 0,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("updateCommissionTier() Merge-Pruefung: Patch setzt nur tierPercentageBasisPoints, tierAmountMinor bleibt aus dem bestehenden Datensatz gesetzt -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-update-merge-invalid");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const tier = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () =>
+            updateCommissionTier(commissionModelId, versionId, tier.id, {
+              tierPercentageBasisPoints: 500,
+            }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("updateCommissionTier() gueltiges partielles Update (nur thresholdMinor) laesst tierAmountMinor unveraendert", async () => {
+      const tenantId = await createTenant("ap4-update-valid");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const tier = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      const updated = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => updateCommissionTier(commissionModelId, versionId, tier.id, { thresholdMinor: 50 }),
+      );
+      expect(updated.thresholdMinor).toBe(50);
+      expect(updated.tierAmountMinor).toBe(100);
+    });
+
+    it("updateCommissionTier() gegen eine nicht-DRAFT-Version -> CommissionModelVersionNotDraftError", async () => {
+      const tenantId = await createTenant("ap4-update-not-draft");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const tier = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      await rawClient.commissionModelVersion.update({
+        where: { id: versionId },
+        data: { status: "ACTIVE" },
+      });
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => updateCommissionTier(commissionModelId, versionId, tier.id, { thresholdMinor: 10 }),
+        ),
+      ).rejects.toThrow(CommissionModelVersionNotDraftError);
+    });
+
+    it("updateCommissionTier()/deleteCommissionTier() mit tierId aus ANDERER Version -> CommissionTierNotFoundError", async () => {
+      const tenantId = await createTenant("ap4-wrong-version");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productA = await createProduct(tenantId, "pa");
+      const productB = await createProduct(tenantId, "pb");
+      const { commissionModelId: modelA, versionId: versionA } =
+        await createCommissionModelWithVersion(tenantId, productA, "cm-a", {
+          status: "DRAFT",
+          commissionType: "TIERED",
+          commissionAmountMinor: null,
+        });
+      const { versionId: versionB } = await createCommissionModelWithVersion(
+        tenantId,
+        productB,
+        "cm-b",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      // Direkter Bypass statt createCommissionTier(), da modelA/versionB als
+      // fremdes Modell ohnehin schon bei requireCommissionModelVersion()
+      // abgelehnt wuerde -- hier interessiert ausschliesslich die
+      // requireCommissionTier()-Zugehoerigkeitspruefung selbst (Tier gehoert
+      // zu versionB, wird aber unter versionA angefragt).
+      const rawTier = await createRawCommissionTier(tenantId, versionB, {
+        thresholdMinor: 0,
+        sortOrder: 0,
+      });
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => updateCommissionTier(modelA, versionA, rawTier.id, { thresholdMinor: 10 }),
+        ),
+      ).rejects.toThrow(CommissionTierNotFoundError);
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: actorUserId, roles: [], managementScope: null },
+          () => deleteCommissionTier(modelA, versionA, rawTier.id),
+        ),
+      ).rejects.toThrow(CommissionTierNotFoundError);
+    });
+
+    it("deleteCommissionTier() entfernt die Zeile vollstaendig (kein Append-only bei CommissionTier)", async () => {
+      const tenantId = await createTenant("ap4-delete");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const tier = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => deleteCommissionTier(commissionModelId, versionId, tier.id),
+      );
+      const remaining = await rawClient.commissionTier.findUnique({ where: { id: tier.id } });
+      expect(remaining).toBeNull();
+      const detail = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => getCommissionModelVersionDetail(commissionModelId, versionId),
+      );
+      expect(detail.tiers).toHaveLength(0);
+    });
+
+    it("createCommissionTier()/updateCommissionTier()/deleteCommissionTier() schreiben je einen AuditLog-Eintrag (CREATE/UPDATE/DELETE, entityType CommissionTier)", async () => {
+      const tenantId = await createTenant("ap4-audit");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const tier = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => updateCommissionTier(commissionModelId, versionId, tier.id, { thresholdMinor: 5 }),
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () => deleteCommissionTier(commissionModelId, versionId, tier.id),
+      );
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: "CommissionTier", entityId: tier.id },
+        orderBy: { occurredAt: "asc" },
+      });
+      expect(auditEntries.map((e) => e.action)).toEqual(["CREATE", "UPDATE", "DELETE"]);
+      expect(auditEntries.every((e) => e.actorUserId === actorUserId)).toBe(true);
+    });
+
+    it("HTTP: POST .../tiers mit config.commissions.edit -> 201", async () => {
+      const tenantId = await createTenant("ap4-http-post");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: ["config.commissions.edit"],
+      });
+      const response = await createCommissionTierRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}/tiers`,
+          token,
+          {
+            method: "POST",
+            body: JSON.stringify({ thresholdMinor: 0, tierAmountMinor: 100, sortOrder: 0 }),
+          },
+        ),
+        routeParams({ id: commissionModelId, versionId }),
+      );
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      expect(body.tier.thresholdMinor).toBe(0);
+    });
+
+    it("HTTP: POST .../tiers ohne config.commissions.edit -> 403", async () => {
+      const tenantId = await createTenant("ap4-http-403");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: ["config.commissions.view"],
+      });
+      const response = await createCommissionTierRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}/tiers`,
+          token,
+          {
+            method: "POST",
+            body: JSON.stringify({ thresholdMinor: 0, tierAmountMinor: 100, sortOrder: 0 }),
+          },
+        ),
+        routeParams({ id: commissionModelId, versionId }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it("HTTP: PATCH .../tiers/:tierId -> 200, DELETE .../tiers/:tierId -> 204", async () => {
+      const tenantId = await createTenant("ap4-http-patch-delete");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      const tier = await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      const token = createSessionToken({
+        ...baseSessionPayload(tenantId, actorUserId),
+        configPermissions: ["config.commissions.edit"],
+      });
+      const patchResponse = await patchCommissionTierRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}/tiers/${tier.id}`,
+          token,
+          { method: "PATCH", body: JSON.stringify({ thresholdMinor: 25 }) },
+        ),
+        routeParams({ id: commissionModelId, versionId, tierId: tier.id }),
+      );
+      expect(patchResponse.status).toBe(200);
+      const patchBody = await patchResponse.json();
+      expect(patchBody.tier.thresholdMinor).toBe(25);
+
+      const deleteResponse = await deleteCommissionTierRoute(
+        requestWithCookie(
+          `http://localhost/api/admin/commission-models/${commissionModelId}/versions/${versionId}/tiers/${tier.id}`,
+          token,
+          { method: "DELETE" },
+        ),
+        routeParams({ id: commissionModelId, versionId, tierId: tier.id }),
+      );
+      expect(deleteResponse.status).toBe(204);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // 5. Validator (AP4) -- validateCommissionModelVersion()
+  // -------------------------------------------------------------------
+  describe("5. Validator (AP4) -- validateCommissionModelVersion()", () => {
+    it("gueltige FLAT-Version -> { valid: true }", async () => {
+      const tenantId = await createTenant("ap4-val-flat-ok");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "FLAT", commissionAmountMinor: 1_000 },
+      );
+      const result = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => validateCommissionModelVersion(commissionModelId, versionId),
+      );
+      expect(result).toEqual({ valid: true });
+    });
+
+    it("FLAT-Version ohne Amount UND ohne RecurringAmount -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-val-flat-empty");
+      const productId = await createProduct(tenantId, "p");
+      const commissionModelId = await createEmptyCommissionModel(tenantId, productId, "cm");
+      const version = await rawClient.commissionModelVersion.create({
+        data: {
+          tenantId,
+          commissionModelId,
+          versionNumber: 1,
+          status: "DRAFT",
+          validFrom: new Date("2026-01-01T00:00:00Z"),
+          commissionType: "FLAT",
+          currency: "EUR",
+        },
+      });
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => validateCommissionModelVersion(commissionModelId, version.id),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("PERCENTAGE-Version mit gleichzeitig gesetztem commissionAmountMinor (DB-Bypass) -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-val-pct-invalid");
+      const productId = await createProduct(tenantId, "p");
+      const commissionModelId = await createEmptyCommissionModel(tenantId, productId, "cm");
+      const version = await rawClient.commissionModelVersion.create({
+        data: {
+          tenantId,
+          commissionModelId,
+          versionNumber: 1,
+          status: "DRAFT",
+          validFrom: new Date("2026-01-01T00:00:00Z"),
+          commissionType: "PERCENTAGE",
+          currency: "EUR",
+          commissionPercentageBasisPoints: 500,
+          commissionAmountMinor: 1_000, // App-Schicht wuerde das verhindern -- Validator prueft redundant.
+        },
+      });
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => validateCommissionModelVersion(commissionModelId, version.id),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("FLAT-Version MIT CommissionTier-Zeilen (DB-Bypass, App-Schicht wuerde das verhindern) -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-val-flat-with-tiers");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "FLAT", commissionAmountMinor: 1_000 },
+      );
+      await createRawCommissionTier(tenantId, versionId, { thresholdMinor: 0, sortOrder: 0 });
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => validateCommissionModelVersion(commissionModelId, versionId),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("TIERED-Version ohne jede CommissionTier-Zeile -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-val-tiered-empty");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => validateCommissionModelVersion(commissionModelId, versionId),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("TIERED-Version OHNE Stufe mit thresholdMinor = 0 -> CommissionModelVersionInvalidError", async () => {
+      const tenantId = await createTenant("ap4-val-tiered-no-zero");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 500,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      await expect(
+        runWithTenantContext(
+          { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+          () => validateCommissionModelVersion(commissionModelId, versionId),
+        ),
+      ).rejects.toThrow(CommissionModelVersionInvalidError);
+    });
+
+    it("gueltige TIERED-Version MIT thresholdMinor = 0-Stufe -> { valid: true }", async () => {
+      const tenantId = await createTenant("ap4-val-tiered-ok");
+      const actorUserId = await createUser(tenantId, "actor");
+      const productId = await createProduct(tenantId, "p");
+      const { commissionModelId, versionId } = await createCommissionModelWithVersion(
+        tenantId,
+        productId,
+        "cm",
+        { status: "DRAFT", commissionType: "TIERED", commissionAmountMinor: null },
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 0,
+            tierAmountMinor: 100,
+            sortOrder: 0,
+          }),
+      );
+      await runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        () =>
+          createCommissionTier(commissionModelId, versionId, {
+            thresholdMinor: 1_000,
+            tierPercentageBasisPoints: 500,
+            sortOrder: 1,
+          }),
+      );
+      const result = await runWithTenantContext(
+        { tenantId, userId: randomUUID(), roles: [], managementScope: null },
+        () => validateCommissionModelVersion(commissionModelId, versionId),
+      );
+      expect(result).toEqual({ valid: true });
+    });
+
+    it("Tenant-Isolation: validateCommissionModelVersion() mit commissionModelId aus fremdem Mandanten -> CommissionModelNotFoundError", async () => {
+      const tenantA = await createTenant("ap4-val-tenant-a");
+      const tenantB = await createTenant("ap4-val-tenant-b");
+      const productB = await createProduct(tenantB, "pb");
+      const { commissionModelId: modelB, versionId: versionB } =
+        await createCommissionModelWithVersion(tenantB, productB, "cm-b", { status: "DRAFT" });
+      await expect(
+        runWithTenantContext(
+          { tenantId: tenantA, userId: randomUUID(), roles: [], managementScope: null },
+          () => validateCommissionModelVersion(modelB, versionB),
+        ),
+      ).rejects.toThrow(CommissionModelNotFoundError);
     });
   });
 });

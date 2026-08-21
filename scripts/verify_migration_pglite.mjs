@@ -12,6 +12,7 @@ const MIGRATIONS = [
   "prisma/migrations/20260817220000_analytics_kpi_indexes/migration.sql",
   "prisma/migrations/20260818090000_user_password_hash/migration.sql",
   "prisma/migrations/20260818140000_audit_action_delete/migration.sql",
+  "prisma/migrations/20260821190000_commission_tiers/migration.sql",
 ];
 
 const db = new PGlite({ extensions: { btree_gist } });
@@ -476,13 +477,107 @@ console.log(
   "OK: ACTIVE QuestionnaireVersion fuer ein ANDERES Questionnaire desselben Tenants bleibt unabhaengig moeglich.",
 );
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 10 AP4: commission_tiers -- die beiden neuen
+// CHECK-Constraints (threshold_minor >= 0, tier_amount_minor XOR
+// tier_percentage_basis_points) sowie die eindeutige (tenant_id,
+// commission_model_version_id, threshold_minor)/(..., sort_order)
+// tatsaechlich durchsetzen, plus ein gueltiger End-to-End-Datensatz je
+// Variante (Amount-Tier, Percentage-Tier).
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-10-AP4-commission_tiers ==");
+
+const tieredCommissionModelId = uuid();
+await db.query(
+  `INSERT INTO commission_models (id, tenant_id, product_id, name) VALUES ($1,$2,$3,'CM-Tiered')`,
+  [tieredCommissionModelId, tenantId, productId],
+);
+const tieredVersionId = uuid();
+await db.query(
+  `INSERT INTO commission_model_versions (id, tenant_id, commission_model_id, version_number, status, valid_from, commission_type, currency)
+   VALUES ($1,$2,$3,1,'DRAFT','2026-01-01T00:00:00Z','TIERED','EUR')`,
+  [tieredVersionId, tenantId, tieredCommissionModelId],
+);
+
+const tierZeroId = uuid();
+await db.query(
+  `INSERT INTO commission_tiers (id, tenant_id, commission_model_version_id, threshold_minor, tier_amount_minor, sort_order)
+   VALUES ($1,$2,$3,0,500,1)`,
+  [tierZeroId, tenantId, tieredVersionId],
+);
+const tierOneId = uuid();
+await db.query(
+  `INSERT INTO commission_tiers (id, tenant_id, commission_model_version_id, threshold_minor, tier_percentage_basis_points, sort_order)
+   VALUES ($1,$2,$3,100000,500,2)`,
+  [tierOneId, tenantId, tieredVersionId],
+);
+console.log(
+  "OK: zwei CommissionTier-Zeilen (Amount- und Percentage-Variante) end-to-end angelegt.",
+);
+
+await expectRejected(
+  "threshold_minor < 0 (commission_tiers_threshold_minor_nonnegative_check)",
+  () =>
+    db.query(
+      `INSERT INTO commission_tiers (id, tenant_id, commission_model_version_id, threshold_minor, tier_amount_minor, sort_order)
+     VALUES ($1,$2,$3,-1,100,3)`,
+      [uuid(), tenantId, tieredVersionId],
+    ),
+);
+await expectRejected(
+  "weder tier_amount_minor noch tier_percentage_basis_points gesetzt (commission_tiers_amount_xor_percentage_check)",
+  () =>
+    db.query(
+      `INSERT INTO commission_tiers (id, tenant_id, commission_model_version_id, threshold_minor, sort_order)
+       VALUES ($1,$2,$3,50000,3)`,
+      [uuid(), tenantId, tieredVersionId],
+    ),
+);
+await expectRejected(
+  "BEIDE tier_amount_minor UND tier_percentage_basis_points gesetzt (commission_tiers_amount_xor_percentage_check)",
+  () =>
+    db.query(
+      `INSERT INTO commission_tiers (id, tenant_id, commission_model_version_id, threshold_minor, tier_amount_minor, tier_percentage_basis_points, sort_order)
+       VALUES ($1,$2,$3,50000,100,500,3)`,
+      [uuid(), tenantId, tieredVersionId],
+    ),
+);
+await expectRejected(
+  "doppelte threshold_minor innerhalb derselben Version (commission_tiers_tenant_id_commission_model_version_id_threshold_minor_key)",
+  () =>
+    db.query(
+      `INSERT INTO commission_tiers (id, tenant_id, commission_model_version_id, threshold_minor, tier_amount_minor, sort_order)
+       VALUES ($1,$2,$3,0,999,3)`,
+      [uuid(), tenantId, tieredVersionId],
+    ),
+);
+await expectRejected(
+  "doppelter sort_order innerhalb derselben Version (commission_tiers_tenant_id_commission_model_version_id_sort_order_key)",
+  () =>
+    db.query(
+      `INSERT INTO commission_tiers (id, tenant_id, commission_model_version_id, threshold_minor, tier_amount_minor, sort_order)
+       VALUES ($1,$2,$3,50000,100,1)`,
+      [uuid(), tenantId, tieredVersionId],
+    ),
+);
+await expectRejected(
+  "commission_model_version_id auf nicht existierende Version (commission_tiers_tenant_id_commission_model_version_id_fkey)",
+  () =>
+    db.query(
+      `INSERT INTO commission_tiers (id, tenant_id, commission_model_version_id, threshold_minor, tier_amount_minor, sort_order)
+       VALUES ($1,$2,$3,0,100,1)`,
+      [uuid(), tenantId, uuid()],
+    ),
+);
+
 if (failures > 0) {
   console.error(`\n${failures} Smoke-Test-Pruefung(en) FEHLGESCHLAGEN.`);
   process.exit(1);
 }
 
 console.log(
-  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8) ERFOLGREICH.",
+  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8 + PHASE 10 AP4) ERFOLGREICH.",
 );
 
 await db.close();

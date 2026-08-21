@@ -38,6 +38,7 @@ function commissionRow(
     commissionAmountMinor: null,
     commissionPercentageBasisPoints: null,
     recurringCommissionAmountMinor: null,
+    tiers: [],
     ...overrides,
   };
 }

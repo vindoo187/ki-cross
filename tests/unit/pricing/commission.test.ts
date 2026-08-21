@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildResolveCommission, computeCommissionAmountMinor } from "@/server/pricing/commission";
-import type { CommissionModelVersionRow } from "@/server/pricing/commission";
+import type { CommissionModelVersionRow, CommissionTierRow } from "@/server/pricing/commission";
 
 function row(overrides: Partial<CommissionModelVersionRow> = {}): CommissionModelVersionRow {
   return {
@@ -11,9 +11,34 @@ function row(overrides: Partial<CommissionModelVersionRow> = {}): CommissionMode
     commissionAmountMinor: null,
     commissionPercentageBasisPoints: null,
     recurringCommissionAmountMinor: null,
+    tiers: [],
     ...overrides,
   };
 }
+
+/**
+ * Phase 10 AP4 (ChatGPT-GO 2026-08-21) -- die vom Projektleiter geforderte
+ * "Kern-Test"-Referenzstaffel fuer die TIERED-Grenzfaelle: drei Stufen bei
+ * thresholdMinor 0 (Amount-Variante), 1_000 (Percentage-Variante) und 2_500
+ * (Amount-Variante) -- deckt Amount- UND Percentage-Stufen sowie alle
+ * relevanten Schwellenwert-Grenzfaelle ab (siehe describe-Block unten).
+ */
+const tierZero: CommissionTierRow = {
+  thresholdMinor: 0,
+  tierAmountMinor: 100,
+  tierPercentageBasisPoints: null,
+};
+const tierOneThousand: CommissionTierRow = {
+  thresholdMinor: 1_000,
+  tierAmountMinor: null,
+  tierPercentageBasisPoints: 500, // 5%
+};
+const tierTwoFiveHundred: CommissionTierRow = {
+  thresholdMinor: 2_500,
+  tierAmountMinor: 900,
+  tierPercentageBasisPoints: null,
+};
+const threeTiers: CommissionTierRow[] = [tierZero, tierOneThousand, tierTwoFiveHundred];
 
 describe("computeCommissionAmountMinor()", () => {
   it("FLAT: liefert den uebergebenen fixedAmountMinor unveraendert (baseAmountMinor wird ignoriert)", () => {
@@ -24,10 +49,6 @@ describe("computeCommissionAmountMinor()", () => {
 
   it("FLAT: liefert null, falls kein fixedAmountMinor uebergeben wurde", () => {
     expect(computeCommissionAmountMinor(row({ commissionType: "FLAT" }), 10_000, null)).toBeNull();
-  });
-
-  it("TIERED: faellt wie FLAT auf den uebergebenen fixedAmountMinor zurueck (unveraendertes Verhalten aus buildResolveCommission())", () => {
-    expect(computeCommissionAmountMinor(row({ commissionType: "TIERED" }), 10_000, 750)).toBe(750);
   });
 
   it("PERCENTAGE: berechnet Basis-Points korrekt (10000 = 100%)", () => {
@@ -130,5 +151,85 @@ describe("buildResolveCommission() -- Tie-Breaker bei mehreren Zeilen je product
     ]);
     expect(resolve("prod-1")?.commissionModelVersionId).toBe("cmv-p1-new");
     expect(resolve("prod-2")?.commissionModelVersionId).toBe("cmv-p2");
+  });
+});
+
+/**
+ * Phase 10 AP4 (ChatGPT-GO 2026-08-21) -- "Kern-Test": vollstaendige
+ * Grenzfall-Matrix fuer die TIERED-Berechnung anhand der drei Referenz-
+ * Stufen `threeTiers` (0 -> 100 Minor fix, 1_000 -> 5%, 2_500 -> 900 Minor
+ * fix). Nicht progressiv: die Stufe mit der HOECHSTEN thresholdMinor
+ * <= baseAmountMinor gewinnt und ihr Satz gilt fuer den GESAMTEN Betrag.
+ */
+describe("computeCommissionAmountMinor() -- TIERED (Kern-Test-Grenzfaelle)", () => {
+  const tieredRow = row({ commissionType: "TIERED", tiers: threeTiers });
+
+  it("baseAmountMinor genau 0: unterste Stufe (Amount-Variante) greift", () => {
+    expect(computeCommissionAmountMinor(tieredRow, 0, null)).toBe(100);
+  });
+
+  it("baseAmountMinor knapp unter der zweiten Schwelle (999): unterste Stufe greift weiterhin", () => {
+    expect(computeCommissionAmountMinor(tieredRow, 999, null)).toBe(100);
+  });
+
+  it("baseAmountMinor exakt an der zweiten Schwelle (1_000, inklusive Untergrenze): zweite Stufe (Percentage-Variante) greift", () => {
+    // 1_000 * 500 / 10000 = 50
+    expect(computeCommissionAmountMinor(tieredRow, 1_000, null)).toBe(50);
+  });
+
+  it("baseAmountMinor zwischen zweiter und dritter Schwelle (2_000): zweite Stufe greift weiterhin", () => {
+    // 2_000 * 500 / 10000 = 100
+    expect(computeCommissionAmountMinor(tieredRow, 2_000, null)).toBe(100);
+  });
+
+  it("baseAmountMinor exakt an der hoechsten Schwelle (2_500): dritte Stufe (Amount-Variante) greift", () => {
+    expect(computeCommissionAmountMinor(tieredRow, 2_500, null)).toBe(900);
+  });
+
+  it("baseAmountMinor deutlich ueber der hoechsten Schwelle (100_000): die hoechste Stufe gilt weiterhin fuer den GESAMTEN Betrag (nicht progressiv/gestaffelt)", () => {
+    expect(computeCommissionAmountMinor(tieredRow, 100_000, null)).toBe(900);
+  });
+
+  it("keine Stufe mit thresholdMinor <= baseAmountMinor vorhanden (unvollstaendige/ungueltige Version ohne 0-Stufe): liefert null statt eines falschen Werts", () => {
+    const incompleteRow = row({
+      commissionType: "TIERED",
+      tiers: [{ thresholdMinor: 500, tierAmountMinor: 100, tierPercentageBasisPoints: null }],
+    });
+    expect(computeCommissionAmountMinor(incompleteRow, 100, null)).toBeNull();
+  });
+
+  it("leeres tiers-Array liefert null", () => {
+    expect(
+      computeCommissionAmountMinor(row({ commissionType: "TIERED", tiers: [] }), 5_000, null),
+    ).toBeNull();
+  });
+
+  it("Reihenfolge der Stufen im Array darf das Ergebnis nicht beeinflussen (kein Verlass auf sortOrder/Array-Position)", () => {
+    const shuffled = row({
+      commissionType: "TIERED",
+      tiers: [tierTwoFiveHundred, tierZero, tierOneThousand],
+    });
+    expect(computeCommissionAmountMinor(shuffled, 2_500, null)).toBe(900);
+    expect(computeCommissionAmountMinor(shuffled, 1_500, null)).toBe(75); // 1_500 * 500 / 10000
+    expect(computeCommissionAmountMinor(shuffled, 0, null)).toBe(100);
+  });
+
+  it("Percentage-Stufe mit tierPercentageBasisPoints = 0 liefert 0 (nicht null)", () => {
+    const zeroPercentRow = row({
+      commissionType: "TIERED",
+      tiers: [{ thresholdMinor: 0, tierAmountMinor: null, tierPercentageBasisPoints: 0 }],
+    });
+    expect(computeCommissionAmountMinor(zeroPercentRow, 10_000, null)).toBe(0);
+  });
+});
+
+describe("buildResolveCommission() -- TIERED", () => {
+  it("TIERED liefert -- wie PERCENTAGE -- bewusst commissionValueMinor = null (finaler Preis zum Empfehlungszeitpunkt unbekannt)", () => {
+    const resolve = buildResolveCommission([
+      row({ id: "cmv-1", productId: "prod-1", commissionType: "TIERED", tiers: threeTiers }),
+    ]);
+    const resolution = resolve("prod-1");
+    expect(resolution?.commissionModelVersionId).toBe("cmv-1");
+    expect(resolution?.commissionValueMinor).toBeNull();
   });
 });
