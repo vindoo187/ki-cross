@@ -74,6 +74,21 @@
  * sondern in der Route-Schicht aufgerufen (AP3+), identisches Muster wie
  * Phase 8/9/10.
  *
+ * AUDIT-METADATA / PII-SCANNER (ChatGPT-Auflage Phase 11 AP8, 2026-08-22,
+ * ausdruecklich zu dokumentieren): `AuditLog.metadata` fuer `Goal`/
+ * `GoalVersion` darf NIEMALS Datums-/Zeitstempel-Strings enthalten (z. B.
+ * `periodStart.toISOString()`). Der generische PII-Scanner
+ * (`src/server/validation/contact-data-guard.ts`) erkennt Ziffernfolgen
+ * ab 7 zusammenhaengenden Ziffern (mit optionalen Trennzeichen) als
+ * vermeintliche Telefonnummer -- ein ISO-8601-Zeitstempel wie
+ * "2026-01-01T00:00:00.000Z" matcht dieses Muster faelschlich (CI-#85-Fund
+ * in AP2, siehe project_ki_cross_phase11_plan_go.md). Zulaessig sind
+ * ausschliesslich: UUIDs (vom Scanner explizit als technische ID
+ * whitelisted), Enum-Strings (`scopeType`/`metricKey`/`periodType`) und
+ * Zahlen (`versionNumber` u. ae. -- werden vom String-Scanner ohnehin nicht
+ * inspiziert). Ein benoetigtes Datum gehoert NIE ins Audit-Metadata,
+ * sondern wird ueber `entityId` + Tabellen-Lookup nachgeschlagen.
+ *
  * DATENSCHUTZ (ChatGPT-Bestaetigung 2026-08-22, siehe
  * project_ki_cross_phase11_plan_go.md): `scopeType: "EMPLOYEE"`-Goals und
  * `createdByUserId` sind keine neue Datenschutzkategorie, bewegen sich aber

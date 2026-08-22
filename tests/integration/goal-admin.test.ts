@@ -471,4 +471,107 @@ describe.skipIf(!hasDatabaseUrl)("Phase 11 AP2: Goal-Management-Service", () => 
       expect(listForB).toHaveLength(0);
     });
   });
+
+  // -------------------------------------------------------------------
+  // 4. AP8: Audit-Vollstaendigkeit + Reproduzierbarkeit (append-only
+  //    Regression, siehe project_ki_cross_phase11_plan_go.md, ChatGPT-GO
+  //    2026-08-22 nach AP8-Discovery)
+  // -------------------------------------------------------------------
+  describe("4. AP8: Audit-Vollstaendigkeit / Reproduzierbarkeit", () => {
+    /**
+     * Deckt exakt die von ChatGPT nach der AP8-Discovery vorgegebene
+     * Test-Sequenz ab (bewusst KEIN asOf-Resolver/historischer Report --
+     * das ist ausdruecklich NICHT Teil von AP8, siehe Modulkommentar):
+     * Goal anlegen -> v1, getCurrentGoalVersion() liefert v1, neue Version
+     * -> v2, getCurrentGoalVersion() liefert v2, v1 bleibt UNVERAENDERT
+     * bestehen (byte-fuer-byte identisch zur urspruenglichen Erstellung),
+     * Audit enthaelt sowohl v1 als auch v2. Der letzte Punkt ("Ziel-Ist-
+     * Berechnung der aktuellen aktiven Periode verwendet v2") wird hier
+     * NICHT erneut geprueft -- das ist bereits durch
+     * tests/integration/goal-progress-view.test.ts (AP7) abgedeckt, deren
+     * `computeGoalProgress()`-Aufruf strukturell IMMER `goal.currentVersion`
+     * erhaelt (siehe `buildGoalProgressViewModels()` in `goal-visibility.ts`).
+     */
+    it("Reproduzierbarkeits-Sequenz: v1 bleibt nach Anlegen von v2 unveraendert bestehen, getCurrentGoalVersion() liefert stets die neueste, Audit erfasst beide", async () => {
+      const tenantId = await createTenant("ap8-reproducibility");
+      const actorUserId = await createUser(tenantId, "actor");
+
+      const goal = await runWithTenantContext(ctx(tenantId, actorUserId), () =>
+        createGoal(tenantGoalInput(tenantId, { targetCount: 100 })),
+      );
+      const v1BeforeCorrection = await runWithTenantContext(ctx(tenantId, actorUserId), () =>
+        getCurrentGoalVersion(goal.id),
+      );
+      expect(v1BeforeCorrection.versionNumber).toBe(1);
+      expect(v1BeforeCorrection.targetCount).toBe(100);
+
+      const v2 = await runWithTenantContext(ctx(tenantId, actorUserId), () =>
+        createGoalVersion(goal.id, { targetCount: 150 }),
+      );
+      expect(v2.versionNumber).toBe(2);
+
+      const currentAfterCorrection = await runWithTenantContext(ctx(tenantId, actorUserId), () =>
+        getCurrentGoalVersion(goal.id),
+      );
+      expect(currentAfterCorrection.versionNumber).toBe(2);
+      expect(currentAfterCorrection.targetCount).toBe(150);
+
+      // v1 bleibt UNVERAENDERT bestehen -- kein Update-/Delete-Codepfad hat
+      // sie angefasst. Byte-fuer-byte-Vergleich gegen den urspruenglichen
+      // createGoal()-Rueckgabewert (nicht nur "existiert noch").
+      const detail = await runWithTenantContext(ctx(tenantId, actorUserId), () =>
+        getGoalDetail(goal.id),
+      );
+      expect(detail.versions).toHaveLength(2);
+      const v1AfterCorrection = detail.versions.find((v) => v.versionNumber === 1);
+      expect(v1AfterCorrection).toEqual(v1BeforeCorrection);
+
+      // Audit erfasst BEIDE Versionen (CREATE Goal + CREATE GoalVersion v1,
+      // dann CREATE GoalVersion v2) -- 3 Eintraege insgesamt.
+      const auditEntries = await rawClient.auditLog.findMany({
+        where: { tenantId, entityType: { in: ["Goal", "GoalVersion"] }, action: "CREATE" },
+        orderBy: { occurredAt: "asc" },
+      });
+      expect(auditEntries).toHaveLength(3);
+      const goalVersionAuditEntries = auditEntries.filter((e) => e.entityType === "GoalVersion");
+      expect(goalVersionAuditEntries.map((e) => e.entityId).sort()).toEqual(
+        [v1BeforeCorrection.id, v2.id].sort(),
+      );
+    });
+
+    /**
+     * Append-only-Regression (ChatGPTs ausdrueckliche AP8-Auflage): stellt
+     * sicher, dass `createGoalVersion()` bei einem bereits existierenden
+     * Goal STETS eine NEUE Zeile mit fortlaufender `versionNumber` anlegt --
+     * es gibt keinen Codepfad, der eine bestehende `GoalVersion`-Zeile
+     * aktualisiert (kein `update()`/`upsert()` auf `goalVersion` irgendwo in
+     * `goal-admin.ts`, siehe Modulkommentar). Drei aufeinanderfolgende
+     * Korrekturen muessen daher drei UNTERSCHIEDLICHE Zeilen ergeben, deren
+     * fruehere Eintraege inhaltlich unangetastet bleiben.
+     */
+    it("drei aufeinanderfolgende createGoalVersion()-Aufrufe erzeugen drei separate, seitdem unveraenderliche Zeilen (kein Update-Pfad)", async () => {
+      const tenantId = await createTenant("ap8-append-only");
+      const actorUserId = await createUser(tenantId, "actor");
+
+      const goal = await runWithTenantContext(ctx(tenantId, actorUserId), () =>
+        createGoal(tenantGoalInput(tenantId, { targetCount: 10 })),
+      );
+      const v2 = await runWithTenantContext(ctx(tenantId, actorUserId), () =>
+        createGoalVersion(goal.id, { targetCount: 20 }),
+      );
+      const v3 = await runWithTenantContext(ctx(tenantId, actorUserId), () =>
+        createGoalVersion(goal.id, { targetCount: 30 }),
+      );
+
+      const allVersions = await rawClient.goalVersion.findMany({
+        where: { goalId: goal.id },
+        orderBy: { versionNumber: "asc" },
+      });
+      expect(allVersions.map((v) => v.versionNumber)).toEqual([1, 2, 3]);
+      expect(allVersions.map((v) => v.targetCount)).toEqual([10, 20, 30]);
+      // v2/v3 wie von den Service-Aufrufen zurueckgegeben, unveraendert in der DB wiedergefunden.
+      expect(allVersions[1]?.id).toBe(v2.id);
+      expect(allVersions[2]?.id).toBe(v3.id);
+    });
+  });
 });
