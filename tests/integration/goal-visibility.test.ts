@@ -55,14 +55,12 @@ describe.skipIf(!hasDatabaseUrl)(
 
     function asContext<T>(
       tenantId: string,
+      userId: string,
       employeeId: string | undefined,
       managementScope: ManagementScope | null,
       fn: () => Promise<T>,
     ): Promise<T> {
-      return runWithTenantContext(
-        { tenantId, userId: randomUUID(), employeeId, roles: [], managementScope },
-        fn,
-      );
+      return runWithTenantContext({ tenantId, userId, employeeId, roles: [], managementScope }, fn);
     }
 
     async function createTenant(key: string) {
@@ -70,6 +68,17 @@ describe.skipIf(!hasDatabaseUrl)(
         data: { key: `${key}-${suffix}`, name: `Test ${key}`, isSynthetic: true },
       });
       return tenant.id;
+    }
+
+    // Ein echter, in der Test-DB existierender User pro Tenant als Audit-Actor
+    // -- `createGoal()` schreibt einen AuditLog-Eintrag mit `actorUserId` aus
+    // dem TenantContext; eine frei erfundene randomUUID() verletzt den FK
+    // `audit_logs_tenant_id_actor_user_id_fkey` (siehe CI #91).
+    async function createUser(tenantId: string, key: string) {
+      const user = await rawClient.user.create({
+        data: { tenantId, email: `${key}-${suffix}@example-synthetic.test`, isSynthetic: true },
+      });
+      return user.id;
     }
 
     async function createCompany(tenantId: string, key: string) {
@@ -110,9 +119,12 @@ describe.skipIf(!hasDatabaseUrl)(
     let goalEmployeeA1aId: string;
 
     let tenantBId: string;
+    let actorAId: string;
+    let actorBId: string;
 
     beforeAll(async () => {
       tenantId = await createTenant("goalvis");
+      actorAId = await createUser(tenantId, "actor-a");
       companyA1Id = await createCompany(tenantId, "A1");
       storeA1aId = await createStore(tenantId, companyA1Id, "A1a");
       storeA1bId = await createStore(tenantId, companyA1Id, "A1b");
@@ -122,6 +134,7 @@ describe.skipIf(!hasDatabaseUrl)(
 
       // Zweiter, unabhaengiger Mandant fuer den Tenant-Isolationstest.
       tenantBId = await createTenant("goalvis-b");
+      actorBId = await createUser(tenantBId, "actor-b");
       const companyBId = await createCompany(tenantBId, "B1");
       const storeBId = await createStore(tenantBId, companyBId, "B1a");
 
@@ -132,7 +145,7 @@ describe.skipIf(!hasDatabaseUrl)(
         scopeType: "TENANT" | "COMPANY" | "STORE" | "EMPLOYEE",
         scopeId: string,
       ) =>
-        asContext(tenantId, undefined, null, () =>
+        asContext(tenantId, actorAId, undefined, null, () =>
           createGoal({
             scopeType,
             scopeId,
@@ -152,7 +165,7 @@ describe.skipIf(!hasDatabaseUrl)(
       goalEmployeeA1aId = (await createGoalAs("EMPLOYEE", employeeA1aId)).id;
 
       // Ein Goal in Tenant B -- darf in KEINEM Tenant-A-Ergebnis auftauchen.
-      await asContext(tenantBId, undefined, null, () =>
+      await asContext(tenantBId, actorBId, undefined, null, () =>
         createGoal({
           scopeType: "STORE",
           scopeId: storeBId,
@@ -176,14 +189,16 @@ describe.skipIf(!hasDatabaseUrl)(
     // -----------------------------------------------------------------
 
     it("Mitarbeiter sieht ausschliesslich das eigene EMPLOYEE-Goal", async () => {
-      const goals = await asContext(tenantId, employeeA1aId, null, () =>
+      const goals = await asContext(tenantId, actorAId, employeeA1aId, null, () =>
         listVisibleGoalsForEmployee(),
       );
       expect(idsOf(goals)).toEqual([goalEmployeeA1aId]);
     });
 
     it("Mitarbeiter ohne employeeId (reiner Management-Account) erhaelt leere Liste, keinen Fehler", async () => {
-      const goals = await asContext(tenantId, undefined, null, () => listVisibleGoalsForEmployee());
+      const goals = await asContext(tenantId, actorAId, undefined, null, () =>
+        listVisibleGoalsForEmployee(),
+      );
       expect(goals).toEqual([]);
     });
 
@@ -193,7 +208,7 @@ describe.skipIf(!hasDatabaseUrl)(
 
     it("Management mit STORE-Scope (nur A1a) sieht STORE- und EMPLOYEE-Goal von A1a, nicht COMPANY/TENANT", async () => {
       const scope: ManagementScope = { level: "STORE", storeIds: [storeA1aId] };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope),
       );
       expect(idsOf(goals)).toEqual([goalEmployeeA1aId, goalStoreA1aId].sort());
@@ -201,7 +216,7 @@ describe.skipIf(!hasDatabaseUrl)(
 
     it("Management mit COMPANY-Scope (A1a+A1b) sieht STORE/COMPANY/EMPLOYEE von A1, nicht TENANT", async () => {
       const scope: ManagementScope = { level: "COMPANY", storeIds: [storeA1aId, storeA1bId] };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope),
       );
       expect(idsOf(goals)).toEqual([goalCompanyA1Id, goalEmployeeA1aId, goalStoreA1aId].sort());
@@ -212,7 +227,7 @@ describe.skipIf(!hasDatabaseUrl)(
         level: "TENANT",
         storeIds: [storeA1aId, storeA1bId, storeA2aId],
       };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope),
       );
       expect(idsOf(goals)).toEqual(
@@ -223,7 +238,7 @@ describe.skipIf(!hasDatabaseUrl)(
     it("COMPANY-Goal NICHT sichtbar, wenn nur ein Teil der Company-Stores autorisiert ist (Subset-Prinzip)", async () => {
       // Scope deckt nur A1a ab, NICHT A1b -- Company A1 hat aber beide.
       const scope: ManagementScope = { level: "STORE", storeIds: [storeA1aId] };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope),
       );
       expect(goals.some((g) => g.id === goalCompanyA1Id)).toBe(false);
@@ -235,7 +250,7 @@ describe.skipIf(!hasDatabaseUrl)(
       // aber selbst bei einem (hypothetischen) level="TENANT"-Objekt darf die
       // Pruefung NICHT allein auf level vertrauen (ChatGPTs Korrektur).
       const scope: ManagementScope = { level: "COMPANY", storeIds: [storeA1aId, storeA1bId] };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope),
       );
       expect(goals.some((g) => g.id === goalTenantAId)).toBe(false);
@@ -243,7 +258,7 @@ describe.skipIf(!hasDatabaseUrl)(
 
     it("EMPLOYEE-Goal sichtbar fuer Management, wenn der Mitarbeiter einem autorisierten Store angehoert", async () => {
       const scope: ManagementScope = { level: "STORE", storeIds: [storeA1aId] };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope),
       );
       expect(goals.some((g) => g.id === goalEmployeeA1aId)).toBe(true);
@@ -252,7 +267,7 @@ describe.skipIf(!hasDatabaseUrl)(
     it("EMPLOYEE-Goal NICHT sichtbar, wenn der Mitarbeiter zu einem nicht autorisierten Store gehoert", async () => {
       // Scope deckt nur A2a ab -- employeeA1aId gehoert zu A1a.
       const scope: ManagementScope = { level: "STORE", storeIds: [storeA2aId] };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope),
       );
       expect(goals.some((g) => g.id === goalEmployeeA1aId)).toBe(false);
@@ -263,7 +278,7 @@ describe.skipIf(!hasDatabaseUrl)(
         level: "TENANT",
         storeIds: [storeA1aId, storeA1bId, storeA2aId],
       };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope, storeA2aId),
       );
       // Nach Einschraenkung auf A2a ist weder das TENANT- noch das
@@ -273,7 +288,7 @@ describe.skipIf(!hasDatabaseUrl)(
 
     it("kein Zugriff (scope=null) wirft ManagementAccessDeniedError (Deny-by-default)", async () => {
       await expect(
-        asContext(tenantId, undefined, null, () => listVisibleGoalsForManagement(null)),
+        asContext(tenantId, actorAId, undefined, null, () => listVisibleGoalsForManagement(null)),
       ).rejects.toThrow();
     });
 
@@ -286,7 +301,7 @@ describe.skipIf(!hasDatabaseUrl)(
         level: "TENANT",
         storeIds: [storeA1aId, storeA1bId, storeA2aId],
       };
-      const goals = await asContext(tenantId, undefined, scope, () =>
+      const goals = await asContext(tenantId, actorAId, undefined, scope, () =>
         listVisibleGoalsForManagement(scope),
       );
       expect(goals.every((g) => g.id !== undefined)).toBe(true);
@@ -301,28 +316,28 @@ describe.skipIf(!hasDatabaseUrl)(
     // -----------------------------------------------------------------
 
     it("resolveGoalKpiScopeFilter(): TENANT -> kein Filter", async () => {
-      const filter = await asContext(tenantId, undefined, null, () =>
+      const filter = await asContext(tenantId, actorAId, undefined, null, () =>
         resolveGoalKpiScopeFilter({ scopeType: "TENANT", scopeId: tenantId }),
       );
       expect(filter).toEqual({});
     });
 
     it("resolveGoalKpiScopeFilter(): COMPANY -> storeIds aller Stores der Company", async () => {
-      const filter = await asContext(tenantId, undefined, null, () =>
+      const filter = await asContext(tenantId, actorAId, undefined, null, () =>
         resolveGoalKpiScopeFilter({ scopeType: "COMPANY", scopeId: companyA1Id }),
       );
       expect(filter.storeIds?.slice().sort()).toEqual([storeA1aId, storeA1bId].sort());
     });
 
     it("resolveGoalKpiScopeFilter(): STORE -> storeId", async () => {
-      const filter = await asContext(tenantId, undefined, null, () =>
+      const filter = await asContext(tenantId, actorAId, undefined, null, () =>
         resolveGoalKpiScopeFilter({ scopeType: "STORE", scopeId: storeA1aId }),
       );
       expect(filter).toEqual({ storeId: storeA1aId });
     });
 
     it("resolveGoalKpiScopeFilter(): EMPLOYEE -> employeeId", async () => {
-      const filter = await asContext(tenantId, undefined, null, () =>
+      const filter = await asContext(tenantId, actorAId, undefined, null, () =>
         resolveGoalKpiScopeFilter({ scopeType: "EMPLOYEE", scopeId: employeeA1aId }),
       );
       expect(filter).toEqual({ employeeId: employeeA1aId });
