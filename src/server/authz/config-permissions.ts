@@ -6,7 +6,12 @@
  * 2026-08-18) und um `config.commissions.*` erweitert in Phase 10 AP1
  * (ChatGPT-GO 2026-08-21, siehe PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt
  * 3/14 Punkt 4 -- "config.commissions.*", NICHT "config.pricing.*", da der
- * fachliche Gegenstand Provision/Commission ist, nicht Pricing).
+ * fachliche Gegenstand Provision/Commission ist, nicht Pricing). Um
+ * `config.goals.*` erweitert in Phase 11 AP1 (ChatGPT finales GO
+ * 2026-08-22, siehe PHASE_11_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 7)
+ * -- regelt WER Ziele setzen darf; bewusst getrennt von der Frage, WER
+ * welche Ziele SEHEN darf (weiterhin die bestehende Management-Scope-
+ * Architektur aus Phase 7, siehe unten).
  * Durchgaengig additive Erweiterung der bestehenden `config_editor`/
  * `config_publisher`-Rollen statt neuer Rollen -- siehe
  * PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 2.1. Getrennt von der
@@ -14,13 +19,17 @@
  * (`src/server/authz/management-scope.ts`) -- ChatGPT wörtlich: "Die
  * bestehende Phase-7-Management-Scope-Architektur bleibt davon getrennt."
  *
- * Verbindliche Leitplanken (ChatGPT-GO, 2026-08-18, gelten fuer ALLE DREI
- * Permission-Gruppen gleichermassen):
+ * Verbindliche Leitplanken (ChatGPT-GO, 2026-08-18, gelten fuer ALLE VIER
+ * Permission-Gruppen gleichermassen, siehe Phase-11-Ergaenzung oben):
  * - Config-Permissions sind ausschliesslich TENANT-scoped (Fragen/
- *   Fragebögen, Regeln/RuleSets UND Provisionsmodelle sind mandantenweit
- *   modelliert, kein `storeId`-Bezug im Schema) -- STORE-/COMPANY-
- *   Zuweisungen tragen NIE zu Config-Permissions bei, kein "künstlicher
- *   Store-Scope".
+ *   Fragebögen, Regeln/RuleSets, Provisionsmodelle UND Ziele sind
+ *   mandantenweit modelliert, kein `storeId`-Bezug im Schema) -- STORE-/
+ *   COMPANY-Zuweisungen tragen NIE zu Config-Permissions bei, kein
+ *   "künstlicher Store-Scope". (Die STORE/COMPANY/EMPLOYEE-Scope-Werte
+ *   von `Goal.scopeType` sind ein rein fachlicher Adressierungs-Wert des
+ *   Zielobjekts, KEIN Config-Permission-Scope -- wer ein Store-Ziel
+ *   setzen darf, wird weiterhin ausschliesslich ueber die TENANT-scoped
+ *   `config.goals.edit`-Permission entschieden.)
  * - Deny-by-default: keine qualifizierende Zuweisung -> leere Permission-
  *   Menge, NIE ein impliziter Vollzugriff.
  * - `publish` darf nicht implizit aus `edit` entstehen -- alle Keys werden
@@ -48,11 +57,19 @@ export const CONFIG_COMMISSIONS_PERMISSION_KEYS = [
   "config.commissions.publish",
 ] as const;
 
-/** Kombinierter Katalog aller Config-Permission-Keys (Fragen + Regeln + Provisionsmodelle). */
+/** Phase 11 AP1 (ChatGPT finales GO 2026-08-22): Permission-Keys fuer die Zielverwaltung. */
+export const CONFIG_GOALS_PERMISSION_KEYS = [
+  "config.goals.view",
+  "config.goals.edit",
+  "config.goals.publish",
+] as const;
+
+/** Kombinierter Katalog aller Config-Permission-Keys (Fragen + Regeln + Provisionsmodelle + Ziele). */
 export const ALL_CONFIG_PERMISSION_KEYS = [
   ...CONFIG_QUESTIONS_PERMISSION_KEYS,
   ...CONFIG_RULES_PERMISSION_KEYS,
   ...CONFIG_COMMISSIONS_PERMISSION_KEYS,
+  ...CONFIG_GOALS_PERMISSION_KEYS,
 ] as const;
 
 export type ConfigPermissionKey = (typeof ALL_CONFIG_PERMISSION_KEYS)[number];

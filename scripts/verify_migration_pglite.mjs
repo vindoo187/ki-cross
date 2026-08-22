@@ -14,6 +14,7 @@ const MIGRATIONS = [
   "prisma/migrations/20260818140000_audit_action_delete/migration.sql",
   "prisma/migrations/20260821190000_commission_tiers/migration.sql",
   "prisma/migrations/20260822000000_deal_item_commission_model_version/migration.sql",
+  "prisma/migrations/20260822100000_goal_model/migration.sql",
 ];
 
 const db = new PGlite({ extensions: { btree_gist } });
@@ -599,13 +600,96 @@ await expectRejected(
     ),
 );
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 11 AP1: goals + goal_versions -- gueltiger End-to-End-
+// Datensatz (STORE-Scope, DEALS_CLOSED-Metrik, targetCount) sowie die
+// neuen Constraints: XOR-CHECK auf den drei Zielwert-Feldern
+// (goal_versions_target_value_xor_check), eindeutige Goal-Identitaet
+// (goals_scope_metric_period_key), eindeutige versionNumber je Goal
+// (goal_versions_tenant_id_goal_id_version_number_key), FK auf ein nicht
+// existierendes Goal. KEIN status-Feld auf goal_versions (bewusst, siehe
+// Schema-/Migrationskommentar) -- "aktuelle" Version wird ausschliesslich
+// ueber getCurrentGoalVersion() (AP2, Anwendungsebene) bestimmt, nicht
+// hier auf DB-Ebene geprueft.
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-11-AP1-goals/goal_versions ==");
+
+const goalId = uuid();
+await db.query(
+  `INSERT INTO goals (id, tenant_id, scope_type, scope_id, metric_key, period_type, period_start)
+   VALUES ($1,$2,'STORE',$3,'DEALS_CLOSED','MONTH','2026-09-01T00:00:00Z')`,
+  [goalId, tenantId, storeId],
+);
+const goalVersionId = uuid();
+await db.query(
+  `INSERT INTO goal_versions (id, tenant_id, goal_id, version_number, target_count, created_by_user_id)
+   VALUES ($1,$2,$3,1,20,$4)`,
+  [goalVersionId, tenantId, goalId, userId],
+);
+console.log("OK: Goal (STORE/DEALS_CLOSED) + GoalVersion (targetCount=20) end-to-end angelegt.");
+
+await expectRejected("GoalVersion ohne jeden Zielwert (goal_versions_target_value_xor_check)", () =>
+  db.query(
+    `INSERT INTO goal_versions (id, tenant_id, goal_id, version_number) VALUES ($1,$2,$3,2)`,
+    [uuid(), tenantId, goalId],
+  ),
+);
+await expectRejected(
+  "GoalVersion mit ZWEI gesetzten Zielwerten (goal_versions_target_value_xor_check)",
+  () =>
+    db.query(
+      `INSERT INTO goal_versions (id, tenant_id, goal_id, version_number, target_count, target_amount_minor) VALUES ($1,$2,$3,2,20,50000)`,
+      [uuid(), tenantId, goalId],
+    ),
+);
+await expectRejected(
+  "zweites Goal mit identischer Scope/Metrik/Periode-Identitaet (goals_scope_metric_period_key)",
+  () =>
+    db.query(
+      `INSERT INTO goals (id, tenant_id, scope_type, scope_id, metric_key, period_type, period_start)
+       VALUES ($1,$2,'STORE',$3,'DEALS_CLOSED','MONTH','2026-09-01T00:00:00Z')`,
+      [uuid(), tenantId, storeId],
+    ),
+);
+await expectRejected(
+  "doppelte version_number innerhalb desselben Goal (goal_versions_tenant_id_goal_id_version_number_key)",
+  () =>
+    db.query(
+      `INSERT INTO goal_versions (id, tenant_id, goal_id, version_number, target_count) VALUES ($1,$2,$3,1,99)`,
+      [uuid(), tenantId, goalId],
+    ),
+);
+await expectRejected(
+  "goal_id auf nicht existierendes Goal (goal_versions_tenant_id_goal_id_fkey)",
+  () =>
+    db.query(
+      `INSERT INTO goal_versions (id, tenant_id, goal_id, version_number, target_count) VALUES ($1,$2,$3,1,10)`,
+      [uuid(), tenantId, uuid()],
+    ),
+);
+
+// Eine zweite, historisierende GoalVersion (Korrektur) fuer dasselbe Goal
+// bleibt gueltig -- kein Publish-Workflow, einfach die naechste
+// versionNumber (siehe Modulkommentar: getCurrentGoalVersion() waehlt sie
+// spaeter in AP2 ueber ORDER BY version_number DESC LIMIT 1 aus).
+const goalVersion2Id = uuid();
+await db.query(
+  `INSERT INTO goal_versions (id, tenant_id, goal_id, version_number, target_count, created_by_user_id)
+   VALUES ($1,$2,$3,2,25,$4)`,
+  [goalVersion2Id, tenantId, goalId, userId],
+);
+console.log(
+  "OK: zweite GoalVersion (Korrektur, version_number=2, targetCount=25) fuer dasselbe Goal end-to-end angelegt -- Historisierung ohne Publish-Workflow bestaetigt.",
+);
+
 if (failures > 0) {
   console.error(`\n${failures} Smoke-Test-Pruefung(en) FEHLGESCHLAGEN.`);
   process.exit(1);
 }
 
 console.log(
-  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8 + PHASE 10 AP4 + PHASE 10 AP6) ERFOLGREICH.",
+  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8 + PHASE 10 AP4 + PHASE 10 AP6 + PHASE 11 AP1) ERFOLGREICH.",
 );
 
 await db.close();

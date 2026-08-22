@@ -6,6 +6,7 @@ import {
 import {
   ALL_CONFIG_PERMISSION_KEYS,
   CONFIG_COMMISSIONS_PERMISSION_KEYS,
+  CONFIG_GOALS_PERMISSION_KEYS,
   CONFIG_QUESTIONS_PERMISSION_KEYS,
   CONFIG_RULES_PERMISSION_KEYS,
 } from "@/server/authz/config-permissions";
@@ -33,6 +34,11 @@ import {
  * Absicherung fuer die neuen `config.commissions.*`-Keys, additiv auf
  * denselben config_editor/config_publisher-Rollen (keine neuen Rollen,
  * siehe PHASE_10_IMPLEMENTATION_PLAN.md Abschnitt 3).
+ *
+ * Weiter erweitert um Phase 11 AP1 (ChatGPT finales GO 2026-08-22):
+ * dieselbe Absicherung fuer die neuen `config.goals.*`-Keys, additiv auf
+ * denselben config_editor/config_publisher-Rollen (keine neuen Rollen,
+ * siehe PHASE_11_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 7).
  */
 describe("permissionKeysForSeedRole", () => {
   const allPermissionKeys = [
@@ -56,6 +62,9 @@ describe("permissionKeysForSeedRole", () => {
     "config.commissions.view",
     "config.commissions.edit",
     "config.commissions.publish",
+    "config.goals.view",
+    "config.goals.edit",
+    "config.goals.publish",
   ];
 
   it("sales_employee erhaelt KEINE der drei Management-Analytics-Permissions", () => {
@@ -83,6 +92,13 @@ describe("permissionKeysForSeedRole", () => {
     const granted = permissionKeysForSeedRole("sales_employee", allPermissionKeys);
     for (const commissionsKey of CONFIG_COMMISSIONS_PERMISSION_KEYS) {
       expect(granted).not.toContain(commissionsKey);
+    }
+  });
+
+  it("sales_employee erhaelt KEINE der drei config.goals.*-Permissions (Phase 11 AP1)", () => {
+    const granted = permissionKeysForSeedRole("sales_employee", allPermissionKeys);
+    for (const goalsKey of CONFIG_GOALS_PERMISSION_KEYS) {
+      expect(granted).not.toContain(goalsKey);
     }
   });
 
@@ -130,17 +146,26 @@ describe("permissionKeysForSeedRole", () => {
 
   it("config_editor erhaelt zusaetzlich genau config.commissions.view und .edit, NICHT .publish (Phase 10 AP1)", () => {
     const granted = permissionKeysForSeedRole("config_editor", allPermissionKeys);
+    expect(granted).toContain("config.commissions.edit");
+    expect(granted).toContain("config.commissions.view");
+    expect(granted).not.toContain("config.commissions.publish");
+  });
+
+  it("config_editor erhaelt zusaetzlich genau config.goals.view und .edit, NICHT .publish (Phase 11 AP1)", () => {
+    const granted = permissionKeysForSeedRole("config_editor", allPermissionKeys);
     expect(granted.sort()).toEqual(
       [
         "config.commissions.edit",
         "config.commissions.view",
+        "config.goals.edit",
+        "config.goals.view",
         "config.questions.edit",
         "config.questions.view",
         "config.rules.edit",
         "config.rules.view",
       ].sort(),
     );
-    expect(granted).not.toContain("config.commissions.publish");
+    expect(granted).not.toContain("config.goals.publish");
   });
 
   it("config_publisher erhaelt alle drei config.questions.*-Permissions", () => {
@@ -150,7 +175,7 @@ describe("permissionKeysForSeedRole", () => {
     }
   });
 
-  it("config_publisher erhaelt alle neun config.questions.*/config.rules.*/config.commissions.*-Permissions (Phase 10 AP1)", () => {
+  it("config_publisher erhaelt alle zwoelf config.questions.*/config.rules.*/config.commissions.*/config.goals.*-Permissions (Phase 11 AP1)", () => {
     const granted = permissionKeysForSeedRole("config_publisher", allPermissionKeys);
     expect(granted.sort()).toEqual([...ALL_CONFIG_PERMISSION_KEYS].sort());
   });

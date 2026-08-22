@@ -110,6 +110,14 @@ async function seedGlobalCatalog() {
     "config.commissions.view",
     "config.commissions.edit",
     "config.commissions.publish",
+    // Phase 11 AP1 (ChatGPT finales GO 2026-08-22): Configuration-RBAC fuer
+    // die Zielverwaltung, siehe src/server/authz/config-permissions.ts
+    // (CONFIG_GOALS_PERMISSION_KEYS). Additive Erweiterung derselben
+    // config_editor/config_publisher-Rollen (keine neuen Rollen, siehe
+    // PHASE_11_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 7).
+    "config.goals.view",
+    "config.goals.edit",
+    "config.goals.publish",
   ];
   const permissions = await Promise.all(
     permissionKeys.map((key) =>

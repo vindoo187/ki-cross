@@ -234,6 +234,35 @@ enum MeasurementSource {
   SYSTEM_ASSISTED
 }
 
+// Phase 11 (Ziele-Modell, siehe PHASE_11_IMPLEMENTATION_PLAN.md, ChatGPT
+// finales GO 2026-08-22, Commit 5cd94d2). Feste Kalenderperioden -- bewusst
+// KEINE freien from/to-Werte wie bei KpiPeriodFilter (Trennung von der
+// freien Analytics-Zeitraumwahl, siehe Discovery-Dokument Abschnitt 4).
+enum GoalPeriodType {
+  MONTH
+  QUARTER
+  YEAR
+}
+
+// Eigenes Enum, bewusst NICHT RoleScopeType wiederverwenden (ChatGPT-GO):
+// RoleScopeType kennt kein EMPLOYEE (Rollen werden nie auf einzelne
+// Mitarbeiter vergeben, Ziele aber schon) -- unterschiedliche fachliche
+// Konzepte (Authz/Rollen vs. Zieladressierung).
+enum GoalScopeType {
+  TENANT
+  COMPANY
+  STORE
+  EMPLOYEE
+}
+
+// Drei Metriken zunaechst (ChatGPT-GO). Weitere Metriken sind ein spaeterer,
+// separat abzustimmender Scope-Schritt, keine automatische Erweiterung.
+enum GoalMetricKey {
+  DEALS_CLOSED
+  REVENUE
+  CLOSE_RATE
+}
+
 // ---------------------------------------------------------------------------
 // Organisation und Zugriff
 // ---------------------------------------------------------------------------
@@ -264,6 +293,8 @@ model Tenant {
   analyticsEvents        AnalyticsEvent[]
   baselineMeasurements   BaselineMeasurement[]
   rejectionReasons       RejectionReason[]
+  goals                  Goal[]
+  goalVersions           GoalVersion[]
 
   @@map("tenants")
 }
@@ -332,6 +363,7 @@ model User {
   roleAssignments        RoleAssignment[]
   auditLogsAsActor       AuditLog[]
   configurationChanges   ConfigurationChange[]
+  goalVersionsAsCreator  GoalVersion[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, id])
@@ -1838,4 +1870,87 @@ model ConfigurationChange {
   @@index([tenantId, configKey, occurredAt])
   @@index([tenantId, actorUserId])
   @@map("configuration_changes")
+}
+
+// =============================================================================
+// ZIELE (Phase 11, siehe PHASE_11_IMPLEMENTATION_PLAN.md, ChatGPT finales GO
+// 2026-08-22, Commit 5cd94d2). Goal (Identitaet: Scope+Metrik+Periode) +
+// GoalVersion (Zielwert-Historie) -- bewusst KEIN Draft->Publish->
+// ACTIVE/EXPIRED-Lifecycle wie bei Questionnaire/RuleSet/CommissionModel,
+// da Ziele periodisch nebeneinander koexistieren statt sich gegenseitig
+// abzuloesen (siehe PHASE_11_DISCOVERY.md). Deshalb hat GoalVersion KEIN
+// status-Feld -- die "aktuelle" Version wird AUSSCHLIESSLICH ueber die
+// zentrale Funktion getCurrentGoalVersion() (ORDER BY versionNumber DESC
+// LIMIT 1) bestimmt, nicht ueber einen gespeicherten Status.
+//
+// scopeId ist bewusst KEIN Fremdschluessel (polymorph je nach scopeType:
+// tenantId/companyId/storeId/employeeId) -- die Tenant-Bindung wird
+// stattdessen serverseitig in der Service-Schicht (AP2, goal-admin.ts)
+// geprueft (ChatGPT-Korrektur 1), nicht per DB-Constraint erzwingbar.
+//
+// periodEnd wird bewusst NICHT gespeichert (ChatGPT-Korrektur 2): die neue
+// Utility getCalendarPeriodBounds(periodType, periodStart) leitet ihn
+// deterministisch ab. Alle zeitraumbasierten Filter verwenden durchgaengig
+// das halboffene Intervall [periodStart, periodEnd).
+// =============================================================================
+
+model Goal {
+  id          String         @id @default(uuid()) @db.Uuid
+  tenantId    String         @map("tenant_id") @db.Uuid
+  scopeType   GoalScopeType  @map("scope_type")
+  scopeId     String         @map("scope_id") @db.Uuid
+  metricKey   GoalMetricKey  @map("metric_key")
+  periodType  GoalPeriodType @map("period_type")
+  periodStart DateTime       @map("period_start") @db.Timestamptz(6)
+  // Pflicht bei REVENUE, sonst null (ChatGPT-GO Punkt 6) -- serverseitig
+  // geprueft in goal-validator.ts (AP3), nicht per DB-CHECK (haengt vom
+  // metricKey ab, siehe Modulkommentar oben zu commission_model_versions-
+  // analoger Entscheidung).
+  currency    String?        @db.Char(3)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  versions GoalVersion[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, scopeType, scopeId, metricKey, periodType, periodStart])
+  @@index([tenantId, scopeType, scopeId])
+  @@map("goals")
+}
+
+model GoalVersion {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  goalId         String   @map("goal_id") @db.Uuid
+  // Aufsteigend, luekenlos je Goal; aeltere Versionen bleiben unveraendert/
+  // historisch (kein Update-, kein Delete-Pfad). Vergabe MUSS
+  // concurrency-sicher erfolgen (Row-Lock auf das Goal in derselben
+  // Transaktion, kein "SELECT MAX() dann INSERT") -- ChatGPTs zusaetzliche
+  // Auflage bei der finalen Plan-Freigabe, analog dem in Phase 10 (AP9-Fix)
+  // gefundenen Race-Condition-Bug bei createDraftCommissionModelVersion().
+  versionNumber  Int      @map("version_number")
+  // Genau eines von drei, je nach Goal.metricKey (REVENUE/DEALS_CLOSED/
+  // CLOSE_RATE) -- serverseitige XOR-Regel in goal-validator.ts (AP3), die
+  // hier zusaetzlich metricKey-unabhaengig per DB-CHECK erzwungene
+  // "genau eines der drei" Invariante ist eine reine Datenintegritaets-
+  // Absicherung (siehe Migration), ersetzt NICHT die metricKey-spezifische
+  // Pruefung im Validator.
+  targetAmountMinor           Int? @map("target_amount_minor")
+  targetCount                 Int? @map("target_count")
+  targetPercentageBasisPoints Int? @map("target_percentage_basis_points")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Nullable + onDelete SetNull, analog AuditLog.actorUserId/
+  // ConfigurationChange.actorUserId: die historische GoalVersion-Zeile
+  // bleibt bestehen, auch wenn der erstellende User spaeter deaktiviert/
+  // geloescht wird.
+  createdByUserId  String?  @map("created_by_user_id") @db.Uuid
+
+  goal      Goal  @relation(fields: [tenantId, goalId], references: [tenantId, id], onDelete: Restrict)
+  createdBy User? @relation(fields: [tenantId, createdByUserId], references: [tenantId, id], onDelete: SetNull)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, goalId, versionNumber])
+  @@index([tenantId, goalId])
+  @@index([tenantId, createdByUserId])
+  @@map("goal_versions")
 }

@@ -42,6 +42,15 @@ import { ALL_CONFIG_PERMISSION_KEYS } from "./config-permissions";
  * erweitert werden). Dieselbe `sales_employee`-Ausschlussregel gilt fuer
  * `config.commissions.*` genauso wie fuer `config.questions.*`/
  * `config.rules.*`.
+ *
+ * Phase 11 AP1 (ChatGPT finales GO 2026-08-22) erweitert config_editor/
+ * config_publisher additiv um die neuen `config.goals.*`-Keys (keine neuen
+ * Rollen, siehe PHASE_11_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 7):
+ * config_editor -> zusaetzlich config.goals.view+edit, config_publisher ->
+ * zusaetzlich config.goals.view+edit+publish (wieder automatisch ueber
+ * `ALL_CONFIG_PERMISSION_KEYS`). Dieselbe `sales_employee`-Ausschlussregel
+ * gilt fuer `config.goals.*` genauso wie fuer die drei bestehenden
+ * Config-Permission-Gruppen.
  */
 
 export const SEED_ROLE_KEYS = [
@@ -98,7 +107,9 @@ export function permissionKeysForSeedRole(
           key === "config.rules.view" ||
           key === "config.rules.edit" ||
           key === "config.commissions.view" ||
-          key === "config.commissions.edit",
+          key === "config.commissions.edit" ||
+          key === "config.goals.view" ||
+          key === "config.goals.edit",
       );
     case "config_publisher":
       return allPermissionKeys.filter((key) =>
