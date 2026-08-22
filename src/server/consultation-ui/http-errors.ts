@@ -76,6 +76,12 @@ import {
   CommissionTierNotFoundError,
   CopySourceCommissionModelVersionNotFoundError,
 } from "../admin/commission-admin-errors";
+import {
+  GoalAlreadyExistsError,
+  GoalNotFoundError,
+  GoalScopeInvalidError,
+  GoalTargetValueInvalidError,
+} from "../admin/goal-admin-errors";
 
 interface ErrorBody {
   error: string;
@@ -375,6 +381,40 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // hat fachliche Verstoesse gefunden. `issues` enthaelt ALLE gefundenen
   // Verstoesse, analog RuleSetVersionInvalidError.
   if (error instanceof CommissionModelVersionInvalidError) {
+    return NextResponse.json(
+      { error: error.name, message: error.message, issues: error.issues },
+      { status: 422 },
+    );
+  }
+
+  // Goal-Management-API (Phase 11 AP3): 404 -- Goal nicht gefunden (fremde
+  // Mandant-ID liefert ueber den gescopten `db`-Client 0 Treffer -> 404,
+  // analog Phase 8-10; blosse goalId-Kenntnis reicht nie fuer Cross-Tenant-
+  // Zugriff).
+  if (error instanceof GoalNotFoundError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 404 });
+  }
+
+  // Goal-Management-API: 409 -- Kardinalitaetsverstoss (Uebersetzung des
+  // rohen P2002-Fehlers auf goals_scope_metric_period_key), analog anderer
+  // "bereits existiert"-Konflikte im System.
+  if (error instanceof GoalAlreadyExistsError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Goal-Management-API: 422 -- scopeId ist fuer den angegebenen scopeType
+  // nicht gueltig (unbekannt oder gehoert zu einem anderen Mandanten, IDOR-
+  // Schutz, siehe goal-admin.ts::validateScopeId()). Keine Mutation/kein
+  // Audit-Eintrag bleibt dabei zurueck.
+  if (error instanceof GoalScopeInvalidError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 422 });
+  }
+
+  // Goal-Management-API (Phase 11 AP3): 422 -- validateCreateGoalInput()/
+  // validateCreateGoalVersionInput() (goal-validator.ts) hat die
+  // metrikspezifische Zielwert-/Currency-Zuordnung verletzt. `issues`
+  // enthaelt ALLE gefundenen Verstoesse, analog CommissionModelVersionInvalidError.
+  if (error instanceof GoalTargetValueInvalidError) {
     return NextResponse.json(
       { error: error.name, message: error.message, issues: error.issues },
       { status: 422 },

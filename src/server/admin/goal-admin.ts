@@ -316,6 +316,19 @@ export async function getGoalDetail(goalId: string): Promise<GoalDetail> {
   };
 }
 
+/**
+ * Vollstaendige Versionshistorie eines `Goal`, absteigend nach
+ * `versionNumber` (neueste zuerst) -- fuer die Route-Schicht (AP3,
+ * `GET /api/admin/goals/[id]/versions`). Wirft `GoalNotFoundError`, falls
+ * `goalId` nicht (mehr) zum aktuellen Mandanten gehoert (0 Treffer ueber den
+ * tenant-gescopten `db`-Client, siehe Modulkommentar).
+ */
+export async function listGoalVersions(goalId: string): Promise<GoalVersionSummary[]> {
+  await requireGoal(db, goalId);
+  const versions = await loadGoalVersionsDesc(db, goalId);
+  return versions.map(toVersionSummary);
+}
+
 // ---------------------------------------------------------------------------
 // 3. Goal anlegen (Identitaet + erste GoalVersion, atomar)
 // ---------------------------------------------------------------------------

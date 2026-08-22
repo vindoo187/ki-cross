@@ -81,3 +81,22 @@ export class GoalVersionNotFoundError extends GoalAdminError {
     super(`Fuer Goal "${goalId}" wurde keine GoalVersion gefunden (unerwarteter Datenzustand).`);
   }
 }
+
+/**
+ * `goal-validator.ts` (Phase 11 AP3) hat fachliche Verstoesse in den
+ * Zielwert-/Currency-Feldern eines `createGoal()`/`createGoalVersion()`-
+ * Eingabewerts gefunden -- die metrikspezifische Zuordnung
+ * (`DEALS_CLOSED`->`targetCount`, `REVENUE`->`targetAmountMinor`+`currency`,
+ * `CLOSE_RATE`->`targetPercentageBasisPoints`) ist NICHT per DB-CHECK
+ * abbildbar (siehe Migrationskommentar `20260822100000_goal_model`,
+ * `goal_versions_target_value_xor_check`), da sie `Goal.metricKey`
+ * (Elterntabelle) gegen `GoalVersion`-Spalten (bei `createGoal()`: gegen die
+ * gleichzeitig uebergebenen Werte) prueft -- Cross-Table-Regel. `issues`
+ * enthaelt ALLE gefundenen Verstoesse, nicht nur den ersten -- analog
+ * `CommissionModelVersionInvalidError`/`RuleSetVersionInvalidError`.
+ */
+export class GoalTargetValueInvalidError extends GoalAdminError {
+  constructor(public readonly issues: string[]) {
+    super(`Zielwert-/Currency-Eingabe ist nicht gueltig: ${issues.join("; ")}`);
+  }
+}
