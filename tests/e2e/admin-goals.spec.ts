@@ -26,23 +26,41 @@ import { loginAs, loginAsAdmin } from "./helpers";
  * Projekte je Spec-Datei). Da Desktop- und Tablet-Projekt bei
  * `fullyParallel: true` gegen DIESELBE per `globalSetup` einmalig geseedete
  * DB laufen (siehe Kommentar in `admin-rules.spec.ts`), verwendet der
- * mutierende Anlegen-Test einen PRO PROJEKT eindeutigen `periodStart`
- * (ueber `testInfo.project.name`) -- sonst wuerde der zweite Lauf denselben
- * Scope+Metrik+Periode-Identitaetsschluessel (`goals_scope_metric_period_
- * key`) treffen und mit 409 fehlschlagen (kein Bug, sondern die korrekt
- * funktionierende Kardinalitaetsregel aus AP2).
+ * mutierende Anlegen-Test einen PRO PROJEKT UND PRO RETRY-VERSUCH
+ * eindeutigen `periodStart` (ueber `testInfo.project.name` + `testInfo.
+ * retry`) -- sonst wuerde ein zweiter Lauf (anderes Projekt ODER ein
+ * CI-Retry NACH einem bereits erfolgreich angelegten Goal aus Versuch 1)
+ * denselben Scope+Metrik+Periode-Identitaetsschluessel (`goals_scope_
+ * metric_period_key`) treffen und mit 409 fehlschlagen (kein Bug, sondern
+ * die korrekt funktionierende Kardinalitaetsregel aus AP2 -- CI-#97-Befund,
+ * 2026-08-23: der urspruengliche rein projektbasierte Schluessel kollidierte
+ * bei einem CI-Retry mit dem bereits erfolgreich angelegten Goal aus dem
+ * ersten Versuch).
+ *
+ * Die abschliessende Sichtbarkeitspruefung in der `/admin/goals`-Liste
+ * identifiziert das eigene Goal ausschliesslich ueber seinen `href`
+ * (`/admin/goals/${goalId}`, aus der Detail-URL nach dem Anlegen extrahiert)
+ * -- NICHT ueber Zielwert-/Versionstext, da mehrere Playwright-Projekte
+ * denselben DEALS_CLOSED-Zielwertverlauf (50 -> 80) erzeugen und ein
+ * text-basierter Locator sonst mehrdeutig waere (CI-#97-Befund: Playwright-
+ * Strict-Mode-Violation durch zwei gleichlautende Listeneintraege).
  */
 
-const GOAL_DETAIL_URL_PATTERN = /\/admin\/goals\/[0-9a-f-]{36}$/;
+const GOAL_DETAIL_URL_PATTERN = /\/admin\/goals\/([0-9a-f-]{36})$/;
 
-function periodStartForProject(projectName: string): string {
-  // Zwei verschiedene Kalendermonate reichen aus, um die beiden Projekte
-  // (desktop-chromium / tablet-ipad-landscape) sicher zu trennen. Faellt bei
-  // einem unbekannten/zukuenftigen Projektnamen auf einen dritten Monat
-  // zurueck, statt still zu kollidieren.
-  if (projectName === "desktop-chromium") return "2026-11-01";
-  if (projectName === "tablet-ipad-landscape") return "2026-12-01";
-  return "2027-01-01";
+function periodStartForProject(projectName: string, retry: number): string {
+  // Monatsindex (0-basiert ab Januar 2026) je Projekt, zusaetzlich um 2
+  // Monate je Retry-Versuch verschoben -- garantiert Eindeutigkeit sowohl
+  // zwischen den beiden Playwright-Projekten als auch zwischen einem
+  // urspruenglichen Versuch und einem CI-Retry desselben Tests. Faellt bei
+  // einem unbekannten/zukuenftigen Projektnamen auf einen dritten
+  // Basis-Monat zurueck, statt still zu kollidieren.
+  const baseMonthIndex =
+    projectName === "desktop-chromium" ? 10 : projectName === "tablet-ipad-landscape" ? 11 : 12;
+  const monthIndex = baseMonthIndex + retry * 2;
+  const year = 2026 + Math.floor(monthIndex / 12);
+  const month = (monthIndex % 12) + 1;
+  return `${year}-${String(month).padStart(2, "0")}-01`;
 }
 
 test.describe("/admin/goals – Ziele-Verwaltung (Phase 11 AP9)", () => {
@@ -75,7 +93,7 @@ test.describe("/admin/goals – Ziele-Verwaltung (Phase 11 AP9)", () => {
     page,
   }, testInfo) => {
     const seed = readE2eSeedOutput();
-    const periodStart = periodStartForProject(testInfo.project.name);
+    const periodStart = periodStartForProject(testInfo.project.name, testInfo.retry);
 
     await loginAsAdmin(page, {
       tenantId: seed.tenantA.tenantId,
@@ -106,6 +124,10 @@ test.describe("/admin/goals – Ziele-Verwaltung (Phase 11 AP9)", () => {
       page.waitForURL(GOAL_DETAIL_URL_PATTERN),
       page.getByRole("button", { name: "Ziel anlegen" }).click(),
     ]);
+    const goalId = GOAL_DETAIL_URL_PATTERN.exec(page.url())?.[1];
+    if (!goalId) {
+      throw new Error(`Konnte goalId aus der Detail-URL nicht ermitteln: ${page.url()}`);
+    }
 
     // --- Detailseite: Identitaet + aktuelle Version (1) sichtbar. ---
     await expect(page.getByRole("heading", { name: "Abgeschlossene Deals" })).toBeVisible();
@@ -135,8 +157,15 @@ test.describe("/admin/goals – Ziele-Verwaltung (Phase 11 AP9)", () => {
     await expect(historySection).toContainText("50");
     await expect(historySection).toContainText("80");
 
-    // --- Auch in der /admin/goals-Liste sichtbar (Ziel: 80, Version 2). ---
+    // --- Auch in der /admin/goals-Liste sichtbar (Ziel: 80, Version 2).
+    // Identifikation ausschliesslich ueber den href (siehe Modulkommentar) --
+    // ein text-basierter Locator waere mehrdeutig, weil andere Playwright-
+    // Projekte denselben DEALS_CLOSED-Zielwertverlauf (50 -> 80) erzeugen. ---
     await page.goto("/admin/goals");
-    await expect(page.getByText(/Ziel: 80 Deals.*Version 2/)).toBeVisible();
+    const ownListItem = page
+      .locator("li.admin-questions__item")
+      .filter({ has: page.locator(`a[href="/admin/goals/${goalId}"]`) });
+    await expect(ownListItem).toContainText("80 Deals");
+    await expect(ownListItem).toContainText("Version 2");
   });
 });
