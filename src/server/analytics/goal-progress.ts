@@ -282,3 +282,52 @@ function buildGoalProgress(target: number, actual: number): GoalProgress {
     remaining: target - actual,
   };
 }
+
+/**
+ * Phase 11 AP7 (Ziel-vs.-Ist-Integration in /analytics + /analytics/management,
+ * siehe PHASE_11_IMPLEMENTATION_PLAN.md Abschnitt 3, ChatGPT-GO 2026-08-22 nach
+ * AP7-Discovery). Bestimmt, ob ein `Goal` fuer den Zeitpunkt `now` "aktiv" ist
+ * -- verbindliche Regel von ChatGPT: `periodStart <= now < periodEnd`, wobei
+ * `periodEnd` AUSSCHLIESSLICH ueber `getCalendarPeriodBounds()` abgeleitet
+ * wird (keine Ad-hoc-Berechnung). Ein Goal, dessen Periode bereits
+ * abgeschlossen ist oder erst in der Zukunft beginnt, ist "inaktiv" -- bleibt
+ * aber unveraendert in der `/admin/goals/[id]`-Historie sichtbar (AP7 aendert
+ * nichts an AP2/AP3, nur an der zusaetzlichen Analytics-Anzeige).
+ */
+export function isGoalPeriodActive(
+  periodType: GoalPeriodType,
+  periodStart: Date,
+  now: Date = new Date(),
+): boolean {
+  const { periodStart: start, periodEnd: end } = getCalendarPeriodBounds(periodType, periodStart);
+  return start.getTime() <= now.getTime() && now.getTime() < end.getTime();
+}
+
+/**
+ * Formatiertes Ziel-vs.-Ist-Datenobjekt fuer die Analytics-UI (AP7,
+ * ChatGPTs ausdrueckliche Vorgabe: "Die UI formatiert anschliessend nur
+ * noch" -- KEINE KPI-Berechnung in `AnalyticsDashboardContent.tsx`/
+ * `ManagementAnalyticsContent.tsx`). Wird in `goal-visibility.ts`
+ * zusammengesetzt (Sichtbarkeits-/Scope-Aufloesung + `computeGoalProgress()`
+ * + Namens-Picker, siehe dortigen Modulkommentar) -- diese Datei definiert
+ * nur den Typ und die reine `isGoalPeriodActive()`-Pruefung, um einen
+ * zyklischen Import zu vermeiden (`goal-visibility.ts` importiert bereits aus
+ * dieser Datei, nicht umgekehrt).
+ */
+export interface GoalProgressViewModel {
+  goalId: string;
+  scopeType: string;
+  /** Bereits aufgeloester Anzeige-Text (z. B. "Filiale: Store A1a"), siehe `formatGoalScopeLabel()`. */
+  scopeLabel: string;
+  metricKey: GoalMetricKey;
+  periodType: GoalPeriodType;
+  /** ISO-8601 (UTC), aus `getCalendarPeriodBounds()`. */
+  periodStart: string;
+  /** ISO-8601 (UTC), exklusiv, aus `getCalendarPeriodBounds()`. */
+  periodEnd: string;
+  currency: string | null;
+  target: number;
+  actual: number;
+  achievementRate: number | null;
+  remaining: number;
+}

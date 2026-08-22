@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getCalendarPeriodBounds } from "@/server/analytics/goal-progress";
+import { getCalendarPeriodBounds, isGoalPeriodActive } from "@/server/analytics/goal-progress";
 
 /**
  * Unit-Tests fuer `getCalendarPeriodBounds()` (Phase 11 AP4, Schritt 1).
@@ -76,5 +76,65 @@ describe("getCalendarPeriodBounds()", () => {
         new Date("2026-08-01T00:00:00.000Z"),
       ),
     ).toThrow(/Unbekannter GoalPeriodType/);
+  });
+});
+
+/**
+ * Unit-Tests fuer `isGoalPeriodActive()` (Phase 11 AP7, ChatGPTs verbindliche
+ * Regel nach AP7-Discovery: `periodStart <= now < periodEnd`). Rein
+ * synchron/pure -- deckt exakt die drei Intervallgrenzen ab (unmittelbar vor
+ * `periodStart`, exakt `periodStart`, exakt `periodEnd`, unmittelbar nach
+ * `periodEnd`), da die Halboffenheit des Intervalls (`[periodStart,
+ * periodEnd)`, siehe `getCalendarPeriodBounds()`-Modulkommentar) sonst durch
+ * einen Off-by-one-Fehler unbemerkt bliebe.
+ */
+describe("isGoalPeriodActive()", () => {
+  const PERIOD_START = new Date("2026-08-01T00:00:00.000Z");
+
+  it("ist aktiv genau bei periodStart (Intervallgrenze eingeschlossen)", () => {
+    expect(isGoalPeriodActive("MONTH", PERIOD_START, PERIOD_START)).toBe(true);
+  });
+
+  it("ist NICHT aktiv unmittelbar VOR periodStart (Goal beginnt erst in der Zukunft)", () => {
+    const now = new Date(PERIOD_START.getTime() - 1);
+    expect(isGoalPeriodActive("MONTH", PERIOD_START, now)).toBe(false);
+  });
+
+  it("ist aktiv kurz vor periodEnd (letzte Millisekunde der Periode)", () => {
+    const now = new Date("2026-08-31T23:59:59.999Z");
+    expect(isGoalPeriodActive("MONTH", PERIOD_START, now)).toBe(true);
+  });
+
+  it("ist NICHT aktiv exakt bei periodEnd (Intervallgrenze ausgeschlossen, halboffen)", () => {
+    const periodEnd = new Date("2026-09-01T00:00:00.000Z");
+    expect(isGoalPeriodActive("MONTH", PERIOD_START, periodEnd)).toBe(false);
+  });
+
+  it("ist NICHT aktiv nach periodEnd (Goal ist bereits abgeschlossen)", () => {
+    const now = new Date("2026-09-15T00:00:00.000Z");
+    expect(isGoalPeriodActive("MONTH", PERIOD_START, now)).toBe(false);
+  });
+
+  it("nutzt getCalendarPeriodBounds() fuer QUARTER/YEAR konsistent (keine eigene Ad-hoc-Berechnung)", () => {
+    // Q3 2026 (Juli-September) -- Mitte August ist aktiv, Mitte Oktober nicht.
+    expect(isGoalPeriodActive("QUARTER", new Date("2026-07-01T00:00:00.000Z"), PERIOD_START)).toBe(
+      true,
+    );
+    expect(
+      isGoalPeriodActive(
+        "QUARTER",
+        new Date("2026-07-01T00:00:00.000Z"),
+        new Date("2026-10-15T00:00:00.000Z"),
+      ),
+    ).toBe(false);
+  });
+
+  it("verwendet new Date() als Default fuer `now`, wenn kein dritter Parameter uebergeben wird", () => {
+    // YEAR-Periode ab dem 1. Januar des LAUFENDEN Jahres (UTC) -- deckt damit
+    // per Definition den gesamten aktuellen Zeitpunkt ab, unabhaengig vom
+    // konkreten Testlauf-Datum (kein hartkodiertes "heute", vermeidet
+    // Flakiness).
+    const currentYearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
+    expect(isGoalPeriodActive("YEAR", currentYearStart)).toBe(true);
   });
 });

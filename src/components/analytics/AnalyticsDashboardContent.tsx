@@ -10,6 +10,11 @@
 
 import Link from "next/link";
 import type { AnalyticsDashboardView, AnalyticsPeriodKey } from "@/server/analytics/dashboard-view";
+import {
+  GOAL_METRIC_LABELS,
+  formatGoalMetricValue,
+  formatGoalPeriodLabel,
+} from "@/lib/goal-format";
 
 function formatMinorAmount(amountMinor: number, currency: string): string {
   return new Intl.NumberFormat("de-DE", { style: "currency", currency }).format(amountMinor / 100);
@@ -141,6 +146,55 @@ export function AnalyticsDashboardContent({
             ))
           )}
         </div>
+      </section>
+
+      {/* Phase 11 AP7 (Ziel-vs.-Ist, ChatGPT-GO 2026-08-22): eigene, vom
+          Zeitraum-Filter oben UNABHAENGIGE Ziel-Kartensektion -- nur das/die
+          eigene(n) AKTIVE(n) EMPLOYEE-Goal(s) (siehe dashboard-view.ts
+          Modulkommentar). Reine Anzeige der bereits fertig berechneten
+          `GoalProgressViewModel`-Werte, keine eigene Berechnung hier. */}
+      <section className="analytics-dashboard__goals">
+        <h2 className="analytics-dashboard__section-heading">Ziele</h2>
+        {view.goals.length === 0 ? (
+          <p className="analytics-dashboard__card-empty">
+            Keine aktiven Ziele im aktuellen Zeitraum.
+          </p>
+        ) : (
+          <div className="analytics-dashboard__cards">
+            {view.goals.map((goal) => (
+              <div key={goal.goalId} className="analytics-dashboard__card">
+                <h2>{GOAL_METRIC_LABELS[goal.metricKey] ?? goal.metricKey}</h2>
+                <p className="analytics-dashboard__card-value">
+                  {formatGoalMetricValue(goal.metricKey, goal.actual, goal.currency)}
+                </p>
+                <dl className="analytics-dashboard__card-details">
+                  <div>
+                    <dt>Zielwert</dt>
+                    <dd>{formatGoalMetricValue(goal.metricKey, goal.target, goal.currency)}</dd>
+                  </div>
+                  <div>
+                    <dt>Zielerreichung</dt>
+                    <dd>{formatPercent(goal.achievementRate)}</dd>
+                  </div>
+                  <div>
+                    <dt>{goal.remaining < 0 ? "Ueber Ziel" : "Verbleibend"}</dt>
+                    <dd>
+                      {formatGoalMetricValue(
+                        goal.metricKey,
+                        Math.abs(goal.remaining),
+                        goal.currency,
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Zeitraum</dt>
+                    <dd>{formatGoalPeriodLabel(goal.periodType, goal.periodStart)}</dd>
+                  </div>
+                </dl>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <p className="analytics-dashboard__back">

@@ -91,3 +91,65 @@ export function formatGoalTargetValue(
       return "--";
   }
 }
+
+/**
+ * Formatiert einen ROHEN Zahlenwert (kein `GoalVersion`-Objekt) passend zur
+ * `metricKey` -- Phase 11 AP7 (siehe PHASE_11_IMPLEMENTATION_PLAN.md
+ * Abschnitt 3, ChatGPT-GO 2026-08-22): `GoalProgressViewModel.target`/
+ * `.actual`/`.remaining` (aus `computeGoalProgress()`) sind bereits reine
+ * `number`-Felder in derselben Speichereinheit wie die jeweilige
+ * `GoalVersion` (Stueck bei DEALS_CLOSED, Minor-Einheiten bei REVENUE,
+ * Basispunkte bei CLOSE_RATE) -- diese Funktion formatiert sie fuer die
+ * Analytics-UI, ohne eine neue Umrechnungsregel einzufuehren (dieselbe
+ * Umrechnung wie `formatGoalTargetValue()` oben, nur ohne den Umweg ueber ein
+ * `TargetValueFields`-Objekt).
+ */
+export function formatGoalMetricValue(
+  metricKey: string,
+  valueInStorageUnit: number,
+  currency: string | null,
+): string {
+  switch (metricKey) {
+    case "DEALS_CLOSED":
+      return `${valueInStorageUnit} Deals`;
+    case "REVENUE":
+      if (!currency) {
+        return "--";
+      }
+      return new Intl.NumberFormat("de-DE", { style: "currency", currency }).format(
+        valueInStorageUnit / 100,
+      );
+    case "CLOSE_RATE":
+      return new Intl.NumberFormat("de-DE", { style: "percent", maximumFractionDigits: 2 }).format(
+        valueInStorageUnit / 10000,
+      );
+    default:
+      return "--";
+  }
+}
+
+/**
+ * Formatiert die Periodenbezeichnung einer Ziel-Karte fuer die Analytics-UI
+ * (Phase 11 AP7, ChatGPTs ausdrueckliche Vorgabe: die Periode muss auf der
+ * Karte sichtbar sein, z. B. "August 2026 - Monatsziel"/"Q3 2026 -
+ * Quartalsziel", damit fuer den Nutzer erkennbar bleibt, dass die
+ * Ziel-Karte eine EIGENE, vom bestehenden Woche/Monat-KPI-Filter
+ * UNABHAENGIGE Periode zeigt).
+ */
+export function formatGoalPeriodLabel(periodType: string, periodStartIso: string): string {
+  const date = new Date(periodStartIso);
+  const typeLabel = GOAL_PERIOD_TYPE_LABELS[periodType] ?? periodType;
+  if (periodType === "QUARTER") {
+    const quarter = Math.floor(date.getUTCMonth() / 3) + 1;
+    return `Q${quarter} ${date.getUTCFullYear()} - ${typeLabel}sziel`;
+  }
+  if (periodType === "YEAR") {
+    return `${date.getUTCFullYear()} - ${typeLabel}sziel`;
+  }
+  const monthLabel = new Intl.DateTimeFormat("de-DE", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+  return `${monthLabel} - ${typeLabel}sziel`;
+}

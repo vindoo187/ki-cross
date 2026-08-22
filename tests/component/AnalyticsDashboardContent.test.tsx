@@ -44,6 +44,10 @@ function buildView(overrides: Partial<AnalyticsDashboardView> = {}): AnalyticsDa
         totalContractValueMinor: 25000,
       },
     ],
+    // Phase 11 AP7: neues Pflichtfeld auf AnalyticsDashboardView -- leeres
+    // Array als Default (kein aktives Goal), da diese bestehenden Tests die
+    // Goal-Kartensektion nicht pruefen (siehe eigene Tests dafuer).
+    goals: [],
     ...overrides,
   };
 }

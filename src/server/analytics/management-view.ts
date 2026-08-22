@@ -27,6 +27,8 @@ import {
   type RecommendationOutcomeKpi,
   type DealKpiByCurrency,
 } from "./kpis";
+import { buildGoalProgressForManagement } from "./goal-visibility";
+import type { GoalProgressViewModel } from "./goal-progress";
 import type { ManagementScope, ManagementScopeLevel } from "../authz/management-scope";
 
 export interface ManagementAnalyticsFilter {
@@ -63,6 +65,15 @@ export interface ManagementAnalyticsView {
   recommendationOutcome: RecommendationOutcomeKpi;
   /** Volles KPI 5-8 INKLUSIVE commissionAmountMinor/contributionMarginMinor -- Unterschied zur Mitarbeitersicht. */
   deals: DealKpiByCurrency[];
+  /**
+   * Phase 11 AP7 (Ziel-vs.-Ist, ChatGPT-GO 2026-08-22 nach AP7-Discovery):
+   * alle AKTIVEN Goals, die fuer den aktuell angewendeten `storeId`/
+   * `employeeId`-Filter SOWOHL autorisiert ALS AUCH scope-passend sind
+   * (`buildGoalProgressForManagement()`, `goal-visibility.ts` -- siehe
+   * dortigen Modulkommentar zur "keine anteilige Zielprojektion"-Regel).
+   * Bewusst UNABHAENGIG vom `period`-Filter oben.
+   */
+  goals: GoalProgressViewModel[];
 }
 
 /** Listet die Filialen INNERHALB der bereits autorisierten Store-Menge (kein ungeprueftes `db.store.findMany()` ueber den ganzen Mandanten). */
@@ -107,12 +118,20 @@ export async function buildManagementAnalyticsView(
   const { from, to } = resolvePeriodRange(filter.period, now);
   const kpiFilter = { from, to, storeIds: authorized.storeIds, employeeId: authorized.employeeId };
 
-  const [consultationVolume, recommendationOutcome, deals, storeOptions] = await Promise.all([
-    getConsultationVolumeKpi(kpiFilter),
-    getRecommendationOutcomeKpi(kpiFilter),
-    getDealKpi(kpiFilter),
-    listAuthorizedStoreOptions(authorized.storeIds),
-  ]);
+  const [consultationVolume, recommendationOutcome, deals, storeOptions, goals] = await Promise.all(
+    [
+      getConsultationVolumeKpi(kpiFilter),
+      getRecommendationOutcomeKpi(kpiFilter),
+      getDealKpi(kpiFilter),
+      listAuthorizedStoreOptions(authorized.storeIds),
+      // Bewusst der ROH angefragte filter.storeId/filter.employeeId (NICHT
+      // authorized.storeIds) -- buildGoalProgressForManagement() muss den
+      // exakt aktuell angewendeten Filter kennen, um Goal-Scope UND
+      // Autorisierung gemeinsam zu pruefen (siehe Modulkommentar
+      // goal-visibility.ts, ChatGPTs AP7-Praezisierung).
+      buildGoalProgressForManagement(scope, filter.storeId, filter.employeeId, now),
+    ],
+  );
 
   return {
     period: filter.period,
@@ -127,5 +146,6 @@ export async function buildManagementAnalyticsView(
     consultationVolume,
     recommendationOutcome,
     deals,
+    goals,
   };
 }

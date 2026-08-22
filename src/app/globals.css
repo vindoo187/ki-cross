@@ -1179,6 +1179,20 @@ code {
   margin-top: 32px;
 }
 
+/* Phase 11 AP7 (Ziel-vs.-Ist, ChatGPT-GO 2026-08-22): eigene Sektion unter
+   den bestehenden KPI-Karten -- bewusst KEINE neue Kartenoptik (reiner
+   Abstand + Ueberschrift), die Ziel-Karten selbst nutzen die bestehenden
+   .analytics-dashboard__card(-details)-Klassen weiter (kein
+   Chart-Overengineering, analog Phase-6-Prinzip). */
+.analytics-dashboard__goals {
+  margin-top: 32px;
+}
+
+.analytics-dashboard__section-heading {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
 /* Phase 7 AP4: Management-Analytics (Scope-Hinweis in .analytics-dashboard__hint
    wiederverwendet, hier nur die zusaetzliche "Kein Zugriff"-Variante). */
 .management-dashboard--denied {

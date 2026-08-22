@@ -28,6 +28,8 @@ import {
   type ConsultationVolumeKpi,
   type RecommendationOutcomeKpi,
 } from "./kpis";
+import { buildGoalProgressForEmployee } from "./goal-visibility";
+import type { GoalProgressViewModel } from "./goal-progress";
 
 export type AnalyticsPeriodKey = "week" | "month";
 
@@ -98,6 +100,14 @@ export interface AnalyticsDashboardView {
     monthlyRecurringRevenueMinor: number;
     totalContractValueMinor: number;
   }[];
+  /**
+   * Phase 11 AP7 (Ziel-vs.-Ist, ChatGPT-GO 2026-08-22 nach AP7-Discovery):
+   * ausschliesslich das/die eigene(n) AKTIVE(n) EMPLOYEE-Goal(s)
+   * (`buildGoalProgressForEmployee()`, `goal-visibility.ts`). Bewusst
+   * UNABHAENGIG vom `period`-Filter oben (eigene, feste Kalenderperiode je
+   * Goal statt Woche/Monat) -- siehe Modulkommentar dort.
+   */
+  goals: GoalProgressViewModel[];
 }
 
 /** Listet alle Filialen des aktuellen Mandanten (Grundlage fuer den Filialfilter, nur bei Mehrfilialen-Tenants relevant). */
@@ -116,12 +126,13 @@ export async function buildAnalyticsDashboardView(
   const { from, to } = resolvePeriodRange(filter.period, now);
   const kpiFilter = { from, to, storeId: filter.storeId };
 
-  const [consultationVolume, recommendationOutcome, dealsByCurrency, storeOptions] =
+  const [consultationVolume, recommendationOutcome, dealsByCurrency, storeOptions, goals] =
     await Promise.all([
       getConsultationVolumeKpi(kpiFilter),
       getRecommendationOutcomeKpi(kpiFilter),
       getDealKpi(kpiFilter),
       listStoreOptions(),
+      buildGoalProgressForEmployee(now),
     ]);
 
   return {
@@ -139,5 +150,6 @@ export async function buildAnalyticsDashboardView(
       monthlyRecurringRevenueMinor: row.monthlyRecurringRevenueMinor,
       totalContractValueMinor: row.totalContractValueMinor,
     })),
+    goals,
   };
 }

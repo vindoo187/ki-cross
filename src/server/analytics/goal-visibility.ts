@@ -55,14 +55,37 @@
  * bewusst getrennt: Sichtbarkeit (wer darf sehen) und KPI-Scope (was zaehlt
  * als Ist) sind unterschiedliche Fragen, auch wenn beide von `Goal.scopeType`
  * ausgehen.
+ *
+ * Phase 11 AP7 (Ziel-vs.-Ist-Integration in /analytics + /analytics/management,
+ * ChatGPT-GO 2026-08-22 nach AP7-Discovery): `buildGoalProgressForEmployee()`/
+ * `buildGoalProgressForManagement()` (ganz unten) setzen Sichtbarkeit +
+ * KPI-Scope + `computeGoalProgress()` zu einem fertig formatierten
+ * `GoalProgressViewModel[]` zusammen -- NUR fuer "aktive" Goals
+ * (`isGoalPeriodActive()` in `goal-progress.ts`, verbindliche Regel
+ * `periodStart <= now < periodEnd`). Bei Management ist der uebergebene
+ * `storeId`/`employeeId`-Parameter IMMER der aktuell im Dashboard angewendete
+ * Filter (nicht der volle autorisierte Scope) -- so werden Autorisierung UND
+ * Goal-Scope-Zugehoerigkeit gleichzeitig geprueft (ChatGPTs ausdrueckliche
+ * Korrektur: keine anteilige Zielprojektion, z. B. ein COMPANY-Goal ueber
+ * zwei Filialen erscheint nicht mehr, sobald auf eine einzelne Filiale
+ * gefiltert wird).
  */
 
+import type { GoalMetricKey, GoalPeriodType } from "@prisma/client";
 import { db } from "../db/client";
 import { getTenantContext } from "../tenant/context";
 import type { ManagementScope } from "../authz/management-scope";
 import { resolveAuthorizedStoreFilter } from "./management-authz";
 import { listGoals, type GoalSummary } from "../admin/goal-admin";
-import type { GoalProgressScopeFilter } from "./goal-progress";
+import {
+  computeGoalProgress,
+  getCalendarPeriodBounds,
+  isGoalPeriodActive,
+  type GoalProgressScopeFilter,
+  type GoalProgressViewModel,
+} from "./goal-progress";
+import { listGoalScopeOptions, type GoalScopeType } from "../admin/goal-scope-options";
+import { formatGoalScopeLabel } from "@/lib/goal-format";
 
 // ---------------------------------------------------------------------------
 // 1. Mitarbeiter-Sichtbarkeit -- ausschliesslich das eigene EMPLOYEE-Goal
@@ -255,4 +278,117 @@ export async function resolveGoalKpiScopeFilter(
     default:
       throw new Error(`Unbekannter Goal-scopeType: ${String(goal.scopeType)}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Ziel-vs.-Ist-Aufbereitung fuer die Analytics-UI (Phase 11 AP7, siehe
+//    PHASE_11_IMPLEMENTATION_PLAN.md Abschnitt 3, ChatGPT-GO 2026-08-22 nach
+//    AP7-Discovery)
+// ---------------------------------------------------------------------------
+
+/**
+ * Setzt die drei vorhandenen Bausteine (Sichtbarkeit oben, `resolveGoalKpi
+ * ScopeFilter()`, `computeGoalProgress()` aus `goal-progress.ts`) zu einem
+ * fertig formatierten `GoalProgressViewModel[]` zusammen -- ChatGPTs
+ * ausdrueckliche Vorgabe: die UI-Komponenten formatieren nur noch, KEINE
+ * KPI-Berechnung dort.
+ *
+ * NUR "aktive" Goals (siehe `isGoalPeriodActive()`, ChatGPTs verbindliche
+ * Regel `periodStart <= now < periodEnd`) werden aufbereitet -- historische/
+ * zukuenftige Goals bleiben unveraendert nur in `/admin/goals/[id]`
+ * sichtbar. Namen fuer `scopeLabel` werden HOECHSTENS EINMAL pro tatsaechlich
+ * vorkommendem `scopeType` aufgeloest (analog `/admin/goals/page.tsx`,
+ * AP6), nicht pro Goal.
+ */
+async function buildGoalProgressViewModels(
+  goals: GoalSummary[],
+  now: Date,
+): Promise<GoalProgressViewModel[]> {
+  const activeGoals = goals.filter((goal) =>
+    isGoalPeriodActive(goal.periodType as GoalPeriodType, new Date(goal.periodStart), now),
+  );
+  if (activeGoals.length === 0) {
+    return [];
+  }
+
+  const presentScopeTypes = new Set(activeGoals.map((goal) => goal.scopeType));
+  const namesByType = new Map<string, Map<string, string>>();
+  for (const scopeType of presentScopeTypes) {
+    const options = await listGoalScopeOptions(scopeType as GoalScopeType);
+    namesByType.set(scopeType, new Map(options.map((option) => [option.id, option.name])));
+  }
+
+  const viewModels: GoalProgressViewModel[] = [];
+  for (const goal of activeGoals) {
+    const scopeName = namesByType.get(goal.scopeType)?.get(goal.scopeId);
+    const scopeLabel = formatGoalScopeLabel(goal.scopeType, goal.scopeId, scopeName);
+    const scopeFilter = await resolveGoalKpiScopeFilter(goal);
+    const periodStartDate = new Date(goal.periodStart);
+    const progress = await computeGoalProgress(
+      {
+        metricKey: goal.metricKey as GoalMetricKey,
+        periodType: goal.periodType as GoalPeriodType,
+        periodStart: periodStartDate,
+        currency: goal.currency,
+      },
+      goal.currentVersion,
+      scopeFilter,
+    );
+    const { periodStart, periodEnd } = getCalendarPeriodBounds(
+      goal.periodType as GoalPeriodType,
+      periodStartDate,
+    );
+    viewModels.push({
+      goalId: goal.id,
+      scopeType: goal.scopeType,
+      scopeLabel,
+      metricKey: goal.metricKey as GoalMetricKey,
+      periodType: goal.periodType as GoalPeriodType,
+      periodStart: periodStart.toISOString(),
+      periodEnd: periodEnd.toISOString(),
+      currency: goal.currency,
+      target: progress.target,
+      actual: progress.actual,
+      achievementRate: progress.achievementRate,
+      remaining: progress.remaining,
+    });
+  }
+  return viewModels;
+}
+
+/**
+ * Ziel-vs.-Ist fuer die Mitarbeitersicht (`/analytics`, AP7) -- ausschliesslich
+ * das/die eigene(n) aktive(n) EMPLOYEE-Goal(s), siehe
+ * `listVisibleGoalsForEmployee()`.
+ */
+export async function buildGoalProgressForEmployee(
+  now: Date = new Date(),
+): Promise<GoalProgressViewModel[]> {
+  const goals = await listVisibleGoalsForEmployee();
+  return buildGoalProgressViewModels(goals, now);
+}
+
+/**
+ * Ziel-vs.-Ist fuer die Management-Sicht (`/analytics/management`, AP7).
+ *
+ * WICHTIG (ChatGPTs verbindliche Praezisierung nach AP7-Discovery): `storeId`/
+ * `employeeId` sind der GENAU AKTUELL ANGEWENDETE Dashboard-Filter (identisch
+ * zu `ManagementAnalyticsFilter.storeId`/`.employeeId` in `management-view.ts`)
+ * -- NICHT der volle autorisierte Scope. `listVisibleGoalsForManagement()`
+ * prueft damit automatisch BEIDES gleichzeitig: Autorisierung (der Filter darf
+ * den Scope nur einschraenken, siehe `resolveAuthorizedStoreFilter()`) UND
+ * Goal-Scope-Zugehoerigkeit zu genau diesem (ggf. eingeschraenkten)
+ * Store-/Mitarbeiter-Bereich (z. B. ein COMPANY-Goal ueber zwei Filialen ist
+ * NICHT mehr "vollstaendig autorisiert", sobald auf eine einzelne Filiale
+ * gefiltert wird -- keine anteilige Zielprojektion, siehe
+ * `isCompanyFullyAuthorized()` oben).
+ */
+export async function buildGoalProgressForManagement(
+  scope: ManagementScope | null,
+  requestedStoreId: string | undefined,
+  requestedEmployeeId: string | undefined,
+  now: Date = new Date(),
+): Promise<GoalProgressViewModel[]> {
+  const goals = await listVisibleGoalsForManagement(scope, requestedStoreId, requestedEmployeeId);
+  return buildGoalProgressViewModels(goals, now);
 }
