@@ -133,6 +133,15 @@ Neue zentrale Utilities (AP1/AP2, verbindlich statt Ad-hoc-Logik):
 - `getCurrentGoalVersion(goalId): GoalVersion` – einzige Stelle, die die
   "aktuelle" `GoalVersion` bestimmt (s. o.).
 
+**Zusätzliche ChatGPT-Auflage (finale Freigabe, 2026-08-22):**
+Die `versionNumber`-Vergabe muss concurrency-sicher erfolgen – zwei
+parallele Änderungen desselben `Goal` dürfen nicht dieselbe nächste
+`versionNumber` berechnen (analog der in Phase 10 (AP9-Fix) gefundenen
+Row-Lock-Falle bei `createDraftCommissionModelVersion()`). AP2 muss die
+neue `GoalVersion` innerhalb einer Transaktion mit Row-Lock auf das
+`Goal` (oder einer äquivalenten atomaren Konstruktion) erzeugen, nicht
+per "SELECT MAX(versionNumber) dann INSERT".
+
 ## 3. Arbeitspakete
 
 - **AP0** – Discovery (bereits erledigt, `PHASE_11_DISCOVERY.md`).
@@ -143,7 +152,8 @@ Neue zentrale Utilities (AP1/AP2, verbindlich statt Ad-hoc-Logik):
   Metrik+Periode-Identität) + `GoalVersion` (Zielwert-Historie pro
   Goal), Kardinalitätsregel (ein `Goal` pro
   Tenant+Scope+Metrik+Periodentyp+Periodenstart), `scopeId`-Validierung
-  gegen die reale Organisationsstruktur.
+  gegen die reale Organisationsstruktur, concurrency-sichere
+  `versionNumber`-Vergabe (Row-Lock, s. o.).
 - **AP3** – `goal-validator.ts` (XOR-Zielwert-Regel, Currency-Pflicht bei
   REVENUE), API-Routen `/api/admin/goals`, `/api/admin/goals/[id]/versions`.
 - **AP3.5 (Vorstufe zu AP4, ChatGPT-Korrektur 2b)** – Vor jeglichem
@@ -219,6 +229,14 @@ erst AP2."
 
 ## 5. Nächster Schritt
 
-Diese korrigierte Fassung erneut an ChatGPT zur finalen Prüfung/GO für
-AP1 senden. Danach explizites Nutzer-Implementierungs-GO vor AP1-Code
-einholen (analog dem in allen Vorgängerphasen etablierten Muster).
+ChatGPT hat die korrigierte Fassung geprüft und final freigegeben
+(2026-08-22): "Die korrigierte Fassung von Phase 11 ist aus
+Architektur-Sicht stimmig. [...] Damit könnt ihr AP1 jetzt
+implementieren." Auflage dabei: die zusätzliche Concurrency-Anforderung
+aus Abschnitt 2 (concurrency-sichere `versionNumber`-Vergabe), bereits
+oben eingearbeitet. Nach AP1 (Migration, Constraints,
+PGlite-Verifikation, RBAC-Seed) erfolgt erneut eine Prüfung durch
+ChatGPT, bevor AP2 beginnt.
+
+Ausstehend: explizites Nutzer-Implementierungs-GO vor AP1-Code (analog
+dem in allen Vorgängerphasen etablierten Muster).
