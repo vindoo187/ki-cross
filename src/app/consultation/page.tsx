@@ -99,6 +99,17 @@ export default async function ConsultationEntryPage() {
           <Link href="/admin/rules">Regelverwaltung oeffnen</Link>
         </p>
       )}
+
+      {/* Phase 11 AP6: Einstiegspunkt zur Zielverwaltung -- nur sichtbar, wenn
+          die Session ueberhaupt config.goals.view traegt (reine
+          UI-Bequemlichkeit, KEINE Sicherheitsgrenze: der eigentliche Zugriff
+          wird ausschliesslich serverseitig ueber requireConfigPermission()
+          durchgesetzt, siehe /admin/goals/page.tsx). */}
+      {session.configPermissions.includes("config.goals.view") && (
+        <p className="consultation-entry__analytics-link">
+          <Link href="/admin/goals">Zielverwaltung oeffnen</Link>
+        </p>
+      )}
     </main>
   );
 }
