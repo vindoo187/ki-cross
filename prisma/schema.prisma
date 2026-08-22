@@ -294,7 +294,6 @@ model Tenant {
   baselineMeasurements   BaselineMeasurement[]
   rejectionReasons       RejectionReason[]
   goals                  Goal[]
-  goalVersions           GoalVersion[]
 
   @@map("tenants")
 }
