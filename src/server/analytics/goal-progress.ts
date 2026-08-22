@@ -1,5 +1,5 @@
 import type { GoalMetricKey, GoalPeriodType } from "@prisma/client";
-import { getDealKpi, type KpiPeriodFilter } from "./kpis";
+import { getConsultationVolumeKpi, getDealKpi, type KpiPeriodFilter } from "./kpis";
 
 /**
  * Phase 11 AP4 (Ziel-vs.-Ist-Berechnung, siehe PHASE_11_IMPLEMENTATION_PLAN.md
@@ -38,12 +38,29 @@ import { getDealKpi, type KpiPeriodFilter } from "./kpis";
  *   `oneTimeRevenueMinor`/`monthlyRecurringRevenueMinor` -- diese Summe
  *   liefert `getDealKpi()` bereits fertig). Gibt es fuer die Goal-Currency
  *   keinen Bucket in der Periode, ist `actual` explizit 0 (kein Fehler).
- * - CLOSE_RATE bleibt bewusst NICHT implementiert (weiterhin offener
- *   Blocker: Zaehler/Nenner fachlich noch nicht geklaert) -- wirft
- *   `GoalMetricNotImplementedError`.
+ * - CLOSE_RATE -> "periodische Abschlussquote" (ChatGPT-GO 2026-08-22, nach
+ *   Discovery-Verifikation): `dealsClosed / totalSessions`, Zaehler aus
+ *   `getDealKpi()` (identisches DEALS_CLOSED-Mapping), Nenner aus
+ *   `getConsultationVolumeKpi().totalSessions`, BEIDE mit exakt denselben
+ *   `[periodStart, periodEnd)`-Grenzen. Bewusst OHNE Session->Deal-Zuordnung
+ *   auf Datensatzebene -- ein reines Perioden-Verhaeltnis (analog "Leads
+ *   this month" vs. "Deals this month"), KEINE Kohorten-Conversion-Rate.
+ *   `totalSessions === 0` -> `actual = null`-Aequivalent: siehe
+ *   `buildGoalProgress()`, `achievementRate` wird `null` (mathematisch
+ *   undefiniert, analog `RecommendationOutcomeKpi.acceptanceRate`).
+ *   WICHTIG (eigene Praezisierung, siehe Bericht an ChatGPT): `target` liegt
+ *   in `targetPercentageBasisPoints` bereits als Basispunkte vor (0..10000,
+ *   siehe `goal-schemas.ts`/`commission.ts`-Konvention: 10000 Basispunkte =
+ *   100 %). Damit `achievementRate = actual / target` einheitlich bleibt,
+ *   wird `actual` ebenfalls in Basispunkten berechnet
+ *   (`dealsClosed / totalSessions * 10000`, gerundet), NICHT als Prozentzahl
+ *   0..100. Sonst waere `achievementRate` um Faktor 100 verfaelscht.
+ *   Es wird bewusst KEINE neue `getCloseRateKpi()`-Funktion in `kpis.ts`
+ *   eingefuehrt (ChatGPT-Auflage) -- die Division bleibt lokal in
+ *   `computeGoalProgress()`.
  *
- * `computeGoalProgress()` fuehrt KEINE eigene Aggregation durch, sondern
- * ruft ausschliesslich die bestehende `getDealKpi()` auf (ChatGPT-Auflage:
+ * `computeGoalProgress()` fuehrt KEINE eigene KPI-Aggregation durch, sondern
+ * ruft ausschliesslich bestehende KPI-Funktionen auf (ChatGPT-Auflage:
  * "kein neuer Aggregations-Code, nur Wiederverwendung + Vergleich").
  *
  * Scope-Aufloesung (`Goal.scopeType`/`scopeId` -> `storeId`/`storeIds`/
@@ -99,10 +116,12 @@ function periodLengthInMonths(periodType: GoalPeriodType): number {
 }
 
 /**
- * `CLOSE_RATE` ist bewusst (noch) nicht implementiert -- siehe Modulkommentar
- * und PHASE_11_IMPLEMENTATION_PLAN.md Abschnitt 3 AP4: Zaehler/Nenner sind
- * fachlich noch nicht mit ChatGPT geklaert (weiterhin der einzige offene
- * Blocker innerhalb von AP4).
+ * Wird aktuell fuer keinen `GoalMetricKey` mehr geworfen -- alle drei
+ * Metriken (`DEALS_CLOSED`/`REVENUE`/`CLOSE_RATE`) sind seit AP4 Schritt 3
+ * implementiert (ChatGPT-GO 2026-08-22). Bleibt als Defense-in-Depth-Klasse
+ * fuer einen zukuenftigen, noch nicht abgebildeten `GoalMetricKey` erhalten,
+ * falls der Enum spaeter erweitert wird, bevor `computeGoalProgress()`
+ * nachgezogen ist.
  */
 export class GoalMetricNotImplementedError extends Error {
   constructor(public readonly metricKey: GoalMetricKey) {
@@ -145,7 +164,7 @@ export type GoalProgressScopeFilter = Pick<KpiPeriodFilter, "storeId" | "storeId
 export interface GoalProgress {
   /** Zielwert aus der aktuellen `GoalVersion` (metrikabhaengiges Feld, siehe `GoalVersionProgressInput`). */
   target: number;
-  /** Ist-Wert aus `getDealKpi()` fuer den ueber `getCalendarPeriodBounds()` abgeleiteten Zeitraum. */
+  /** Ist-Wert aus der/den zustaendigen KPI-Funktion(en) fuer den ueber `getCalendarPeriodBounds()` abgeleiteten Zeitraum (siehe Modulkommentar). */
   actual: number;
   /** `actual / target`, `null` falls `target` 0 ist (Division durch 0 vermieden, analog `kpis.ts`-Konvention). */
   achievementRate: number | null;
@@ -154,15 +173,16 @@ export interface GoalProgress {
 }
 
 /**
- * Gleicht eine `GoalVersion` (Ziel) gegen die bestehende `getDealKpi()`-KPI
+ * Gleicht eine `GoalVersion` (Ziel) gegen die bestehende(n) KPI-Funktion(en)
  * (Ist) fuer den vom `Goal` definierten Kalenderzeitraum ab. Siehe
  * Modulkommentar fuer die verbindliche Metrik-Zuordnung (ChatGPT-GO
- * 2026-08-22) und die bewusste Nicht-Implementierung von `CLOSE_RATE`.
+ * 2026-08-22, CLOSE_RATE-GO 2026-08-22 nach Discovery-Verifikation).
  *
- * Fuehrt selbst KEINE Aggregation durch -- ruft ausschliesslich die
- * bestehende `getDealKpi()` auf und vergleicht das Ergebnis mit dem
- * Zielwert. Erfordert `TenantContext` (wie `getDealKpi()` selbst, siehe
- * `kpis.ts`-Modulkommentar).
+ * Fuehrt selbst KEINE eigene KPI-Aggregation durch -- ruft ausschliesslich
+ * bestehende KPI-Funktionen (`getDealKpi()`, bei CLOSE_RATE zusaetzlich
+ * `getConsultationVolumeKpi()`) auf und vergleicht das Ergebnis mit dem
+ * Zielwert. Erfordert `TenantContext` (wie die aufgerufenen KPI-Funktionen
+ * selbst, siehe `kpis.ts`-Modulkommentar).
  */
 export async function computeGoalProgress(
   goal: GoalProgressInput,
@@ -205,8 +225,48 @@ export async function computeGoalProgress(
       const actual = matchingRow?.totalContractValueMinor ?? 0;
       return buildGoalProgress(currentVersion.targetAmountMinor, actual);
     }
-    case "CLOSE_RATE":
-      throw new GoalMetricNotImplementedError(goal.metricKey);
+    case "CLOSE_RATE": {
+      // goal-validator.ts erzwingt targetPercentageBasisPoints bei CLOSE_RATE
+      // serverseitig -- defense-in-depth statt stillschweigendem Fallback.
+      if (currentVersion.targetPercentageBasisPoints == null) {
+        throw new Error(
+          "CLOSE_RATE-Goal ohne targetPercentageBasisPoints -- inkonsistenter Datenzustand " +
+            "(goal-validator.ts haette dies bereits verhindern muessen).",
+        );
+      }
+      // Zaehler identisch zum DEALS_CLOSED-Mapping (waehrungsunabhaengige
+      // Stueckzahl ueber alle Currency-Buckets), Nenner aus der bestehenden
+      // Beratungsvolumen-KPI -- BEIDE mit denselben [periodStart, periodEnd)
+      // Grenzen (ChatGPT-GO, siehe Modulkommentar).
+      const [dealRows, consultationVolume] = await Promise.all([
+        getDealKpi(periodFilter),
+        getConsultationVolumeKpi(periodFilter),
+      ]);
+      const dealsClosed = dealRows.reduce((sum, row) => sum + row.dealsClosed, 0);
+      const totalSessions = consultationVolume.totalSessions;
+      // 0 Beratungen in der Periode => mathematisch undefiniert, nicht 0 %
+      // (analog RecommendationOutcomeKpi.acceptanceRate-Konvention). Da
+      // GoalProgress.actual als number typisiert ist (kein number | null wie
+      // bei den anderen Metriken), wird hier 0 als actual zurueckgegeben,
+      // ABER achievementRate wird ueber buildGoalProgress() bereits dann auf
+      // null gesetzt, wenn target 0 ist -- das deckt den 0-Beratungen-Fall
+      // NICHT ab (target kann > 0 sein bei 0 Beratungen). Deshalb hier ein
+      // expliziter Sonderfall: bei totalSessions === 0 wird achievementRate
+      // zusaetzlich auf null erzwungen (siehe Rueckgabe unten).
+      if (totalSessions === 0) {
+        return {
+          target: currentVersion.targetPercentageBasisPoints,
+          actual: 0,
+          achievementRate: null,
+          remaining: currentVersion.targetPercentageBasisPoints,
+        };
+      }
+      // Basispunkte (0..10000 = 0..100 %), NICHT Prozentzahl 0..100 -- muss
+      // dieselbe Einheit wie targetPercentageBasisPoints haben, siehe
+      // Modulkommentar.
+      const actual = Math.round((dealsClosed / totalSessions) * 10000);
+      return buildGoalProgress(currentVersion.targetPercentageBasisPoints, actual);
+    }
     default: {
       const exhaustiveCheck: never = goal.metricKey;
       throw new Error(`Unbekannter GoalMetricKey: ${String(exhaustiveCheck)}`);

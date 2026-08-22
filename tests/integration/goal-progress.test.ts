@@ -12,8 +12,9 @@
  *   passenden Currency-Buckets (keine Waehrungsvermischung, kein
  *   Aufsummieren, keine Umrechnung).
  * - Kein Bucket fuer die Goal-Currency in der Periode => `actual = 0`.
- * - CLOSE_RATE wirft `GoalMetricNotImplementedError` (weiterhin offener
- *   Blocker).
+ * - CLOSE_RATE = `dealsClosed / totalSessions * 10000` (Basispunkte, ChatGPT-
+ *   GO 2026-08-22 nach Discovery-Verifikation), `totalSessions === 0` =>
+ *   `achievementRate = null` (mathematisch undefiniert, kein 0 %-Ergebnis).
  *
  * Fixtures analog `tests/integration/analytics-kpis.test.ts`
  * (`createDealWithSnapshot()`), bewusst minimal (kein Fragebogen-/
@@ -28,7 +29,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runWithTenantContext } from "@/server/tenant/context";
 import {
   computeGoalProgress,
-  GoalMetricNotImplementedError,
   type GoalProgressInput,
   type GoalVersionProgressInput,
 } from "@/server/analytics/goal-progress";
@@ -324,16 +324,56 @@ describe.skipIf(!hasDatabaseUrl)(
       expect(progress.remaining).toBe(1);
     });
 
-    it("CLOSE_RATE: wirft GoalMetricNotImplementedError (weiterhin offener Blocker)", async () => {
+    it("CLOSE_RATE: actual = dealsClosed/totalSessions in Basispunkten (4 Deals / 4 Beratungen = 10.000 Basispunkte = 100%)", async () => {
       const goal = quarterGoal({ metricKey: "CLOSE_RATE", currency: null });
       const version: GoalVersionProgressInput = {
         targetAmountMinor: null,
         targetCount: null,
-        targetPercentageBasisPoints: 5000,
+        targetPercentageBasisPoints: 8_000, // 80 % Ziel
+      };
+      const progress = await asEmployee(tenantId, employeeId, () =>
+        computeGoalProgress(goal, version),
+      );
+      // Zaehler: 3 EUR- + 1 USD-Deal in der Periode = 4 (identisch zum
+      // DEALS_CLOSED-Test). Nenner: 4 Beratungen mit startedAt=IN_PERIOD
+      // (die vor/nach der Periode gestarteten Sessions zaehlen nicht mit).
+      expect(progress.target).toBe(8_000);
+      expect(progress.actual).toBe(10_000);
+      expect(progress.achievementRate).toBeCloseTo(1.25);
+      expect(progress.remaining).toBe(-2_000);
+    });
+
+    it("CLOSE_RATE: 0 Beratungen im Zeitraum => achievementRate ist null (mathematisch undefiniert, kein 0%-Ergebnis)", async () => {
+      // Periode ohne jegliche Fixture-Daten (weit in der Zukunft).
+      const emptyGoal: GoalProgressInput = {
+        metricKey: "CLOSE_RATE",
+        periodType: "YEAR",
+        periodStart: new Date("2030-01-01T00:00:00.000Z"),
+        currency: null,
+      };
+      const version: GoalVersionProgressInput = {
+        targetAmountMinor: null,
+        targetCount: null,
+        targetPercentageBasisPoints: 5_000,
+      };
+      const progress = await asEmployee(tenantId, employeeId, () =>
+        computeGoalProgress(emptyGoal, version),
+      );
+      expect(progress.actual).toBe(0);
+      expect(progress.achievementRate).toBeNull();
+      expect(progress.remaining).toBe(5_000);
+    });
+
+    it("CLOSE_RATE ohne targetPercentageBasisPoints wirft einen Defense-in-Depth-Fehler (inkonsistenter Datenzustand)", async () => {
+      const goal = quarterGoal({ metricKey: "CLOSE_RATE", currency: null });
+      const version: GoalVersionProgressInput = {
+        targetAmountMinor: null,
+        targetCount: null,
+        targetPercentageBasisPoints: null,
       };
       await expect(
         asEmployee(tenantId, employeeId, () => computeGoalProgress(goal, version)),
-      ).rejects.toThrow(GoalMetricNotImplementedError);
+      ).rejects.toThrow(/inkonsistenter Datenzustand/);
     });
 
     it("REVENUE ohne targetAmountMinor/currency wirft einen Defense-in-Depth-Fehler (inkonsistenter Datenzustand)", async () => {
