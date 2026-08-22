@@ -9,24 +9,24 @@ Repository: `https://github.com/vindoo187/ki-cross`, Branch `main`.
 **Commit-Verlauf dieser Phase** (`git log --oneline c0814d7..4ac16f9`,
 `c0814d7` = Berichts-Commit Phase 9):
 
-| Commit    | Inhalt                                                                        |  CI-Lauf   |    Ergebnis     |
-| --------- | ------------------------------------------------------------------------------ | :--------: | :--------------: |
-| `e71c20b` | AP0 – Discovery (`PHASE_10_DISCOVERY.md`, keine Implementierung)              |   CI #63   |   **Success**    |
-| `042450b` | Implementierungsplan (Entwurf)                                                |  gebündelt¹ |         –         |
-| `0be45af` | Implementierungsplan mit ChatGPT-Präzisierungen finalisiert                   |  gebündelt¹ |         –         |
-| `c4612b3` | AP1 – RBAC (`config.commissions.view/edit/publish`) + Admin-Grundgerüst       |   CI #64   |   **Success**    |
-| `3ba2958` | AP2 – CommissionModel-/Version-Management + Kardinalitäts-Tie-Breaker         |   CI #65   |   **Failure**    |
-| `103c982` | Fix CI #65 – `Provider.key`-Kollision in `commission-admin.test.ts`           |   CI #66   |   **Success**    |
-| `31cd9d9` | AP3 – Commission-Feld-CRUD (FLAT/PERCENTAGE)                                  |   CI #67   |   **Failure**    |
-| `072dc72` | Fix CI #67 – fehlender echter User in AP3-Feld-CRUD-Tests (Audit-FK)          |   CI #68   |   **Success**    |
-| `3917de6` | AP4 – TIERED-Provisionsstaffeln vollständig implementiert                     |   CI #69   |   **Failure**    |
-| `9391c99` | Fix CI #69 – Test-Helper überschrieb explizites `commissionAmountMinor:null`  |   CI #70   |   **Success**    |
-| `a300d2c` | AP5 – Publish-Workflow (model-scoped) für `CommissionModelVersion`            |   CI #71   |   **Success**    |
-| `78ce007` | AP6 – Deal-Historisierung (`DealItem.commissionModelVersionId`)               |   CI #72   |   **Success**    |
-| `14a3b82` | AP7 – Audit/Reproduzierbarkeit – zielgerichtete Beweisführung                 |   CI #73   |   **Success**    |
-| `31f52d8` | AP8 – Admin-UI für Provisionsmodelle                                          |   CI #74   |   **Success**    |
-| `e302d07` | AP9 – E2E Desktop+Tablet für Provisionsmodelle                                |   CI #75   |   **Failure**    |
-| `4ac16f9` | AP9-Fix – Row-Lock in `createDraftCommissionModelVersion()` gegen Race        | **CI #76** | **Success**       |
+| Commit    | Inhalt                                                                       |  CI-Lauf   |  Ergebnis   |
+| --------- | ---------------------------------------------------------------------------- | :--------: | :---------: |
+| `e71c20b` | AP0 – Discovery (`PHASE_10_DISCOVERY.md`, keine Implementierung)             |   CI #63   | **Success** |
+| `042450b` | Implementierungsplan (Entwurf)                                               | gebündelt¹ |      –      |
+| `0be45af` | Implementierungsplan mit ChatGPT-Präzisierungen finalisiert                  | gebündelt¹ |      –      |
+| `c4612b3` | AP1 – RBAC (`config.commissions.view/edit/publish`) + Admin-Grundgerüst      |   CI #64   | **Success** |
+| `3ba2958` | AP2 – CommissionModel-/Version-Management + Kardinalitäts-Tie-Breaker        |   CI #65   | **Failure** |
+| `103c982` | Fix CI #65 – `Provider.key`-Kollision in `commission-admin.test.ts`          |   CI #66   | **Success** |
+| `31cd9d9` | AP3 – Commission-Feld-CRUD (FLAT/PERCENTAGE)                                 |   CI #67   | **Failure** |
+| `072dc72` | Fix CI #67 – fehlender echter User in AP3-Feld-CRUD-Tests (Audit-FK)         |   CI #68   | **Success** |
+| `3917de6` | AP4 – TIERED-Provisionsstaffeln vollständig implementiert                    |   CI #69   | **Failure** |
+| `9391c99` | Fix CI #69 – Test-Helper überschrieb explizites `commissionAmountMinor:null` |   CI #70   | **Success** |
+| `a300d2c` | AP5 – Publish-Workflow (model-scoped) für `CommissionModelVersion`           |   CI #71   | **Success** |
+| `78ce007` | AP6 – Deal-Historisierung (`DealItem.commissionModelVersionId`)              |   CI #72   | **Success** |
+| `14a3b82` | AP7 – Audit/Reproduzierbarkeit – zielgerichtete Beweisführung                |   CI #73   | **Success** |
+| `31f52d8` | AP8 – Admin-UI für Provisionsmodelle                                         |   CI #74   | **Success** |
+| `e302d07` | AP9 – E2E Desktop+Tablet für Provisionsmodelle                               |   CI #75   | **Failure** |
+| `4ac16f9` | AP9-Fix – Row-Lock in `createDraftCommissionModelVersion()` gegen Race       | **CI #76** | **Success** |
 
 ¹ `042450b`/`0be45af` (reine Dokumentationscommits, keine Code-Änderung)
 wurden zusammen mit `c4612b3` in einem Push übertragen – CI lief einmal auf
@@ -94,7 +94,7 @@ den Implementation Plan):**
 2. **Mehrere `CommissionModel`s pro Produkt bleiben zulässig**, aber der
    bisherige rein technische Tie-Breaker musste durch eine fachlich
    saubere, deterministische Regel ersetzt werden (`ORDER BY validFrom
-   DESC, id DESC`) – keine erzwungene 1:1-Beziehung zu `Product`.
+DESC, id DESC`) – keine erzwungene 1:1-Beziehung zu `Product`.
 3. **`DealItem` wird um eine Referenz auf die tatsächlich verwendete
    `CommissionModelVersion` erweitert** – Begründung: Revisions-/
    Controlling-/Debugging-Fähigkeit für abgeschlossene Deals. Eigene,
@@ -127,7 +127,7 @@ fachlich korrekte Asymmetrie.
   (ChatGPT: GO, mit Präzisierung – exklusiv `tierAmountMinor` ODER
   `tierPercentageBasisPoints`, erste Stufe zwingend `thresholdMinor=0`,
   nur DRAFT mutierbar); Tie-Breaker verschärft zu `ORDER BY validFrom
-  DESC, id DESC` (statt reiner `validFrom`-Sortierung, wegen möglicher
+DESC, id DESC` (statt reiner `validFrom`-Sortierung, wegen möglicher
   exakter Zeitgleichheit).
 - **AP1** – RBAC `config.commissions.*` additiv zu den bestehenden
   `config_editor`/`config_publisher`-Rollen, `commission-admin.ts`-
@@ -219,12 +219,12 @@ Zwei neue Migrationen in Phase 10 (`git diff --stat c0814d7..4ac16f9 --
 - `20260821190000_commission_tiers` (AP4): neue Tabelle `CommissionTier`
   (FK auf `CommissionModelVersion`, `onDelete: Restrict`,
   `thresholdMinor >= 0`-Check, UNIQUE `(commissionModelVersionId,
-  thresholdMinor)` + `(commissionModelVersionId, sortOrder)`, XOR-Check
+thresholdMinor)` + `(commissionModelVersionId, sortOrder)`, XOR-Check
   `tierAmountMinor`/`tierPercentageBasisPoints`).
 - `20260822000000_deal_item_commission_model_version` (AP6):
   `DealItem.commissionModelVersionId` (nullable, FK `(tenant_id,
-  commission_model_version_id) → commission_model_versions (tenant_id,
-  id) ON DELETE RESTRICT`).
+commission_model_version_id) → commission_model_versions (tenant_id,
+id) ON DELETE RESTRICT`).
 
 `scripts/verify_migration_pglite.mjs` wurde um 129 Zeilen erweitert:
 neue PGlite-Verifikationsfälle für beide Migrationen (u. a. FK-Ablehnung
@@ -392,13 +392,13 @@ Vier Testebenen, insgesamt **837 Testfälle** (721 aus Phase 9 + 116 neu
 in Phase 10), grep-basiert gezählt (`grep -crE '^\s*it\(|^\s*test\('` je
 Datei, konsistent mit der Zählmethode der Vorphasen-Berichte):
 
-| Ebene                                    | Phase 9 | Neu in Phase 10 | Gesamt Phase 10 | Neue Dateien                                                                                                                                                          |
-| ----------------------------------------- | ------: | ---------------: | ----------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unit (`npm run test:unit`)                |     341 |               27 |               368 | `tests/unit/admin/commission-admin-publish-error-mapping.test.ts` (6, neu); erweitert: `pricing/commission.test.ts` (+16, TIERED-Matrix), `authz/config-permissions.test.ts` (+5), `authz/seed-role-permissions.test.ts` (+3) |
-| Component (`npm run test:component`)      |     117 |                0 |               117 | keine neuen Component-Tests in Phase 10                                                                                                                                |
-| Integration (`npm run test:integration`)  |     251 |               82 |               333 | `tests/integration/commission-admin.test.ts` (73, neu), `commission-admin-validate-route.test.ts` (4, neu); erweitert: `deals-service.test.ts` (+5, Deal-Historisierung/Reproduzierbarkeit) |
-| E2E (`npm run test:e2e`)                  |      12 |                7 |                19 | `tests/e2e/admin-commissions.spec.ts` (7, neu)                                                                                                                          |
-| **Gesamt**                                | **721** |          **116** |           **837** |                                                                                                                                                                          |
+| Ebene                                    | Phase 9 | Neu in Phase 10 | Gesamt Phase 10 | Neue Dateien                                                                                                                                                                                                                  |
+| ---------------------------------------- | ------: | --------------: | --------------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit (`npm run test:unit`)               |     341 |              27 |             368 | `tests/unit/admin/commission-admin-publish-error-mapping.test.ts` (6, neu); erweitert: `pricing/commission.test.ts` (+16, TIERED-Matrix), `authz/config-permissions.test.ts` (+5), `authz/seed-role-permissions.test.ts` (+3) |
+| Component (`npm run test:component`)     |     117 |               0 |             117 | keine neuen Component-Tests in Phase 10                                                                                                                                                                                       |
+| Integration (`npm run test:integration`) |     251 |              82 |             333 | `tests/integration/commission-admin.test.ts` (73, neu), `commission-admin-validate-route.test.ts` (4, neu); erweitert: `deals-service.test.ts` (+5, Deal-Historisierung/Reproduzierbarkeit)                                   |
+| E2E (`npm run test:e2e`)                 |      12 |               7 |              19 | `tests/e2e/admin-commissions.spec.ts` (7, neu)                                                                                                                                                                                |
+| **Gesamt**                               | **721** |         **116** |         **837** |                                                                                                                                                                                                                               |
 
 **Inhalt der zentralen neuen Testdateien** (ausschließlich echte
 Postgres-/Playwright-Fixtures, kein Mocking der DB-Schicht):
@@ -423,14 +423,14 @@ Postgres-/Playwright-Fixtures, kein Mocking der DB-Schicht):
 
 ## 11. Vollständige Prüfkommandos mit Ergebnissen
 
-| Kommando                                                            | Ergebnis                                                                                                                                                                                                          |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `git status` (Stand `4ac16f9`)                                       | sauber bis auf die für diesen Bericht gehörenden Dokumentationsänderungen und die bekannten untracked Altlasten (Abschnitt 13)                                                                                     |
-| `npx tsc --noEmit`                                                    | 45 Fehler, durchgängig identisch zur bekannten stale-Prisma-Client-Baseline (fehlende `commissionTier`/`commissionModelVersionId`/`passwordHash`-Felder + `AuditAction.DELETE`, unverändert seit Phase 8/9 durch `prisma generate` ohne Netzwerkzugriff) – keine neuen Fehlerkategorien, nach jedem Fix in dieser Phase gegen die gespeicherte Baseline diffgeprüft |
-| `npx eslint <geänderte Dateien>`                                      | durchgängig sauber                                                                                                                                                                                                    |
-| `npx prettier --check <geänderte Dateien>`                            | durchgängig sauber                                                                                                                                                                                                    |
-| `npx vitest run` (alle vier Testebenen)                               | in dieser Sandbox nicht ausführbar (bekannte, sandboxweite `@rollup/rollup-linux-arm64-gnu`-Limitierung, unverändert seit Phase 2) – Verifikation ausschließlich über CI                                            |
-| GitHub Actions (`vindoo187/ki-cross/actions`, via Claude-in-Chrome)   | CI #63–#76 (Details Commit-Tabelle, Kopf des Berichts); **CI #76 (`4ac16f9`): Success, 3m 55s** – maßgeblicher Nachweis für diese Phase                                                                            |
+| Kommando                                                            | Ergebnis                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git status` (Stand `4ac16f9`)                                      | sauber bis auf die für diesen Bericht gehörenden Dokumentationsänderungen und die bekannten untracked Altlasten (Abschnitt 13)                                                                                                                                                                                                                                      |
+| `npx tsc --noEmit`                                                  | 45 Fehler, durchgängig identisch zur bekannten stale-Prisma-Client-Baseline (fehlende `commissionTier`/`commissionModelVersionId`/`passwordHash`-Felder + `AuditAction.DELETE`, unverändert seit Phase 8/9 durch `prisma generate` ohne Netzwerkzugriff) – keine neuen Fehlerkategorien, nach jedem Fix in dieser Phase gegen die gespeicherte Baseline diffgeprüft |
+| `npx eslint <geänderte Dateien>`                                    | durchgängig sauber                                                                                                                                                                                                                                                                                                                                                  |
+| `npx prettier --check <geänderte Dateien>`                          | durchgängig sauber                                                                                                                                                                                                                                                                                                                                                  |
+| `npx vitest run` (alle vier Testebenen)                             | in dieser Sandbox nicht ausführbar (bekannte, sandboxweite `@rollup/rollup-linux-arm64-gnu`-Limitierung, unverändert seit Phase 2) – Verifikation ausschließlich über CI                                                                                                                                                                                            |
+| GitHub Actions (`vindoo187/ki-cross/actions`, via Claude-in-Chrome) | CI #63–#76 (Details Commit-Tabelle, Kopf des Berichts); **CI #76 (`4ac16f9`): Success, 3m 55s** – maßgeblicher Nachweis für diese Phase                                                                                                                                                                                                                             |
 
 **CI #76 im Detail:** vollständiger Lauf über den kumulierten Codestand
 AP0–AP9, deckt ab: Lint/Prettier/`tsc` sauber, Migrationen gegen echte
