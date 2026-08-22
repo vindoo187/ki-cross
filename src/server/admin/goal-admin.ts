@@ -366,7 +366,6 @@ export async function createGoal(input: CreateGoalInput): Promise<GoalDetail> {
             scopeId: input.scopeId,
             metricKey: input.metricKey,
             periodType: input.periodType,
-            periodStart: input.periodStart.toISOString(),
           },
         },
       });
