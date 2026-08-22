@@ -73,11 +73,17 @@ async function seedGlobalCatalog() {
     create: { key: "o2-telefonica", name: "O2 / Telefonica (synthetisch)", isSynthetic: true },
   });
 
-  // Phase 9 AP9 + Phase 10 AP9: nur die Regel- und Provisionsmodell-
-  // Administrations-Permissions werden fuer diese E2E-Suiten benoetigt (die
-  // Fragenverwaltung ist nicht Teil des /admin/rules- bzw.
-  // /admin/commissions-E2E-Umfangs) -- bewusst minimal, kein voller
-  // config.questions.*-Katalog wie in prisma/seed.ts.
+  // Phase 9 AP9 + Phase 10 AP9 + Phase 11 AP9: nur die Regel-, Provisions-
+  // modell- und Ziele-Administrations-Permissions werden fuer diese
+  // E2E-Suiten benoetigt (die Fragenverwaltung ist nicht Teil des
+  // /admin/rules- bzw. /admin/commissions-/admin/goals-E2E-Umfangs) --
+  // bewusst minimal, kein voller config.questions.*-Katalog wie in
+  // prisma/seed.ts. `config.goals.*` hat -- anders als die anderen drei
+  // Gruppen -- KEIN `.publish`-Recht (Goal kennt kein Draft/Publish-
+  // Konzept, siehe goal-admin.ts-Modulkommentar); config_editor/
+  // config_publisher erhalten beide config.goals.view+edit automatisch ueber
+  // permissionKeysForSeedRole() (Phase 11 AP1, ChatGPT finales GO
+  // 2026-08-22), siehe tests/e2e/admin-goals.spec.ts (Phase 11 AP9).
   const rulePermissionKeys = [
     "config.rules.view",
     "config.rules.edit",
@@ -85,6 +91,8 @@ async function seedGlobalCatalog() {
     "config.commissions.view",
     "config.commissions.edit",
     "config.commissions.publish",
+    "config.goals.view",
+    "config.goals.edit",
   ];
   const permissions = await Promise.all(
     rulePermissionKeys.map((key) =>

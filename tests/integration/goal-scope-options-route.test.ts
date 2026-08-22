@@ -80,6 +80,13 @@ describe.skipIf(!hasDatabaseUrl)(
       });
     }
 
+    it("AP9: kein Session-Cookie -> 401", async () => {
+      const response = await scopeOptionsRoute(
+        new NextRequest("http://localhost/api/admin/goals/scope-options?scopeType=TENANT"),
+      );
+      expect(response.status).toBe(401);
+    });
+
     it("ohne config.goals.view -> 403", async () => {
       const tenantId = await createTenant("http-403");
       const userId = await createUser(tenantId, "actor");

@@ -100,6 +100,59 @@ describe.skipIf(!hasDatabaseUrl)("Phase 11 AP3: HTTP-Routen /api/admin/goals", (
   }
 
   // -------------------------------------------------------------------
+  // AP9: kein Session-Cookie -> 401 (Authentifizierung VOR jedem Tenant-/
+  // DB-Zugriff, siehe withRequestTenantContext()/AuthenticationError ->
+  // http-errors.ts). Analog tests/integration/question-admin.test.ts.
+  // Bewusst getrennt von den 403-Faellen unten (dort ist die Session
+  // gueltig, es fehlt lediglich die Permission).
+  // -------------------------------------------------------------------
+
+  it("GET /api/admin/goals ohne Session-Cookie -> 401", async () => {
+    const response = await listGoalsRoute(new NextRequest("http://localhost/api/admin/goals"));
+    expect(response.status).toBe(401);
+  });
+
+  it("POST /api/admin/goals ohne Session-Cookie -> 401", async () => {
+    const response = await createGoalRoute(
+      new NextRequest("http://localhost/api/admin/goals", {
+        method: "POST",
+        body: JSON.stringify(tenantGoalInput(randomUUID())),
+      }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it("GET /api/admin/goals/[id] ohne Session-Cookie -> 401", async () => {
+    const someId = randomUUID();
+    const response = await getGoalDetailRoute(
+      new NextRequest(`http://localhost/api/admin/goals/${someId}`),
+      routeParams({ id: someId }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it("GET .../versions ohne Session-Cookie -> 401", async () => {
+    const someId = randomUUID();
+    const response = await listGoalVersionsRoute(
+      new NextRequest(`http://localhost/api/admin/goals/${someId}/versions`),
+      routeParams({ id: someId }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it("POST .../versions ohne Session-Cookie -> 401", async () => {
+    const someId = randomUUID();
+    const response = await createGoalVersionRoute(
+      new NextRequest(`http://localhost/api/admin/goals/${someId}/versions`, {
+        method: "POST",
+        body: JSON.stringify({ targetCount: 30 }),
+      }),
+      routeParams({ id: someId }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  // -------------------------------------------------------------------
   // POST /api/admin/goals
   // -------------------------------------------------------------------
 

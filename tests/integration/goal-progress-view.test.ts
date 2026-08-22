@@ -33,7 +33,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runWithTenantContext } from "@/server/tenant/context";
-import { createGoal } from "@/server/admin/goal-admin";
+import { createGoal, createGoalVersion } from "@/server/admin/goal-admin";
 import type { ManagementScope } from "@/server/authz/management-scope";
 import {
   buildGoalProgressForEmployee,
@@ -239,6 +239,129 @@ describe.skipIf(!hasDatabaseUrl)(
         buildGoalProgressForManagement(scope, undefined, undefined, NOW),
       );
       expect(viewModels.map((v) => v.goalId)).toContain(goalCompanyActiveId);
+    });
+
+    // -----------------------------------------------------------------
+    // 4. AP9: Mehrere gleichzeitig aktive Goals (unterschiedliche Metrik)
+    //    + Versionshistorie -> tatsaechlicher Progress nutzt v2
+    //    (ChatGPT-Praezisierung nach AP9-Discovery, 2026-08-23: "Der
+    //    bestehende Unique-Constraint darf nur echte Duplikate verhindern"
+    //    bzw. "computeGoalProgress() bzw. der vollstaendige Visibility-/
+    //    View-Pfad muss nachweislich v2 verwenden" -- beide Tests nutzen
+    //    bewusst den ECHTEN Service-/DB-Pfad statt Mocks, wie von ChatGPT
+    //    ausdruecklich gefordert.)
+    // -----------------------------------------------------------------
+    describe("4. AP9: mehrere aktive Goals + Versionshistorie im echten View-Pfad", () => {
+      it("zwei gleichzeitig aktive Goals mit UNTERSCHIEDLICHER Metrik fuer denselben Scope+Periode sind beide sichtbar und werden unabhaengig berechnet", async () => {
+        const soloTenantId = await createTenant("ap9-multi-metric");
+        const soloActorId = await createUser(soloTenantId, "actor");
+        const soloCompanyId = await createCompany(soloTenantId, "C1");
+        const soloStoreId = await createStore(soloTenantId, soloCompanyId, "S1");
+        const soloEmployeeId = await createEmployee(soloTenantId, soloStoreId, "E1");
+
+        // Gleicher Scope (EMPLOYEE) + gleiche Periode, aber unterschiedliche
+        // metricKey -- der Unique-Constraint (scope+metric+period) darf dies
+        // NICHT als Duplikat ablehnen, da die Identitaet ueber metricKey
+        // mitbestimmt wird (siehe goals_scope_metric_period_key).
+        const dealsGoal = await asContext(soloTenantId, soloActorId, undefined, null, () =>
+          createGoal({
+            scopeType: "EMPLOYEE",
+            scopeId: soloEmployeeId,
+            metricKey: "DEALS_CLOSED",
+            periodType: "MONTH",
+            periodStart: ACTIVE_PERIOD_START,
+            currency: null,
+            targetAmountMinor: null,
+            targetCount: 15,
+            targetPercentageBasisPoints: null,
+          }),
+        );
+        const revenueGoal = await asContext(soloTenantId, soloActorId, undefined, null, () =>
+          createGoal({
+            scopeType: "EMPLOYEE",
+            scopeId: soloEmployeeId,
+            metricKey: "REVENUE",
+            periodType: "MONTH",
+            periodStart: ACTIVE_PERIOD_START,
+            currency: "EUR",
+            targetAmountMinor: 250_000,
+            targetCount: null,
+            targetPercentageBasisPoints: null,
+          }),
+        );
+
+        const viewModels = await asContext(soloTenantId, soloActorId, soloEmployeeId, null, () =>
+          buildGoalProgressForEmployee(NOW),
+        );
+
+        expect(viewModels).toHaveLength(2);
+        const byGoalId = new Map(viewModels.map((v) => [v.goalId, v]));
+        const dealsView = byGoalId.get(dealsGoal.id);
+        const revenueView = byGoalId.get(revenueGoal.id);
+        expect(dealsView).toBeDefined();
+        expect(revenueView).toBeDefined();
+        // Unabhaengige Berechnung: jede Metrik behaelt ihr eigenes Target/
+        // Currency, keine Vermischung der beiden gleichzeitig aktiven Goals.
+        expect(dealsView?.metricKey).toBe("DEALS_CLOSED");
+        expect(dealsView?.target).toBe(15);
+        expect(dealsView?.currency).toBeNull();
+        expect(revenueView?.metricKey).toBe("REVENUE");
+        expect(revenueView?.target).toBe(250_000);
+        expect(revenueView?.currency).toBe("EUR");
+      });
+
+      it("nach Anlegen einer neuen GoalVersion (v2) verwendet der VOLLSTAENDIGE View-Pfad (buildGoalProgressForEmployee) nachweislich v2, nicht v1", async () => {
+        const soloTenantId = await createTenant("ap9-version-progress");
+        const soloActorId = await createUser(soloTenantId, "actor");
+        const soloCompanyId = await createCompany(soloTenantId, "C1");
+        const soloStoreId = await createStore(soloTenantId, soloCompanyId, "S1");
+        const soloEmployeeId = await createEmployee(soloTenantId, soloStoreId, "E1");
+
+        const goal = await asContext(soloTenantId, soloActorId, undefined, null, () =>
+          createGoal({
+            scopeType: "EMPLOYEE",
+            scopeId: soloEmployeeId,
+            metricKey: "DEALS_CLOSED",
+            periodType: "MONTH",
+            periodStart: ACTIVE_PERIOD_START,
+            currency: null,
+            targetAmountMinor: null,
+            targetCount: 10,
+            targetPercentageBasisPoints: null,
+          }),
+        );
+
+        const viewBeforeV2 = await asContext(soloTenantId, soloActorId, soloEmployeeId, null, () =>
+          buildGoalProgressForEmployee(NOW),
+        );
+        expect(viewBeforeV2).toHaveLength(1);
+        expect(viewBeforeV2[0]?.target).toBe(10);
+        // 0 Abschluesse in der Periode -> achievementRate = actual/target = 0.
+        expect(viewBeforeV2[0]?.achievementRate).toBe(0);
+        expect(viewBeforeV2[0]?.remaining).toBe(10);
+
+        await asContext(soloTenantId, soloActorId, undefined, null, () =>
+          createGoalVersion(goal.id, { targetCount: 40 }),
+        );
+
+        const viewAfterV2 = await asContext(soloTenantId, soloActorId, soloEmployeeId, null, () =>
+          buildGoalProgressForEmployee(NOW),
+        );
+        expect(viewAfterV2).toHaveLength(1);
+        // Der komplette Pfad Goal -> currentVersion -> computeGoalProgress()
+        // -> GoalProgressViewModel muss jetzt das NEUE Target (v2 = 40)
+        // liefern, nicht mehr das urspruengliche (v1 = 10).
+        expect(viewAfterV2[0]?.target).toBe(40);
+        expect(viewAfterV2[0]?.remaining).toBe(40);
+
+        // Gegenprobe: v1 selbst bleibt in der DB unveraendert bestehen (kein
+        // Update-Pfad) -- die Aenderung im View kommt ausschliesslich daher,
+        // dass getCurrentGoalVersion() jetzt v2 statt v1 liefert.
+        const v1Row = await rawClient.goalVersion.findFirst({
+          where: { goalId: goal.id, versionNumber: 1 },
+        });
+        expect(v1Row?.targetCount).toBe(10);
+      });
     });
   },
 );
