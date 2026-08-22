@@ -144,7 +144,11 @@ export function formatGoalPeriodLabel(periodType: string, periodStartIso: string
     return `Q${quarter} ${date.getUTCFullYear()} - ${typeLabel}sziel`;
   }
   if (periodType === "YEAR") {
-    return `${date.getUTCFullYear()} - ${typeLabel}sziel`;
+    // Bewusst NICHT das generische "${typeLabel}sziel"-Muster (das fuer
+    // MONTH/QUARTER passt: "Monatsziel"/"Quartalsziel") -- "Jahr" + "sziel"
+    // ergaebe das falsche "Jahrsziel" statt des korrekten deutschen
+    // "Jahresziel" (Fugen-"es" statt Fugen-"s").
+    return `${date.getUTCFullYear()} - Jahresziel`;
   }
   const monthLabel = new Intl.DateTimeFormat("de-DE", {
     month: "long",

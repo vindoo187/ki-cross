@@ -8,7 +8,27 @@ import { formatGoalMetricValue, formatGoalPeriodLabel } from "@/lib/goal-format"
  * ab (`formatGoalMetricValue()`, `formatGoalPeriodLabel()`); die
  * AP6-Funktionen (`formatGoalScopeLabel()`, `formatGoalTargetValue()`) sind
  * unveraendert und nicht Teil dieses AP7-Scopes.
+ *
+ * WICHTIG (Root-Cause-Fix nach CI #94-Fehlschlag): `Intl.NumberFormat`s
+ * Waehrungs-/Prozent-Ausgabe verwendet je nach Node-/ICU-Version ein
+ * unterschiedliches Leerzeichen-Unicode-Zeichen vor "€"/"%" (z. B. U+00A0
+ * vs. U+202F) -- die Sandbox laeuft auf Node 22, CI auf Node 24 (siehe
+ * CI-Log-Warnung). Ein hartkodiertes Erwartungs-Literal mit dem "falschen"
+ * Leerzeichen besteht dadurch lokal, schlaegt aber in CI fehl (oder
+ * umgekehrt). Deshalb wird die Erwartung fuer Waehrungs-/Prozentwerte HIER
+ * ueber denselben `Intl.NumberFormat()`-Aufruf wie in `goal-format.ts`
+ * berechnet, statt das Zeichen zu erraten -- versionsunabhaengig korrekt.
  */
+
+function expectedCurrency(amount: number, currency: string): string {
+  return new Intl.NumberFormat("de-DE", { style: "currency", currency }).format(amount);
+}
+
+function expectedPercent(ratio: number): string {
+  return new Intl.NumberFormat("de-DE", { style: "percent", maximumFractionDigits: 2 }).format(
+    ratio,
+  );
+}
 
 describe("formatGoalMetricValue()", () => {
   it("DEALS_CLOSED: rohe Stueckzahl mit 'Deals'-Suffix, waehrungsunabhaengig", () => {
@@ -18,7 +38,7 @@ describe("formatGoalMetricValue()", () => {
   });
 
   it("REVENUE: Minor-Einheiten (Cent) werden durch 100 geteilt und als Waehrung formatiert", () => {
-    expect(formatGoalMetricValue("REVENUE", 19950, "EUR")).toBe("199,50 €");
+    expect(formatGoalMetricValue("REVENUE", 19950, "EUR")).toBe(expectedCurrency(199.5, "EUR"));
   });
 
   it("REVENUE ohne currency liefert '--' statt eines Fehlers (Anzeige darf nie crashen)", () => {
@@ -26,11 +46,11 @@ describe("formatGoalMetricValue()", () => {
   });
 
   it("CLOSE_RATE: Basispunkte (0..10000) werden durch 10000 geteilt und als Prozent formatiert", () => {
-    expect(formatGoalMetricValue("CLOSE_RATE", 2500, null)).toBe("25,00 %");
+    expect(formatGoalMetricValue("CLOSE_RATE", 2500, null)).toBe(expectedPercent(0.25));
   });
 
   it("CLOSE_RATE: 10000 Basispunkte entsprechen 100 %", () => {
-    expect(formatGoalMetricValue("CLOSE_RATE", 10000, null)).toBe("100,00 %");
+    expect(formatGoalMetricValue("CLOSE_RATE", 10000, null)).toBe(expectedPercent(1));
   });
 
   it("unbekannter metricKey liefert '--' (Defense-in-Depth, analog formatGoalTargetValue())", () => {
@@ -39,7 +59,7 @@ describe("formatGoalMetricValue()", () => {
 
   it("0 ist ein gueltiger Wert (kein Fallback auf '--') -- z. B. 0 Deals oder 0 % Zielerreichung", () => {
     expect(formatGoalMetricValue("DEALS_CLOSED", 0, null)).toBe("0 Deals");
-    expect(formatGoalMetricValue("CLOSE_RATE", 0, null)).toBe("0,00 %");
+    expect(formatGoalMetricValue("CLOSE_RATE", 0, null)).toBe(expectedPercent(0));
   });
 });
 
@@ -62,7 +82,7 @@ describe("formatGoalPeriodLabel()", () => {
     );
   });
 
-  it("YEAR: 'Jahr - Jahresziel'", () => {
+  it("YEAR: '<Jahr> - Jahresziel' (Fugen-'es', NICHT das generische '<Label>sziel'-Muster)", () => {
     expect(formatGoalPeriodLabel("YEAR", "2026-01-01T00:00:00.000Z")).toBe("2026 - Jahresziel");
   });
 
