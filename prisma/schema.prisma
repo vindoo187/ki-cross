@@ -227,6 +227,18 @@ enum AnalyticsEventType {
   CONSULTATION_ABANDONED
   DEAL_CLOSED
   FOLLOW_UP_CREATED
+  // Phase 12 AP4 (Freitext-KI-Angebotsfeature, ChatGPT-GO 2026-08-23, siehe
+  // PHASE_12_IMPLEMENTATION_PLAN.md Abschnitt 7 + Abschnitt 4 AP4). Payload
+  // enthaelt AUSSCHLIESSLICH technische Metadaten (Session-ID, Anzahl
+  // sichtbarer Fragen/Kandidaten, Provider-Version) -- niemals Freitext,
+  // Prompt oder KI-Rohantwort (siehe `ai-extraction/service.ts`).
+  AI_EXTRACTION_REQUESTED
+  AI_EXTRACTION_COMPLETED
+  // Mitarbeiter-Entscheidung ueber einen einzelnen KI-Vorschlag
+  // (Uebernehmen/Aendern -> ACCEPTED mit `changed`-Flag im Payload,
+  // Verwerfen -> REJECTED). Payload je Feld: `questionId` + `changed`.
+  AI_SUGGESTION_ACCEPTED
+  AI_SUGGESTION_REJECTED
 }
 
 enum MeasurementSource {

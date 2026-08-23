@@ -51,10 +51,29 @@
  *   der Response zurueckgegeben (Plan Abschnitt 4, AP2: "Response mit
  *   validierten Kandidaten").
  *
- * Noch NICHT Teil von AP2 (spaetere APs laut Plan): kein `AnalyticsEvent`
- * (AP4), keine `CustomerAnswer`-Schreiboperation (AP3/AP6, ausschliesslich
- * ueber den bestehenden, unveraenderten `saveAnswer()`-Pfad nach expliziter
- * Mitarbeiterbestaetigung).
+ * AP4 (Analytics/Audit, ChatGPT-GO 2026-08-23): ergaenzt genau zwei
+ * `AnalyticsEvent`-Schreibvorgaenge direkt in dieser Funktion --
+ * AI_EXTRACTION_REQUESTED (nachdem alle Sicherheitspruefungen bestanden
+ * sind, unmittelbar vor dem Providerzugriff) und AI_EXTRACTION_COMPLETED
+ * (nach erfolgreicher Validierung). Beide Payloads enthalten AUSSCHLIESSLICH
+ * technische Metadaten (Session-ID, Anzahl sichtbarer Fragen/Kandidaten,
+ * Provider-Version) -- niemals `freeText`, den Prompt oder die
+ * Provider-Rohantwort (siehe `contract.ts`-Modulkommentar zur
+ * Datenschutz-Grenze, die durch diese Aenderung NICHT beruehrt wird: der
+ * Freitext bleibt weiterhin ausschliesslich `extractionProvider.extract()`
+ * zugaenglich). Beide Schreibvorgaenge sind bewusst in `try/catch`
+ * eingefasst und schlucken Fehler (mit `console.error` fuer Beobachtbarkeit)
+ * -- ein Fehler beim Schreiben eines Analytics-Events darf dem Mitarbeiter
+ * niemals die eigentlichen (bereits ermittelten) KI-Vorschlaege vorenthalten.
+ * Dies ist bewusst strenger als ChatGPTs woertliche Vorgabe (die explizit nur
+ * die CustomerAnswer-Speicherung im Accept/Reject-Pfad nennt), aber
+ * konsistent mit deren zugrundeliegendem Prinzip.
+ *
+ * Die Mitarbeiter-Entscheidung ueber einen einzelnen Vorschlag
+ * (AI_SUGGESTION_ACCEPTED/REJECTED) wird NICHT hier, sondern in
+ * `recordAiSuggestionOutcome()` (unten) geschrieben -- siehe dortigen
+ * Kommentar, warum dies zwingend ein eigener, vom `saveAnswer()`-Pfad
+ * strukturell getrennter Aufruf sein muss.
  */
 
 import { db } from "../db/client";
@@ -65,7 +84,7 @@ import { isAiExtractionAvailable } from "../authz/consultation-permissions";
 import { AiExtractionNotAvailableError } from "./errors";
 import { buildVisibleQuestionContext } from "./visible-question-context";
 import { validateExtractionCandidates } from "./extraction-validator";
-import { MockExtractionProvider } from "./providers/mock-provider";
+import { MockExtractionProvider, MOCK_PROVIDER_VERSION } from "./providers/mock-provider";
 import type { AiExtractionCandidate } from "./types";
 
 /**
@@ -87,6 +106,22 @@ export interface RequestAiExtractionInput {
 
 export interface RequestAiExtractionResult {
   candidates: AiExtractionCandidate[];
+}
+
+/**
+ * Schreibt ein `AnalyticsEvent` "best effort" -- siehe Modulkommentar oben
+ * (AP4-Abschnitt) fuer die Begruendung, warum ein Fehler hier NIEMALS
+ * propagiert werden darf. `void`-Aufrufer sind bewusst nicht noetig, die
+ * Funktion selbst gibt bereits `Promise<void>` zurueck und wirft nie.
+ */
+async function recordAnalyticsEventBestEffort(
+  data: Parameters<typeof db.analyticsEvent.create>[0]["data"],
+): Promise<void> {
+  try {
+    await db.analyticsEvent.create({ data });
+  } catch (error) {
+    console.error("AnalyticsEvent konnte nicht geschrieben werden (Phase 12 AP4):", error);
+  }
 }
 
 /**
@@ -133,11 +168,124 @@ export async function requestAiExtraction(
   }
 
   const visibleQuestions = await buildVisibleQuestionContext(session.id);
+
+  await recordAnalyticsEventBestEffort({
+    tenantId: getTenantId(),
+    storeId: session.storeId,
+    employeeId: session.employeeId,
+    eventType: "AI_EXTRACTION_REQUESTED",
+    occurredAt: new Date(),
+    payload: {
+      consultationSessionId: session.id,
+      visibleQuestionCount: visibleQuestions.length,
+      providerVersion: MOCK_PROVIDER_VERSION,
+    },
+  });
+
   const rawCandidates = await extractionProvider.extract({
     freeText: input.freeText,
     visibleQuestions,
   });
   const { accepted } = validateExtractionCandidates(visibleQuestions, rawCandidates);
 
+  await recordAnalyticsEventBestEffort({
+    tenantId: getTenantId(),
+    storeId: session.storeId,
+    employeeId: session.employeeId,
+    eventType: "AI_EXTRACTION_COMPLETED",
+    occurredAt: new Date(),
+    payload: {
+      consultationSessionId: session.id,
+      candidateCount: accepted.length,
+      providerVersion: MOCK_PROVIDER_VERSION,
+    },
+  });
+
   return { candidates: accepted };
+}
+
+export type AiSuggestionOutcome = "accepted" | "rejected";
+
+export interface RecordAiSuggestionOutcomeInput {
+  consultationSessionId: string;
+  /** `employeeId` aus dem authentifizierten Server-Session-Kontext, NIEMALS aus dem Request-Body/URL. */
+  employeeId: string;
+  /** Ob die Session die `consultation.ai_extraction.use`-Permission besitzt. */
+  hasPermission: boolean;
+  questionId: string;
+  outcome: AiSuggestionOutcome;
+  /**
+   * Nur bei `outcome: "accepted"` von Bedeutung: `false` = Uebernehmen
+   * (unveraendert), `true` = Aendern (Mitarbeiter hat den Vorschlagswert vor
+   * dem Speichern angepasst). Bei `outcome: "rejected"` bedeutungslos, wird
+   * ignoriert.
+   */
+  changed: boolean;
+}
+
+/**
+ * Zeichnet die explizite Mitarbeiter-Entscheidung ueber einen einzelnen
+ * KI-Vorschlag auf (Uebernehmen/Aendern -> AI_SUGGESTION_ACCEPTED,
+ * Verwerfen -> AI_SUGGESTION_REJECTED, Phase 12 AP4).
+ *
+ * WICHTIG (Architekturentscheidung): Diese Funktion schreibt AUSSCHLIESSLICH
+ * das `AnalyticsEvent` -- sie ruft NIEMALS `saveAnswer()`/`changeAnswer()`
+ * auf und beruehrt keine `CustomerAnswer`-Zeile. Das ist kein Zufall: AP2/AP3
+ * haben bewusst entschieden, dass Uebernehmen/Aendern ausschliesslich ueber
+ * den bestehenden, UNVERAENDERTEN `saveAnswer()`/`changeAnswer()`-Pfad
+ * laufen (client-seitig in `QuestionFlow.tsx`, siehe dortigen
+ * Modulkommentar) -- ein Signal "diese Antwort stammt von einer
+ * KI-Bestaetigung" darf in DIESEM Pfad nicht existieren, sonst waere die
+ * AP2/AP3-Garantie "kein zweiter Code-Pfad fuer CustomerAnswer-Schreibungen"
+ * verletzt. Der Client ruft diese Funktion daher als GENUIN SEPARATEN
+ * HTTP-Request AUF, NACHDEM der eigentliche Antwort-Speichervorgang (bei
+ * Uebernehmen/Aendern) bereits erfolgreich abgeschlossen ist (bzw. sofort bei
+ * Verwerfen, wo gar kein Speichervorgang stattfindet). Dadurch kann ein
+ * Fehler beim Schreiben dieses Analytics-Events -- strukturell, nicht nur per
+ * try/catch -- NIEMALS die bereits committete CustomerAnswer-Speicherung
+ * rueckgaengig machen oder zum Scheitern bringen (ChatGPTs AP4-Atomaritaets-
+ * Vorgabe, "besonders wichtig beim Accept/Reject-Pfad").
+ *
+ * Prueft dieselbe Verfuegbarkeits- und Session-Ownership-Bedingung wie
+ * `requestAiExtraction()` (Permission UND Tenant-Feature-Flag, fremde/
+ * nicht existente Session -> identischer 404-Fehler), damit dieser Endpunkt
+ * nicht als Nebenkanal fuer Informationen ueber fremde Sessions missbraucht
+ * werden kann. Verzichtet BEWUSST auf die IN_PROGRESS-Statuspruefung von
+ * `requestAiExtraction()`: dieser Aufruf mutiert nichts an der
+ * Beratungssitzung selbst (reines Analytics-Ereignis ueber eine bereits
+ * erfolgte UI-Interaktion), eine knapp nach Sitzungsabschluss eintreffende
+ * Aufzeichnung waere fachlich unschaedlich und soll nicht kuenstlich
+ * abgelehnt werden.
+ */
+export async function recordAiSuggestionOutcome(
+  input: RecordAiSuggestionOutcomeInput,
+): Promise<void> {
+  if (!(await isAiExtractionAvailableForCurrentTenant(input.hasPermission))) {
+    throw new AiExtractionNotAvailableError();
+  }
+
+  const session = await db.consultationSession.findUnique({
+    where: { id: input.consultationSessionId },
+  });
+  if (!session || session.employeeId !== input.employeeId) {
+    // Bewusst identischer Fehler fuer "nicht gefunden" UND "gehoert einem
+    // anderen Mitarbeiter" -- siehe `requestAiExtraction()`-Kommentar oben.
+    throw new ConsultationSessionNotFoundError(input.consultationSessionId);
+  }
+
+  await recordAnalyticsEventBestEffort({
+    tenantId: getTenantId(),
+    storeId: session.storeId,
+    employeeId: session.employeeId,
+    eventType: input.outcome === "accepted" ? "AI_SUGGESTION_ACCEPTED" : "AI_SUGGESTION_REJECTED",
+    occurredAt: new Date(),
+    payload:
+      input.outcome === "accepted"
+        ? {
+            consultationSessionId: session.id,
+            questionId: input.questionId,
+            changed: input.changed,
+          }
+        : { consultationSessionId: session.id, questionId: input.questionId },
+  });
 }

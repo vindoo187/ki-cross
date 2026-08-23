@@ -260,6 +260,30 @@ describe.skipIf(!hasDatabaseUrl)(
       expect(body.candidates).toEqual([
         expect.objectContaining({ answerType: "BOOLEAN", booleanValue: true }),
       ]);
+
+      // Phase 12 AP4: derselbe Aufruf schreibt genau ein AI_EXTRACTION_REQUESTED-
+      // und ein AI_EXTRACTION_COMPLETED-Event, beide mit ausschliesslich
+      // technischen Metadaten (Session-ID, Anzahl, Provider-Version) -- niemals
+      // `freeText`.
+      const requestedEvents = await rawClient.analyticsEvent.findMany({
+        where: { tenantId: fixture.tenantId, eventType: "AI_EXTRACTION_REQUESTED" },
+      });
+      expect(requestedEvents).toHaveLength(1);
+      expect(requestedEvents[0]?.payload).toEqual({
+        consultationSessionId: sessionId,
+        visibleQuestionCount: 1,
+        providerVersion: "mock-v1",
+      });
+
+      const completedEvents = await rawClient.analyticsEvent.findMany({
+        where: { tenantId: fixture.tenantId, eventType: "AI_EXTRACTION_COMPLETED" },
+      });
+      expect(completedEvents).toHaveLength(1);
+      expect(completedEvents[0]?.payload).toEqual({
+        consultationSessionId: sessionId,
+        candidateCount: 1,
+        providerVersion: "mock-v1",
+      });
     });
 
     it("nicht existierende Session -> 404", async () => {

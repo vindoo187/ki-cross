@@ -53,6 +53,20 @@
  * normalen Speichern darf der KI-Vorschlag nicht stillschweigend als
  * bestaetigt gelten"). "Verwerfen" loescht nur lokalen State, loest niemals
  * eine `CustomerAnswer`-Mutation aus.
+ *
+ * Phase 12 AP4-Ergaenzung (ChatGPT-GO 2026-08-23): jede der drei
+ * Mitarbeiter-Entscheidungen (Uebernehmen/Aendern/Verwerfen) loest
+ * zusaetzlich einen GENUIN EIGENEN, "fire and forget"-Request an
+ * `.../ai-extraction/outcome` aus (`trackSuggestionOutcome()`) -- NIEMALS
+ * Teil des `saveAnswer()`/`changeAnswer()`-Requests selbst (siehe
+ * `recordAiSuggestionOutcome()`-Kommentar in `service.ts` fuer die
+ * Begruendung der strukturellen Trennung). Bei Uebernehmen/Aendern erfolgt
+ * dieser Aufruf ERST NACHDEM der eigentliche Speichervorgang bereits
+ * erfolgreich war (innerhalb desselben `if (response.ok)`-Zweigs, der auch
+ * `clearSuggestion()` ausloest) -- ein Fehlschlagen des Tracking-Aufrufs
+ * (per `try/catch` verschluckt) kann daher niemals die bereits committete
+ * Antwort beeinflussen. Bei Verwerfen (kein Speichervorgang) erfolgt er
+ * sofort.
  */
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -252,6 +266,15 @@ export function QuestionFlow({ initialState, aiExtractionAvailable = false }: Qu
   const [editingSuggestionValue, setEditingSuggestionValue] = useState<AnswerValueInput | null>(
     null,
   );
+  // Phase 12 AP4: markiert, dass der aktuell (bzw. zuletzt) fuer diese Frage
+  // laufende Speichervorgang durch "Uebernehmen" ausgeloest wurde -- als Ref
+  // (nicht State), damit ein Fehlschlag+Retry (siehe `OfflineBanner`) die
+  // Zuordnung nicht verliert. Wird NUR bei tatsaechlichem Erfolg wieder
+  // geloescht (siehe `commitAnswerForQuestion`) -- ein "Aendern"-Klick auf
+  // dieselbe Frage raeumt sie ebenfalls auf (siehe `startEditingSuggestion`),
+  // um eine Fehlzuordnung nach einem gescheiterten Uebernehmen-Versuch zu
+  // vermeiden.
+  const acceptingSuggestionRef = useRef<string | null>(null);
 
   function clearSuggestion(questionId: string) {
     setSuggestions((prev) => {
@@ -266,6 +289,29 @@ export function QuestionFlow({ initialState, aiExtractionAvailable = false }: Qu
     setEditingSuggestionValue((current) =>
       editingSuggestionQuestionId === questionId ? null : current,
     );
+    if (acceptingSuggestionRef.current === questionId) {
+      acceptingSuggestionRef.current = null;
+    }
+  }
+
+  // Phase 12 AP4: "fire and forget" -- ein Fehlschlag hier darf die UI
+  // niemals beeintraechtigen (siehe Modulkommentar oben).
+  async function trackSuggestionOutcome(
+    questionId: string,
+    outcome: "accepted" | "rejected",
+    changed: boolean,
+  ) {
+    try {
+      await fetch(`/api/consultation/sessions/${sessionId}/ai-extraction/outcome`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          outcome === "accepted" ? { questionId, outcome, changed } : { questionId, outcome },
+        ),
+      });
+    } catch {
+      // Bewusst stillschweigend, siehe Modulkommentar.
+    }
   }
 
   // Fokus-Management (AP11, Plan Abschnitt 11): nach jedem erfolgreichen
@@ -344,6 +390,20 @@ export function QuestionFlow({ initialState, aiExtractionAvailable = false }: Qu
         };
         dispatch({ type: "SAVE_SUCCESS", state: body.state, writeResult: body.writeResult });
         inFlightQuestionIdRef.current = null;
+
+        // Phase 12 AP4: NUR wenn dieser erfolgreiche Save tatsaechlich durch
+        // eine explizite Vorschlags-Interaktion ausgeloest wurde (Uebernehmen
+        // ueber `acceptingSuggestionRef`, Aendern ueber den zum Aufrufzeitpunkt
+        // aktiven `editingSuggestionQuestionId`) wird ein AI_SUGGESTION_ACCEPTED-
+        // Tracking-Event gesendet. Eine ganz normale manuelle Antwort auf eine
+        // Frage mit zufaellig noch offenem, aber nie angeklicktem Vorschlag
+        // loest bewusst KEIN Tracking-Event aus.
+        const isAcceptOrigin = acceptingSuggestionRef.current === questionId;
+        const isEditOrigin = !isAcceptOrigin && editingSuggestionQuestionId === questionId;
+        if (isAcceptOrigin || isEditOrigin) {
+          void trackSuggestionOutcome(questionId, "accepted", isEditOrigin);
+        }
+
         // Phase 12 AP3: ein evtl. offener KI-Vorschlag fuer GENAU diese Frage
         // gilt ab jetzt als erledigt -- unabhaengig davon, ob der Save ueber
         // "Uebernehmen"/"Aendern" oder eine ganz normale manuelle Eingabe
@@ -458,7 +518,11 @@ export function QuestionFlow({ initialState, aiExtractionAvailable = false }: Qu
 
   // "Uebernehmen": ruft bewusst dieselbe `commitAnswer()` auf, die auch
   // normale manuelle Eingaben verwendet -- kein zweiter Speicherpfad.
+  // `acceptingSuggestionRef` markiert den Ursprung fuer das AP4-Tracking
+  // (siehe `commitAnswerForQuestion`); wird nur bei Erfolg wieder geloescht,
+  // damit ein Netzwerkfehler+Retry (`OfflineBanner`) die Zuordnung behaelt.
   function acceptSuggestion(candidate: AiExtractionCandidate) {
+    acceptingSuggestionRef.current = candidate.questionId;
     commitAnswer(candidateToAnswerValueInput(candidate));
   }
 
@@ -468,6 +532,13 @@ export function QuestionFlow({ initialState, aiExtractionAvailable = false }: Qu
   // diesem Feld (identischer `onCommit()`-Pfad wie bei jeder normalen
   // Eingabe).
   function startEditingSuggestion(candidate: AiExtractionCandidate) {
+    // AP4: raeumt eine evtl. verwaiste "Uebernehmen"-Zuordnung fuer dieselbe
+    // Frage auf (z. B. nach einem gescheiterten Uebernehmen-Versuch), damit
+    // der anschliessende Aendern-Save nicht faelschlich als "Uebernehmen"
+    // getrackt wird.
+    if (acceptingSuggestionRef.current === candidate.questionId) {
+      acceptingSuggestionRef.current = null;
+    }
     setEditingSuggestionQuestionId(candidate.questionId);
     setEditingSuggestionValue(candidateToAnswerValueInput(candidate));
   }
@@ -478,7 +549,12 @@ export function QuestionFlow({ initialState, aiExtractionAvailable = false }: Qu
   }
 
   // "Verwerfen": ausschliesslich lokaler State, keine CustomerAnswer-Mutation.
+  // AP4: loest -- NUR falls tatsaechlich ein Vorschlag fuer diese Frage
+  // offen war -- ein AI_SUGGESTION_REJECTED-Tracking-Event aus.
   function dismissSuggestion(questionId: string) {
+    if (questionId in suggestions) {
+      void trackSuggestionOutcome(questionId, "rejected", false);
+    }
     clearSuggestion(questionId);
   }
 

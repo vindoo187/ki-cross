@@ -21,3 +21,29 @@ export const aiExtractionBodySchema = z
     freeText: z.string().trim().min(1).max(4000),
   })
   .strict();
+
+/**
+ * Body von `POST /api/consultation/sessions/[id]/ai-extraction/outcome`
+ * (Phase 12 AP4, ChatGPT-GO 2026-08-23). Zeichnet die explizite
+ * Mitarbeiter-Entscheidung ueber einen einzelnen KI-Vorschlag auf (siehe
+ * `service.ts::recordAiSuggestionOutcome()`-Kommentar). `changed` ist nur
+ * bei `outcome: "accepted"` erlaubt/erforderlich -- ein `changed`-Feld bei
+ * `outcome: "rejected"` waere bedeutungslos (kein Speichervorgang fand
+ * statt) und wird durch `.strict()` je Variante bewusst abgelehnt statt
+ * stillschweigend ignoriert.
+ */
+export const aiExtractionOutcomeBodySchema = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      questionId: z.string().trim().min(1),
+      outcome: z.literal("accepted"),
+      changed: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      questionId: z.string().trim().min(1),
+      outcome: z.literal("rejected"),
+    })
+    .strict(),
+]);

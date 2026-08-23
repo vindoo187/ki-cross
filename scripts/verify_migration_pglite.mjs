@@ -15,6 +15,8 @@ const MIGRATIONS = [
   "prisma/migrations/20260821190000_commission_tiers/migration.sql",
   "prisma/migrations/20260822000000_deal_item_commission_model_version/migration.sql",
   "prisma/migrations/20260822100000_goal_model/migration.sql",
+  "prisma/migrations/20260823120000_ai_extraction_feature_flag/migration.sql",
+  "prisma/migrations/20260823140000_ai_extraction_analytics_events/migration.sql",
 ];
 
 const db = new PGlite({ extensions: { btree_gist } });
@@ -683,13 +685,77 @@ console.log(
   "OK: zweite GoalVersion (Korrektur, version_number=2, targetCount=25) fuer dasselbe Goal end-to-end angelegt -- Historisierung ohne Publish-Workflow bestaetigt.",
 );
 
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 12 AP1: tenants.ai_extraction_enabled -- Spalte
+// existiert, ist NOT NULL mit DEFAULT false (bewusst "default aus", siehe
+// Migrationskommentar), bestehende Zeilen (z. B. der oben angelegte
+// Test-Tenant) bekommen automatisch false.
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-12-AP1-tenants.ai_extraction_enabled ==");
+
+const aiFlagColumn = await db.query(`
+  SELECT is_nullable, column_default FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'ai_extraction_enabled';
+`);
+if (aiFlagColumn.rows.length === 0) {
+  console.error(`FEHLER: Spalte "tenants.ai_extraction_enabled" fehlt!`);
+  failures += 1;
+} else if (aiFlagColumn.rows[0].is_nullable !== "NO") {
+  console.error(`FEHLER: "tenants.ai_extraction_enabled" ist nullable, sollte NOT NULL sein!`);
+  failures += 1;
+} else {
+  console.log(`OK: Spalte "tenants.ai_extraction_enabled" vorhanden, NOT NULL.`);
+}
+
+const existingTenantFlag = await db.query(
+  `SELECT ai_extraction_enabled FROM tenants WHERE id = $1`,
+  [tenantId],
+);
+if (existingTenantFlag.rows[0]?.ai_extraction_enabled !== false) {
+  console.error(
+    `FEHLER: bestehender Tenant hat nicht automatisch ai_extraction_enabled=false erhalten!`,
+  );
+  failures += 1;
+} else {
+  console.log("OK: bestehender Tenant hat automatisch ai_extraction_enabled=false (DEFAULT).");
+}
+
+// -----------------------------------------------------------------------
+// Smoke-Test Phase 12 AP4: die vier neuen AnalyticsEventType-Enum-Werte
+// (AI_EXTRACTION_REQUESTED/COMPLETED, AI_SUGGESTION_ACCEPTED/REJECTED)
+// lassen sich tatsaechlich in analytics_events verwenden, end-to-end je
+// Wert -- rein additive Enum-Erweiterung, kein neuer Constraint.
+// -----------------------------------------------------------------------
+
+console.log("\n== Smoke-Test: Phase-12-AP4-AnalyticsEventType (KI-Extraktion) ==");
+
+const newAiEventTypes = [
+  "AI_EXTRACTION_REQUESTED",
+  "AI_EXTRACTION_COMPLETED",
+  "AI_SUGGESTION_ACCEPTED",
+  "AI_SUGGESTION_REJECTED",
+];
+for (const eventType of newAiEventTypes) {
+  await db.query(
+    `INSERT INTO analytics_events (id, tenant_id, store_id, employee_id, event_type, occurred_at, payload)
+     VALUES ($1,$2,$3,$4,$5,'2026-08-23T12:00:00Z','{"consultationSessionId":"` +
+      sessionId +
+      `"}')`,
+    [uuid(), tenantId, storeId, employeeId, eventType],
+  );
+}
+console.log(
+  `OK: alle vier neuen AnalyticsEventType-Werte (${newAiEventTypes.join(", ")}) end-to-end in analytics_events angelegt.`,
+);
+
 if (failures > 0) {
   console.error(`\n${failures} Smoke-Test-Pruefung(en) FEHLGESCHLAGEN.`);
   process.exit(1);
 }
 
 console.log(
-  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8 + PHASE 10 AP4 + PHASE 10 AP6 + PHASE 11 AP1) ERFOLGREICH.",
+  "\nALLE MIGRATIONSPRUEFUNGEN (PHASE 3B + PHASE 6 + PHASE 7 AP6 + PHASE 8 AP1 + PHASE 8 AP7 + PHASE 8 AP8 + PHASE 10 AP4 + PHASE 10 AP6 + PHASE 11 AP1 + PHASE 12 AP1 + PHASE 12 AP4) ERFOLGREICH.",
 );
 
 await db.close();

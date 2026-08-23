@@ -37,6 +37,15 @@
 import type { AiExtractionProvider, AiExtractionRequest } from "../contract";
 import type { AiExtractionCandidate, AiExtractionVisibleQuestion } from "../types";
 
+/**
+ * Technische Kennung des aktuell verwendeten Providers (Phase 12 AP4, siehe
+ * `service.ts`). Wird AUSSCHLIESSLICH als String/Enum-artiger Wert in
+ * `AnalyticsEvent.payload` (AI_EXTRACTION_REQUESTED/COMPLETED) geschrieben --
+ * niemals der Freitext, Prompt oder die Rohantwort selbst. Ein spaeterer
+ * echter Provider (AP5) erhaelt eine eigene, unterscheidbare Version.
+ */
+export const MOCK_PROVIDER_VERSION = "mock-v1";
+
 const ISO_DATE_REGEX = /\b\d{4}-\d{2}-\d{2}\b/g;
 const GERMAN_DATE_REGEX = /\b\d{2}\.\d{2}\.\d{4}\b/g;
 const DECIMAL_REGEX = /\b\d+[.,]\d+\b/g;
