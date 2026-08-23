@@ -5,9 +5,10 @@ kein Prompt-Produktivbetrieb, keine Aktivierung des Features (`Tenant.aiExtracti
 bleibt `false`). Grundlage: ChatGPTs GO vom 2026-08-23 nach Abnahme von AP4
 (siehe `project_ki_cross_phase11_plan_go`-Memory). Ziel dieses Dokuments ist
 eine konkrete Entscheidungsvorlage (Provider + Datenschutzmodell + Datenfluss
-+ Kostenmodell + Timeout/Fallback + Prompt/Structured-Output-Vertrag), die
-ChatGPT anschließend bestätigt oder korrigiert. Erst danach folgt ein
-separates Implementierungs-GO.
+
+- Kostenmodell + Timeout/Fallback + Prompt/Structured-Output-Vertrag), die
+  ChatGPT anschließend bestätigt oder korrigiert. Erst danach folgt ein
+  separates Implementierungs-GO.
 
 ## 0. Ausgangslage (bereits bestehende, architektonisch fixierte Fakten)
 
@@ -18,7 +19,7 @@ Punkte beantwortet werden:
 - **Provider-Abstraktion existiert bereits:** `AiExtractionProvider`
   (`src/server/ai-extraction/contract.ts`) ist das einzige Interface, über
   das ein Provider jemals Kontakt mit dem System hat: `extract(request):
-  Promise<AiExtractionCandidate[]>`. Ein echter Provider ersetzt lediglich
+Promise<AiExtractionCandidate[]>`. Ein echter Provider ersetzt lediglich
   `MockExtractionProvider` in `service.ts` (aktuell als Modul-Singleton
   instanziiert) — keine Änderung an Route, Validator oder UI nötig.
 - **Freitext-Grenze ist bereits hart gezogen:** `freeText` verlässt den
@@ -56,13 +57,13 @@ Punkte beantwortet werden:
 
 Kandidaten (rein zur Diskussion, keine Vorfestlegung):
 
-| Kriterium | Anforderung (aus `PRIVACY_AND_SECURITY.md`, EU-Hosting-Abschnitt) |
-| --- | --- |
-| Datenverarbeitung | innerhalb der EU oder gleichwertiges Schutzniveau (z. B. Standardvertragsklauseln) |
+| Kriterium                        | Anforderung (aus `PRIVACY_AND_SECURITY.md`, EU-Hosting-Abschnitt)                                                                                                                 |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Datenverarbeitung                | innerhalb der EU oder gleichwertiges Schutzniveau (z. B. Standardvertragsklauseln)                                                                                                |
 | Training auf übermittelten Daten | ausgeschlossen — muss vertraglich zugesichert sein (Opt-out/"kein Training" ist bei den meisten großen Anbietern per API-Vertrag Standard, muss aber explizit verifiziert werden) |
-| AVV/Unterauftragsverarbeiter | Pflicht vor Produktivbetrieb (`PRIVACY_AND_SECURITY.md`, EU-Hosting-Abschnitt) |
-| Drittlandtransfer | falls unvermeidbar: Standardvertragsklauseln + Transfer Impact Assessment |
-| Structured-Output-Fähigkeit | Anbieter muss zuverlässiges JSON-Schema-/Function-Calling-Format unterstützen (Anthropic/OpenAI/Mistral bieten das alle an) |
+| AVV/Unterauftragsverarbeiter     | Pflicht vor Produktivbetrieb (`PRIVACY_AND_SECURITY.md`, EU-Hosting-Abschnitt)                                                                                                    |
+| Drittlandtransfer                | falls unvermeidbar: Standardvertragsklauseln + Transfer Impact Assessment                                                                                                         |
+| Structured-Output-Fähigkeit      | Anbieter muss zuverlässiges JSON-Schema-/Function-Calling-Format unterstützen (Anthropic/OpenAI/Mistral bieten das alle an)                                                       |
 
 Diese Discovery trifft **keine Anbieterentscheidung** — das ist eine
 Geschäfts-/Kostenentscheidung, die über den technischen Scope einer
@@ -242,16 +243,16 @@ Diskussion, keine finale Festlegung:
 
 ## 9. Zusammenfassung / Entscheidungsvorlage
 
-| Punkt | Vorschlag dieser Discovery | Entscheidung ChatGPT |
-| --- | --- | --- |
-| Provider/Modell | Kein Vorschlag — Geschäftsentscheidung (Kosten/AVV), Kriterientabelle Abschnitt 1 | offen |
-| Datenschutz Freitext | Transient, keine Persistenz, kein technisches PII-Redigieren des Freitexts, UI-Hinweistext | offen |
-| Prompt-/Kontextdesign | Nur `freeText` + `AiExtractionVisibleQuestion[]`, striktes JSON, "nicht raten" | offen |
-| Structured Output | Bereits erzwungen, nur Bestätigung nötig | — |
-| Modellstrategie | Niedrige Temperatur, Timeout 5–10s (Vorschlag), leeres Array bei Fehler | offen |
-| Fallback | Bereits additiv/non-blocking, UI-Unterscheidung "0 Kandidaten" vs. "nicht erreichbar" ergänzen | offen |
-| Provider-Abstraktion | Bereits vorhanden, Mock bleibt Testimplementierung | — |
-| Kostenkontrolle | Bestehende 4000-Zeichen-Grenze prüfen, Aufruflimit + Rate Limit + optionale Token-Zählung in Analytics | offen |
+| Punkt                 | Vorschlag dieser Discovery                                                                             | Entscheidung ChatGPT |
+| --------------------- | ------------------------------------------------------------------------------------------------------ | -------------------- |
+| Provider/Modell       | Kein Vorschlag — Geschäftsentscheidung (Kosten/AVV), Kriterientabelle Abschnitt 1                      | offen                |
+| Datenschutz Freitext  | Transient, keine Persistenz, kein technisches PII-Redigieren des Freitexts, UI-Hinweistext             | offen                |
+| Prompt-/Kontextdesign | Nur `freeText` + `AiExtractionVisibleQuestion[]`, striktes JSON, "nicht raten"                         | offen                |
+| Structured Output     | Bereits erzwungen, nur Bestätigung nötig                                                               | —                    |
+| Modellstrategie       | Niedrige Temperatur, Timeout 5–10s (Vorschlag), leeres Array bei Fehler                                | offen                |
+| Fallback              | Bereits additiv/non-blocking, UI-Unterscheidung "0 Kandidaten" vs. "nicht erreichbar" ergänzen         | offen                |
+| Provider-Abstraktion  | Bereits vorhanden, Mock bleibt Testimplementierung                                                     | —                    |
+| Kostenkontrolle       | Bestehende 4000-Zeichen-Grenze prüfen, Aufruflimit + Rate Limit + optionale Token-Zählung in Analytics | offen                |
 
 ## 10. Ausdrücklich NICHT Teil dieser Discovery
 
