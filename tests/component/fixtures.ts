@@ -11,6 +11,7 @@
  */
 import type { QuestionForAnswering, QuestionnaireState } from "@/server/questionnaire/service";
 import type { QuestionnaireProgress } from "@/server/questionnaire/path";
+import type { AiExtractionCandidate } from "@/server/ai-extraction/types";
 import type {
   ConsultationRecommendationItemView,
   ConsultationRecommendationView,
@@ -180,6 +181,17 @@ export function buildDealSummary(overrides: Partial<DealSummary> = {}): DealSumm
     monthlyRecurringRevenueMinor: 3990,
     oneTimeRevenueMinor: 0,
     totalContractValueMinor: 3990,
+    ...overrides,
+  };
+}
+
+export function buildAiExtractionCandidate(
+  overrides: Partial<AiExtractionCandidate> = {},
+): AiExtractionCandidate {
+  return {
+    questionId: "question-1",
+    answerType: "SINGLE_CHOICE",
+    choiceValues: ["family"],
     ...overrides,
   };
 }

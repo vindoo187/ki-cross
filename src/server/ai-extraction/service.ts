@@ -89,18 +89,34 @@ export interface RequestAiExtractionResult {
   candidates: AiExtractionCandidate[];
 }
 
-export async function requestAiExtraction(
-  input: RequestAiExtractionInput,
-): Promise<RequestAiExtractionResult> {
+/**
+ * Prueft die ChatGPT-Vorgabe "Permission UND Tenant-Feature-Flag" fuer die
+ * aktuelle Tenant-Session (siehe `isAiExtractionAvailable()`-Kommentar).
+ * EXPORTIERT (nicht nur intern in `requestAiExtraction()` verwendet), damit
+ * Server Components (z. B. `/consultation/[sessionId]/page.tsx`, Phase 12
+ * AP3) dieselbe Pruefung fuer eine rein DARSTELLUNGS-Entscheidung (Freitext-
+ * KI-Panel ueberhaupt anzeigen?) wiederverwenden koennen, statt die
+ * Tenant-Flag-Abfrage ein zweites Mal zu implementieren. Bleibt trotzdem
+ * NICHT die alleinige Sicherheitsinstanz -- die Route prueft dieselbe
+ * Bedingung serverseitig unabhaengig erneut, ein UI-Rendering-Entscheid
+ * ersetzt niemals die tatsaechliche Autorisierungspruefung.
+ */
+export async function isAiExtractionAvailableForCurrentTenant(
+  hasPermission: boolean,
+): Promise<boolean> {
   const tenantId = getTenantId();
-
   const tenant = await db.tenant.findUnique({
     where: { id: tenantId },
     select: { aiExtractionEnabled: true },
   });
   const tenantFeatureEnabled = tenant?.aiExtractionEnabled ?? false;
+  return isAiExtractionAvailable(hasPermission, tenantFeatureEnabled);
+}
 
-  if (!isAiExtractionAvailable(input.hasPermission, tenantFeatureEnabled)) {
+export async function requestAiExtraction(
+  input: RequestAiExtractionInput,
+): Promise<RequestAiExtractionResult> {
+  if (!(await isAiExtractionAvailableForCurrentTenant(input.hasPermission))) {
     throw new AiExtractionNotAvailableError();
   }
 

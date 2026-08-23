@@ -29,9 +29,33 @@
  * zurueckgegebene, autoritative `QuestionnaireState` uebernommen (inkl.
  * `hiddenQuestionIds`-Effekt) -- es wird nie clientseitig angenommen, welche
  * Fragen sichtbar sind.
+ *
+ * Phase 12 AP3-Ergaenzung (ChatGPT-GO 2026-08-23, siehe PHASE_12_
+ * IMPLEMENTATION_PLAN.md Abschnitt 4 + Chat-Verlauf "GO fuer AP3"): der
+ * Freitext-KI-Suggestion-State (`suggestions`, keyed by `questionId`) lebt
+ * bewusst als EIGENER `useState` HIER in `QuestionFlow`, nicht im
+ * `FlowState`-Reducer -- ChatGPTs Vorgabe "keine neue Persistenz fuer
+ * Suggestion-State" bedeutet rein clientseitiges, ephemeres React-State ohne
+ * eigenes Datenmodell, das den bestehenden Frage-/Antwort-Reducer nicht
+ * verkompliziert. Uebernehmen ("Accept") ruft exakt dieselbe `commitAnswer()`
+ * auf, die auch normale manuelle Eingaben verwendet -- ChatGPT-Vorgabe
+ * "Uebernehmen/Aendern muss ausschliesslich ueber den bestehenden
+ * saveAnswer()-Pfad laufen" ist damit strukturell erzwungen (kein zweiter
+ * Code-Pfad moeglich). "Aendern" befuellt NICHT automatisch beim Eintreffen
+ * des Vorschlags das Fragefeld (ChatGPT-Vorgabe), sondern erst nach
+ * explizitem Klick auf "Aendern" -- danach uebernimmt exakt derselbe,
+ * bereits gerenderte `QuestionRenderer`/`onCommit()`-Pfad das eigentliche
+ * Speichern (kein separates Formular, keine neue Debounce-/Versionslogik).
+ * Ein Vorschlag verschwindet NUR bei tatsaechlichem `SAVE_SUCCESS` fuer die
+ * jeweilige `questionId` (innerhalb `if (response.ok)` in
+ * `commitAnswerForQuestion`) -- bei Validierungs-/Konflikt-/Netzwerkfehlern
+ * bleibt er unveraendert bestehen (ChatGPT-Vorgabe: "bei einem Fehler beim
+ * normalen Speichern darf der KI-Vorschlag nicht stillschweigend als
+ * bestaetigt gelten"). "Verwerfen" loescht nur lokalen State, loest niemals
+ * eine `CustomerAnswer`-Mutation aus.
  */
 
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type {
   AnswerWriteResult,
@@ -39,10 +63,13 @@ import type {
   QuestionnaireState,
 } from "@/server/questionnaire/service";
 import type { AnswerValueInput } from "@/server/questionnaire/types";
+import type { AiExtractionCandidate } from "@/server/ai-extraction/types";
+import { candidateToAnswerValueInput } from "@/lib/ai-suggestion-format";
 import { ProgressBar } from "./ProgressBar";
 import { QuestionNavigator } from "./QuestionNavigator";
 import { QuestionRenderer } from "./QuestionRenderer";
 import { SavingIndicator, ConflictBanner, OfflineBanner } from "./StatusBanners";
+import { AiSuggestionCard, AiExtractionForm } from "./AiSuggestionPanel";
 
 type Phase =
   | "ready"
@@ -162,6 +189,17 @@ function reducer(state: FlowState, action: Action): FlowState {
 
 interface QuestionFlowProps {
   initialState: QuestionnaireState;
+  /**
+   * Server-ermittelt (Permission UND Tenant-Feature-Flag, siehe
+   * `isAiExtractionAvailable()`) -- steuert AUSSCHLIESSLICH, ob das
+   * Freitext-KI-Panel ueberhaupt gerendert wird. Kein Client-seitiger
+   * Ersatz fuer die serverseitige Pruefung in der Route selbst (die bleibt
+   * die alleinige Sicherheitsinstanz). Optional mit Default `false`
+   * (Feature-Flag-Konvention "default aus", siehe `consultation-
+   * permissions.ts`) -- damit muessen bestehende AP12-Komponententests, die
+   * `QuestionFlow` ohne dieses AP3-Prop rendern, nicht angepasst werden.
+   */
+  aiExtractionAvailable?: boolean;
 }
 
 async function parseErrorBody(
@@ -179,7 +217,7 @@ async function parseErrorBody(
   }
 }
 
-export function QuestionFlow({ initialState }: QuestionFlowProps) {
+export function QuestionFlow({ initialState, aiExtractionAvailable = false }: QuestionFlowProps) {
   const router = useRouter();
   const [state, dispatch] = useReducer(reducer, {
     phase: "ready",
@@ -198,6 +236,37 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
     () => questionnaire.visibleQuestions.find((q) => q.questionId === activeQuestionId) ?? null,
     [questionnaire.visibleQuestions, activeQuestionId],
   );
+
+  // Phase 12 AP3: ephemerer KI-Vorschlags-State, keyed by questionId (siehe
+  // Modulkommentar oben). Kein Reducer-Case, bewusst kein neues Datenmodell.
+  const [suggestions, setSuggestions] = useState<Record<string, AiExtractionCandidate>>({});
+  const [freeText, setFreeText] = useState("");
+  const [extractionSubmitting, setExtractionSubmitting] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
+  // "Aendern"-Modus: nur fuer GENAU eine Frage gleichzeitig aktiv, das
+  // Fragefeld selbst zeigt in diesem Fall `editingSuggestionValue` statt
+  // `activeQuestion.currentAnswer` an (siehe `value`-Berechnung unten).
+  const [editingSuggestionQuestionId, setEditingSuggestionQuestionId] = useState<string | null>(
+    null,
+  );
+  const [editingSuggestionValue, setEditingSuggestionValue] = useState<AnswerValueInput | null>(
+    null,
+  );
+
+  function clearSuggestion(questionId: string) {
+    setSuggestions((prev) => {
+      if (!(questionId in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[questionId];
+      return next;
+    });
+    setEditingSuggestionQuestionId((current) => (current === questionId ? null : current));
+    setEditingSuggestionValue((current) =>
+      editingSuggestionQuestionId === questionId ? null : current,
+    );
+  }
 
   // Fokus-Management (AP11, Plan Abschnitt 11): nach jedem erfolgreichen
   // Speichern wandert der Fokus kontrolliert zur naechsten offenen Frage --
@@ -275,6 +344,13 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
         };
         dispatch({ type: "SAVE_SUCCESS", state: body.state, writeResult: body.writeResult });
         inFlightQuestionIdRef.current = null;
+        // Phase 12 AP3: ein evtl. offener KI-Vorschlag fuer GENAU diese Frage
+        // gilt ab jetzt als erledigt -- unabhaengig davon, ob der Save ueber
+        // "Uebernehmen"/"Aendern" oder eine ganz normale manuelle Eingabe
+        // ausgeloest wurde (die Frage ist ohnehin beantwortet, ein weiterhin
+        // angezeigter Vorschlag waere irrefuehrend). Bewusst NUR im
+        // Erfolgsfall (`response.ok`) -- siehe Modulkommentar oben.
+        clearSuggestion(questionId);
 
         const queued = queuedEditRef.current;
         if (queued && queued.questionId === questionId) {
@@ -344,6 +420,73 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
     }
   }
 
+  // Phase 12 AP3: Freitext an die AP2-Route senden. Sendet AUSSCHLIESSLICH
+  // `freeText` (kein eigener Fragenkatalog vom Client, ChatGPT-Vorgabe).
+  async function requestSuggestions() {
+    if (freeText.trim() === "") {
+      return;
+    }
+    setExtractionSubmitting(true);
+    setExtractionError(null);
+    try {
+      const response = await fetch(`/api/consultation/sessions/${sessionId}/ai-extraction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ freeText }),
+      });
+      if (response.ok) {
+        const body = (await response.json()) as { candidates: AiExtractionCandidate[] };
+        setSuggestions((prev) => {
+          const next = { ...prev };
+          for (const candidate of body.candidates) {
+            next[candidate.questionId] = candidate;
+          }
+          return next;
+        });
+        setFreeText("");
+        setExtractionSubmitting(false);
+        return;
+      }
+      const errorBody = await parseErrorBody(response);
+      setExtractionSubmitting(false);
+      setExtractionError(errorBody.message);
+    } catch {
+      setExtractionSubmitting(false);
+      setExtractionError("Verbindung zum Server fehlgeschlagen.");
+    }
+  }
+
+  // "Uebernehmen": ruft bewusst dieselbe `commitAnswer()` auf, die auch
+  // normale manuelle Eingaben verwendet -- kein zweiter Speicherpfad.
+  function acceptSuggestion(candidate: AiExtractionCandidate) {
+    commitAnswer(candidateToAnswerValueInput(candidate));
+  }
+
+  // "Aendern": befuellt NICHT selbst etwas automatisch -- setzt nur den
+  // Anzeigewert des bereits gerenderten Fragefelds, das eigentliche
+  // Speichern uebernimmt der Mitarbeiter durch seine eigene Interaktion mit
+  // diesem Feld (identischer `onCommit()`-Pfad wie bei jeder normalen
+  // Eingabe).
+  function startEditingSuggestion(candidate: AiExtractionCandidate) {
+    setEditingSuggestionQuestionId(candidate.questionId);
+    setEditingSuggestionValue(candidateToAnswerValueInput(candidate));
+  }
+
+  function cancelEditingSuggestion() {
+    setEditingSuggestionQuestionId(null);
+    setEditingSuggestionValue(null);
+  }
+
+  // "Verwerfen": ausschliesslich lokaler State, keine CustomerAnswer-Mutation.
+  function dismissSuggestion(questionId: string) {
+    clearSuggestion(questionId);
+  }
+
+  function selectQuestion(questionId: string) {
+    cancelEditingSuggestion();
+    dispatch({ type: "SELECT_QUESTION", questionId });
+  }
+
   if (phase === "sessionCompleted" && state.completedResult) {
     return (
       <div className="question-flow question-flow--completed">
@@ -372,15 +515,42 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
   const savingIndicatorStatus =
     phase === "saving" ? "saving" : phase === "saved" ? "saved" : "idle";
 
+  // Phase 12 AP3: nur fuer die aktuell aktive Frage gerendert -- "separat am
+  // jeweiligen Fragefeld" (ChatGPT-Vorgabe).
+  const activeSuggestion = activeQuestion ? (suggestions[activeQuestion.questionId] ?? null) : null;
+  const isEditingActiveSuggestion =
+    activeQuestion != null && editingSuggestionQuestionId === activeQuestion.questionId;
+  const otherPendingSuggestions = Object.values(suggestions)
+    .filter((candidate) => candidate.questionId !== activeQuestionId)
+    .map((candidate) => {
+      const question = questionnaire.visibleQuestions.find(
+        (q) => q.questionId === candidate.questionId,
+      );
+      return question ? { questionId: candidate.questionId, label: question.label } : null;
+    })
+    .filter((entry): entry is { questionId: string; label: string } => entry != null);
+
   return (
     <div className="question-flow">
       <ProgressBar progress={questionnaire.progress} />
+
+      {aiExtractionAvailable && (
+        <AiExtractionForm
+          freeText={freeText}
+          onFreeTextChange={setFreeText}
+          onSubmit={requestSuggestions}
+          submitting={extractionSubmitting}
+          errorMessage={extractionError}
+          otherPendingSuggestions={otherPendingSuggestions}
+          onJumpToQuestion={selectQuestion}
+        />
+      )}
 
       <div className="question-flow__body">
         <QuestionNavigator
           questions={questionnaire.visibleQuestions}
           activeQuestionId={activeQuestionId}
-          onSelect={(questionId) => dispatch({ type: "SELECT_QUESTION", questionId })}
+          onSelect={selectQuestion}
         />
 
         <div className="question-flow__main">
@@ -407,7 +577,9 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
                     phase === "versionConflict" ||
                     phase === "networkError")
                     ? state.pendingValue
-                    : activeQuestion.currentAnswer
+                    : isEditingActiveSuggestion && editingSuggestionValue
+                      ? editingSuggestionValue
+                      : activeQuestion.currentAnswer
                 }
                 onCommit={commitAnswer}
                 onLocalEdit={() => dispatch({ type: "LOCAL_EDIT" })}
@@ -420,6 +592,17 @@ export function QuestionFlow({ initialState }: QuestionFlowProps) {
                     <li key={issue}>{issue}</li>
                   ))}
                 </ul>
+              )}
+              {activeSuggestion && (
+                <AiSuggestionCard
+                  candidate={activeSuggestion}
+                  question={activeQuestion}
+                  isEditing={isEditingActiveSuggestion}
+                  onAccept={() => acceptSuggestion(activeSuggestion)}
+                  onEdit={() => startEditingSuggestion(activeSuggestion)}
+                  onCancelEdit={cancelEditingSuggestion}
+                  onDismiss={() => dismissSuggestion(activeSuggestion.questionId)}
+                />
               )}
             </section>
           ) : (

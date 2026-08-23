@@ -370,6 +370,93 @@ code {
   padding-left: 18px;
 }
 
+/* Phase 12 AP3 (ChatGPT-GO 2026-08-23): Freitext-KI-Panel + Vorschlags-Karte. */
+.ai-extraction-panel {
+  border: 1px solid #d9dbe0;
+  border-radius: 8px;
+  background: #f7f6ff;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.ai-extraction-panel__title {
+  font-size: 16px;
+  margin: 0;
+}
+
+.ai-extraction-panel__hint {
+  font-size: 13px;
+  color: #555;
+  margin: 0;
+}
+
+.ai-extraction-panel__textarea {
+  width: 100%;
+  max-width: 560px;
+  min-height: 72px;
+  padding: 8px 10px;
+  border: 1px solid #d9dbe0;
+  border-radius: 6px;
+  font-size: 15px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.ai-extraction-panel__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-extraction-panel__error {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 0;
+}
+
+.ai-extraction-panel__pending-label {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.ai-extraction-panel__pending-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-suggestion {
+  border: 1px solid #8a7ff0;
+  border-radius: 6px;
+  background: #f2f0ff;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-suggestion__value {
+  margin: 0;
+  font-size: 14px;
+}
+
+.ai-suggestion__hint {
+  margin: 0;
+  font-size: 13px;
+  color: #555;
+}
+
+.ai-suggestion__actions {
+  display: flex;
+  gap: 8px;
+}
+
 .question-input {
   display: flex;
   flex-direction: column;
