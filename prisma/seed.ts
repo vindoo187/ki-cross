@@ -118,6 +118,14 @@ async function seedGlobalCatalog() {
     "config.goals.view",
     "config.goals.edit",
     "config.goals.publish",
+    // Phase 12 AP1 (Freitext-KI-Angebotsfeature, ChatGPT-GO 2026-08-23):
+    // Laufzeit-Permission (kein config.*-Namespace, siehe
+    // src/server/authz/consultation-permissions.ts) fuer die KI-Extraktion
+    // waehrend einer laufenden Beratung. Faellt bei sales_employee automatisch
+    // unter den bestehenden Catch-all-Zweig in permissionKeysForSeedRole()
+    // (alle Permissions ausser Management-Analytics/config.*), keine
+    // Sonderregel noetig.
+    "consultation.ai_extraction.use",
   ];
   const permissions = await Promise.all(
     permissionKeys.map((key) =>

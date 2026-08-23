@@ -272,6 +272,16 @@ model Tenant {
   key         String   @unique
   name        String
   isSynthetic Boolean  @default(false) @map("is_synthetic")
+  // Phase 12 AP1 (Freitext-KI-Angebotsfeature, ChatGPT-GO 2026-08-23, siehe
+  // PHASE_12_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 7): Tenant-Feature-Flag
+  // fuer die KI-Extraktion. Zusaetzlich zur (nicht hier, sondern ueber die
+  // Permission-Zuweisung geregelten) Frage "darf DIESER Mitarbeiter die
+  // Funktion nutzen" -- beide Bedingungen muessen zutreffen (siehe
+  // src/server/authz/consultation-permissions.ts::isAiExtractionAvailable()).
+  // Bewusst NICHT standardmaessig aktiviert (default false) -- gilt bereits
+  // fuer den Mock-Provider (AP1-AP4), keine Ausnahme weil noch kein echter
+  // externer KI-Provider angebunden ist.
+  aiExtractionEnabled Boolean  @default(false) @map("ai_extraction_enabled")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   companies              Company[]
