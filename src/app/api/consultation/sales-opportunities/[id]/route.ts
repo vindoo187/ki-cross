@@ -1,0 +1,38 @@
+/**
+ * `PATCH /api/consultation/sales-opportunities/[id]` (AP8, siehe
+ * PHASE_5_IMPLEMENTATION_PLAN.md Abschnitt 9). Duenne Transport-Schicht --
+ * `id` ist die `SalesOpportunity.id` (nicht die Signal-ID), Fachlogik/
+ * Uebergangsreihenfolge liegt ausschliesslich in
+ * `updateSalesOpportunityStatus()` (`src/server/recommendation/opportunity-status.ts`).
+ */
+
+import { NextResponse, type NextRequest } from "next/server";
+import { withRequestTenantContext } from "@/server/auth/request-context";
+import { withErrorMapping } from "@/server/consultation-ui/http-errors";
+import { updateSalesOpportunityStatusBodySchema } from "@/server/consultation-ui/schemas";
+import { updateSalesOpportunityStatus } from "@/server/recommendation/opportunity-status";
+
+interface RouteParams {
+  params: Promise<{ id: string }>;
+}
+
+export async function PATCH(request: NextRequest, { params }: RouteParams) {
+  return withErrorMapping(() =>
+    withRequestTenantContext(request, async () => {
+      const { id } = await params;
+      const body = await request.json().catch(() => null);
+      const parsed = updateSalesOpportunityStatusBodySchema.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json(
+          { error: "InvalidRequest", message: "Ungueltige Anfrage.", issues: parsed.error.issues },
+          { status: 400 },
+        );
+      }
+      const result = await updateSalesOpportunityStatus({
+        salesOpportunityId: id,
+        status: parsed.data.status,
+      });
+      return NextResponse.json({ opportunity: result }, { status: 200 });
+    }),
+  );
+}

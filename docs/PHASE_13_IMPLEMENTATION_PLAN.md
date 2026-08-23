@@ -1,11 +1,10 @@
 # Phase 13 – Implementierungsplan: Campaign Management
 
-Stand: 2026-08-24. Basiert auf `PHASE_13_DISCOVERY.md` (AP0),
+Stand: 2026-08-24. Basiert auf `PHASE_13_DISCOVERY.md` (AP0) und
 ChatGPTs Architekturentscheidungen A–E dazu (2026-08-24, "Meine
-Entscheidungen für Phase 13") sowie ChatGPTs drei Detailentscheidungen
-zu diesem Plan (2026-08-24, "Damit ist AP1 für mich freigegeben").
-Analog Phase 6–12: dieser Plan geht vor jedem AP1-Code an ChatGPT zur
-Prüfung, danach an den Nutzer für das explizite Implementierungs-GO.
+Entscheidungen für Phase 13"). Analog Phase 6–12: dieser Plan geht vor
+jedem AP1-Code an ChatGPT zur Prüfung, danach an den Nutzer für das
+explizite Implementierungs-GO.
 
 ## 1. Verbindliche Architekturentscheidungen (ChatGPT, 2026-08-24)
 
@@ -55,40 +54,6 @@ Prüfung, danach an den Nutzer für das explizite Implementierungs-GO.
    Schema-Änderung (AP1) müssen bestehende Foreign Keys/Referenzen auf
    `Campaign`/`CampaignVersion` geprüft werden (aktuell: keine, siehe
    AP0-Discovery) — **keine stille Breaking-Change-Migration**.
-7. **Drei Detailentscheidungen (ChatGPT, 2026-08-24, "Damit ist AP1 für
-   mich freigegeben"), verbindlich für AP1:**
-   - **Eigene `CampaignCondition`-Tabelle: JA.** Eine Kampagne ist
-     fachlich mehr als nur ein `CAMPAIGN_ACTIVE`-Signal und muss ihre
-     eigenen Bedingungen beschreiben können, ohne die bestehende
-     `PrioritizationRule`-Struktur dafür zu missbrauchen. Klare
-     Trennung: `Campaign` = fachliche Identität, `CampaignVersion` =
-     Draft/Publish-Version, `CampaignCondition` = Bedingungen, wann die
-     Kampagne greift, bestehende `PrioritizationRule` = entscheidet
-     weiterhin über Priorisierung/Empfehlung, `CAMPAIGN_ACTIVE` liefert
-     der bestehenden Engine lediglich das Signal.
-   - **`EXCLUDE`-Constraint ausschließlich innerhalb derselben
-     `campaignId`.** Pro Campaign darf zu einem Zeitpunkt höchstens
-     eine veröffentlichte/aktive Version für denselben fachlichen Scope
-     aktiv sein — explizit **keine** globale Exklusivität über alle
-     Kampagnen hinweg (Campaign A/Store 1 + Campaign B/Store 1 +
-     Campaign C/Tenant + Campaign D/Store 2 dürfen alle gleichzeitig
-     `ACTIVE` sein). Die Semantik von `DRAFT`/`ACTIVE`/`EXPIRED`/
-     `ARCHIVED` bleibt unverändert aus Phase 8–10 übernommen — **kein**
-     Goal-artiges "jede Version ist sofort gültig".
-   - **Analytics-Grundlage: eigene `RecommendationCampaignSignal`-
-     Tabelle**, analog dem bestehenden Muster
-     `RecommendationCrossSellingSignal` — **nicht** ein zusätzliches
-     Feld auf `RecommendationRationale` (vermeidet Aufblähung von
-     `RecommendationRationale`, ermöglicht spätere eindeutige
-     Auswertung: welche Kampagne/`CampaignVersion` hat welche
-     Recommendation ausgelöst, später Kampagne→Deal-Conversion). In
-     Phase 13 AP7 nur die technische Grundlage (append-only
-     Signalstruktur), **kein** vollständiges Campaign-Analytics-
-     Dashboard und keine Conversion-Logik.
-
-   Nach AP1 (bevor AP2 beginnt) ein kurzer Discovery-/Review-Punkt mit
-   ChatGPT, falls das tatsächliche Schema an einer Stelle von dieser
-   Planung abweicht (ChatGPT-Auflage).
 
 **Explizit ausgeschlossen** (aus Entscheidung A/E, analog dem
 Scope-Schutz-Muster aus Phase 11): eine zweite/parallele
@@ -141,12 +106,11 @@ model CampaignVersion {
   @@unique([tenantId, campaignId, versionNumber])
 }
 
-// Eigene Condition-Tabelle (ChatGPT-Entscheidung 2026-08-24, verbindlich,
-// s. Abschnitt 1 Punkt 7), analog eligibility_rule_conditions/
+// Neue Condition-Tabelle, analog eligibility_rule_conditions/
 // prioritization_rule_conditions: definiert, WAS eine Kampagne fachlich
 // betrifft (Zielgruppe/Produkte laut Discovery-Lücke 1), unabhängig vom
-// AP4-Wirkmechanismus CAMPAIGN_ACTIVE. Exakte Feldliste/DNF-Gruppierung
-// wird in AP1 im Detail spezifiziert (Struktur unten ist eine Skizze).
+// AP4-Wirkmechanismus CAMPAIGN_ACTIVE. Details (Feldliste, DNF-Gruppierung)
+// werden in AP1 im Detail spezifiziert und vor Code mit ChatGPT bestätigt.
 model CampaignCondition {
   id               String
   tenantId         String
@@ -164,22 +128,12 @@ Nur EINE `ACTIVE`-Version je `Campaign` gleichzeitig (Exklusivität
 **innerhalb** der Campaign, analog `CommissionModelVersion` — per
 `EXCLUDE`-Constraint auf `(campaignId, tstzrange(validFrom, validTo))`
 WHERE `status = 'ACTIVE'`, keine globale Exklusivität über alle
-Campaigns). Zusätzlich (Analytics-Grundlage, Abschnitt 1 Punkt 7):
-
-```prisma
-// Analog RecommendationCrossSellingSignal (append-only), verknüpft eine
-// Recommendation mit der/den Campaign(s), deren CAMPAIGN_ACTIVE-Signal
-// zur Auswahl beigetragen hat. Nur die technische Grundlage in AP7 --
-// kein vollständiges Attributions-/Conversion-System in Phase 13.
-model RecommendationCampaignSignal {
-  id                   String
-  tenantId             String
-  recommendationItemId String
-  campaignId           String
-  campaignVersionId    String
-  createdAt            DateTime
-}
-```
+Campaigns). Die exakte Constraint-Syntax und ob `CampaignCondition`
+wirklich als eigene Tabelle nötig ist oder ob AP4 stattdessen
+`CAMPAIGN_ACTIVE` direkt als neuen `sourceType`-Wert in die
+**bestehenden** `PrioritizationRule`/`CrossSellingRule`-Conditions
+einführt (ohne eigene `CampaignCondition`-Tabelle), ist eine der ersten
+Detailfragen für AP1 (siehe Abschnitt 4).
 
 ## 3. Arbeitspakete
 
@@ -238,30 +192,20 @@ model RecommendationCampaignSignal {
   `RECOMMENDATION_ENGINE.md`/`RULE_EDITOR.md`, `DATA_MODEL.md`-Korrektur).
 - **AP10** – Abschlussbericht Phase 13.
 
-## 4. Von ChatGPT geklärte Detailfragen (2026-08-24)
+## 4. Offene Detailfragen für AP1 (vor Code mit ChatGPT klären)
 
-Die drei ursprünglich offenen Detailfragen sind mit ChatGPTs
-Entscheidungen vom 2026-08-24 ("Damit ist AP1 für mich freigegeben")
-beantwortet und oben (Abschnitt 1 Punkt 7, Abschnitt 2) eingearbeitet:
-
-1. Eigene `CampaignCondition`-Tabelle: **JA**, nicht die bestehenden
-   `PrioritizationRule`/`CrossSellingRule`-Conditions für die
-   Kampagnen-Zielgruppendefinition zweckentfremden.
-2. `EXCLUDE`-Constraint ausschließlich innerhalb derselben `campaignId`,
-   keine globale Exklusivität über alle Kampagnen.
-3. AP7-Datenschnitt: eigene `RecommendationCampaignSignal`-Tabelle
-   analog `RecommendationCrossSellingSignal`, kein Feld auf
-   `RecommendationRationale`.
-
-ChatGPT (verbatim, 2026-08-24): "Damit ist AP1 für mich freigegeben.
-[...] Wenn AP1 fertig ist, sollten wir vor AP2 wieder einen kurzen
-Discovery-/Review-Punkt einbauen, falls das tatsächliche Schema an
-einer Stelle von dieser Planung abweicht."
+1. Eigene `CampaignCondition`-Tabelle (Skizze Abschnitt 2) vs.
+   `CAMPAIGN_ACTIVE` direkt als Bedingungswert innerhalb bestehender
+   `PrioritizationRule`/`CrossSellingRule`-Conditions ohne separate
+   Campaign-eigene Condition-Tabelle — beeinflusst, ob eine Kampagne
+   selbst eine Zielgruppen-/Produktdefinition trägt, oder ob sie nur
+   ein benannter Schalter ist, auf den bestehende Regeln verweisen.
+2. Exakte `EXCLUDE`-Constraint-Syntax für "eine `ACTIVE`-Version pro
+   Campaign" (analog `CommissionModelVersion`, ggf. 1:1 übertragbar).
+3. AP7-Datenschnitt für die Analytics-Grundlage (s. o.).
 
 ## 5. Nächster Schritt
 
-ChatGPT hat den Plan mit diesen drei Klarstellungen final freigegeben
-und GO für AP1 erteilt. Auflage: nach AP1 (vor AP2) ein kurzer
-Review-Punkt, falls das tatsächliche Schema von dieser Planung
-abweicht. Ausstehend: explizites Nutzer-Implementierungs-GO vor
-AP1-Code (analog dem in allen Vorgängerphasen etablierten Muster).
+Plan geht jetzt an ChatGPT zur Prüfung. Nach ChatGPT-Freigabe: explizites
+Nutzer-Implementierungs-GO vor AP1-Code (analog dem in allen
+Vorgängerphasen etablierten Muster).
