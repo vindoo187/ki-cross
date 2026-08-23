@@ -26,6 +26,11 @@ import {
   type ConfigPermissionCandidate,
   type ConfigPermissionKey,
 } from "../authz/config-permissions";
+import {
+  deriveConsultationPermissions,
+  type ConsultationPermissionCandidate,
+  type ConsultationPermissionKey,
+} from "../authz/consultation-permissions";
 
 export interface DevLoginCandidate {
   tenantId: string;
@@ -179,6 +184,27 @@ export function resolveConfigPermissionsForUser(
 }
 
 /**
+ * Loest die `consultation.*`-Permissions (Phase 12 AP2) fuer einen Nutzer aus
+ * dessen bereits geladenen `RoleAssignment`-Zeilen auf -- ohne zusaetzlichen
+ * DB-Roundtrip, analog `resolveConfigPermissionsForUser()`. Anders als dort
+ * wird `scopeType` bewusst NICHT als Filterkriterium uebergeben (siehe
+ * Modulkommentar in `consultation-permissions.ts`) -- jede aktive Zuweisung
+ * zaehlt, unabhaengig vom Scope. Reine Auswahllogik liegt in
+ * `src/server/authz/consultation-permissions.ts::deriveConsultationPermissions()`.
+ */
+export function resolveConsultationPermissionsForUser(
+  roleAssignments: RoleAssignmentForScope[],
+): ConsultationPermissionKey[] {
+  const activeAssignments = roleAssignments.filter((assignment) => assignment.revokedAt === null);
+
+  const candidates: ConsultationPermissionCandidate[] = activeAssignments.map((assignment) => ({
+    permissionKeys: assignment.role.rolePermissions.map((rp) => rp.permission.key),
+  }));
+
+  return deriveConsultationPermissions(candidates);
+}
+
+/**
  * Prueft einen gewaehlten Login-Kandidaten (per `employeeId`) erneut gegen
  * die DB (nie ungeprueft dem Client vertrauen) und baut daraus den
  * Session-Payload.
@@ -216,6 +242,9 @@ export async function buildSessionPayloadForEmployee(
     employee.user.roleAssignments,
   );
   const configPermissions = resolveConfigPermissionsForUser(employee.user.roleAssignments);
+  const consultationPermissions = resolveConsultationPermissionsForUser(
+    employee.user.roleAssignments,
+  );
 
   return {
     tenantId: employee.tenantId,
@@ -226,5 +255,6 @@ export async function buildSessionPayloadForEmployee(
     roles: roleKeysFromAssignments(employee.user.roleAssignments),
     managementScope,
     configPermissions,
+    consultationPermissions,
   };
 }

@@ -82,6 +82,7 @@ import {
   GoalScopeInvalidError,
   GoalTargetValueInvalidError,
 } from "../admin/goal-admin-errors";
+import { AiExtractionNotAvailableError } from "../ai-extraction/errors";
 
 interface ErrorBody {
   error: string;
@@ -419,6 +420,15 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
       { error: error.name, message: error.message, issues: error.issues },
       { status: 422 },
     );
+  }
+
+  // Freitext-KI-Angebot (Phase 12 AP2): 403 -- Permission UND Tenant-Feature-
+  // Flag zusammen entscheiden, ob KI-Extraktion verfuegbar ist (siehe
+  // ai-extraction/errors.ts). Bewusst EIN Fehlerstatus fuer beide moeglichen
+  // Ursachen (fehlende Permission ODER deaktiviertes Tenant-Feature), damit
+  // die Route nicht erkennbar macht, welche der beiden Bedingungen fehlschlug.
+  if (error instanceof AiExtractionNotAvailableError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 403 });
   }
 
   return null;

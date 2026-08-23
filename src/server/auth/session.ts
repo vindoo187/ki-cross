@@ -14,6 +14,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import type { ManagementScope, ManagementScopeLevel } from "../authz/management-scope";
 import { ALL_CONFIG_PERMISSION_KEYS, type ConfigPermissionKey } from "../authz/config-permissions";
+import {
+  CONSULTATION_PERMISSION_KEYS,
+  type ConsultationPermissionKey,
+} from "../authz/consultation-permissions";
 
 export const SESSION_COOKIE_NAME = "ki_cross_dev_session";
 
@@ -50,6 +54,16 @@ export interface SessionPayload {
    * serverseitig gesetzt, der Client liest dieses Feld nur.
    */
   configPermissions: ConfigPermissionKey[];
+  /**
+   * Beim Login serverseitig aus den `RoleAssignment`-Zeilen aufgeloeste
+   * `consultation.*`-Permissions (Phase 12 AP2, siehe
+   * `src/server/authz/consultation-permissions.ts::deriveConsultationPermissions()`).
+   * Anders als `configPermissions` bewusst OHNE TENANT-Scope-Restriktion --
+   * siehe Modulkommentar in `consultation-permissions.ts`. Leeres Array =
+   * keine Consultation-Laufzeit-Berechtigung (deny-by-default).
+   * Ausschliesslich serverseitig gesetzt, der Client liest dieses Feld nur.
+   */
+  consultationPermissions: ConsultationPermissionKey[];
   /** Unix-Timestamp (Sekunden), zu dem die Session ausgestellt wurde. */
   issuedAt: number;
 }
@@ -66,6 +80,17 @@ function isValidConfigPermissions(value: unknown): value is ConfigPermissionKey[
     value.every(
       (key) =>
         typeof key === "string" && (ALL_CONFIG_PERMISSION_KEYS as readonly string[]).includes(key),
+    )
+  );
+}
+
+function isValidConsultationPermissions(value: unknown): value is ConsultationPermissionKey[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (key) =>
+        typeof key === "string" &&
+        (CONSULTATION_PERMISSION_KEYS as readonly string[]).includes(key),
     )
   );
 }
@@ -171,6 +196,7 @@ export function verifySessionToken(token: string | undefined | null): SessionPay
     !Array.isArray(payload.roles) ||
     !isValidManagementScope(payload.managementScope) ||
     !isValidConfigPermissions(payload.configPermissions) ||
+    !isValidConsultationPermissions(payload.consultationPermissions) ||
     typeof payload.issuedAt !== "number"
   ) {
     return null;

@@ -49,6 +49,7 @@ describe.skipIf(!hasDatabaseUrl)(
         roles: [],
         managementScope: null,
         configPermissions: [],
+        consultationPermissions: [],
       };
     }
 

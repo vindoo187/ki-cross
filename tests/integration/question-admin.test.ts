@@ -76,6 +76,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 8 AP3: Question Management API (Draft-CR
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 

@@ -92,6 +92,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP3: Rule-CRUD (flacher Condition-Baum
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 

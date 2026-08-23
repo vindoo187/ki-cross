@@ -82,6 +82,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP7: Audit-Re-Pruefung", () => {
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 

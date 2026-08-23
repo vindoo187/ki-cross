@@ -75,6 +75,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 

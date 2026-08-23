@@ -54,6 +54,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 11 AP3: HTTP-Routen /api/admin/goals", (
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 

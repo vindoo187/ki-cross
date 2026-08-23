@@ -50,6 +50,7 @@ describe.skipIf(!hasDatabaseUrl)(
         roles: [],
         managementScope: null,
         configPermissions: [],
+        consultationPermissions: [],
       };
     }
 
@@ -93,6 +94,7 @@ describe.skipIf(!hasDatabaseUrl)(
       const token = createSessionToken({
         ...baseSessionPayload(tenantId, userId),
         configPermissions: [],
+        consultationPermissions: [],
       });
       const response = await scopeOptionsRoute(
         requestWithCookie(

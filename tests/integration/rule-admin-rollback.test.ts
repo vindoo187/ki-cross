@@ -77,6 +77,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 
@@ -416,6 +417,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
       const token = createSessionToken({
         ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: [],
+        consultationPermissions: [],
       });
       const response = await versionsRoute(
         requestWithCookie(
@@ -456,6 +458,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP6: Versionshistorie + Rollback", () 
       const token = createSessionToken({
         ...baseSessionPayload(tenantId, actorUserId),
         configPermissions: [],
+        consultationPermissions: [],
       });
       const response = await rollbackRoute(
         requestWithCookie(

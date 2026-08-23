@@ -59,6 +59,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP5: Mandantenweiter Publish-Workflow"
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 

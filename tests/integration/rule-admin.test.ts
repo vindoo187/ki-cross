@@ -71,6 +71,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP2: RuleSet-/Version-Management API",
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 

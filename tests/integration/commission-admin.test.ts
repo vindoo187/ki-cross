@@ -80,6 +80,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 10 AP2: CommissionModel-/Version-Managem
       roles: [],
       managementScope: null,
       configPermissions: [],
+      consultationPermissions: [],
     };
   }
 
