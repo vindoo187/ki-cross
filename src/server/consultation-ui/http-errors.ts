@@ -83,6 +83,16 @@ import {
   GoalTargetValueInvalidError,
 } from "../admin/goal-admin-errors";
 import { AiExtractionNotAvailableError } from "../ai-extraction/errors";
+import {
+  CampaignKeyAlreadyExistsError,
+  CampaignNotFoundError,
+  CampaignScopeInvalidError,
+  CampaignVersionInvalidError,
+  CampaignVersionNotDraftError,
+  CampaignVersionNotFoundError,
+  CampaignVersionPublishConflictError,
+  CopySourceCampaignVersionNotFoundError,
+} from "../admin/campaign-admin-errors";
 
 interface ErrorBody {
   error: string;
@@ -416,6 +426,54 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // metrikspezifische Zielwert-/Currency-Zuordnung verletzt. `issues`
   // enthaelt ALLE gefundenen Verstoesse, analog CommissionModelVersionInvalidError.
   if (error instanceof GoalTargetValueInvalidError) {
+    return NextResponse.json(
+      { error: error.name, message: error.message, issues: error.issues },
+      { status: 422 },
+    );
+  }
+
+  // Campaign-Management-API (Phase 13 AP2): 404 -- Campaign/Version (inkl.
+  // Kopiervorlage) nicht gefunden (fremde Mandant-ID liefert ueber den
+  // gescopten `db`-Client 0 Treffer -> 404, analog Phase 8-11).
+  if (
+    error instanceof CampaignNotFoundError ||
+    error instanceof CampaignVersionNotFoundError ||
+    error instanceof CopySourceCampaignVersionNotFoundError
+  ) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 404 });
+  }
+
+  // Campaign-Management-API: 409 -- `key` einer neuen Campaign kollidiert
+  // mit einer bereits bestehenden Campaign desselben Mandanten.
+  if (error instanceof CampaignKeyAlreadyExistsError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Campaign-Management-API: 409 -- Versuch, eine nicht-DRAFT-
+  // CampaignVersion zu mutieren, analog CommissionModelVersionNotDraftError.
+  if (error instanceof CampaignVersionNotDraftError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Campaign-Management-API: 409 -- echter Nebenlaeufigkeitskonflikt beim
+  // PRO-Campaign-Publish, analog CommissionModelVersionPublishConflictError.
+  if (error instanceof CampaignVersionPublishConflictError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Campaign-Management-API: 422 -- scopeId ist fuer den angegebenen
+  // scopeType nicht gueltig (unbekannt oder gehoert zu einem anderen
+  // Mandanten, IDOR-Schutz, siehe campaign-admin.ts::validateScopeId()).
+  // Keine Mutation/kein Audit-Eintrag bleibt dabei zurueck.
+  if (error instanceof CampaignScopeInvalidError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 422 });
+  }
+
+  // Campaign-Management-API: 422 -- validateCampaignVersion() hat
+  // fachliche Verstoesse in den CampaignCondition-Bedingungen gefunden.
+  // `issues` enthaelt ALLE gefundenen Verstoesse, analog
+  // RuleSetVersionInvalidError/CommissionModelVersionInvalidError.
+  if (error instanceof CampaignVersionInvalidError) {
     return NextResponse.json(
       { error: error.name, message: error.message, issues: error.issues },
       { status: 422 },
