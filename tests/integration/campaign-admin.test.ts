@@ -194,183 +194,159 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
     ).rejects.toBeInstanceOf(CampaignKeyAlreadyExistsError);
   });
 
-  it(
-    "derselbe key ist in ZWEI verschiedenen Mandanten unabhaengig zulaessig (Tenant-Isolation)",
-    async () => {
-      const tenantA = await createTenant("t3a");
-      const tenantB = await createTenant("t3b");
-      const userA = await createUser(tenantA, "u1");
-      const userB = await createUser(tenantB, "u1");
+  it("derselbe key ist in ZWEI verschiedenen Mandanten unabhaengig zulaessig (Tenant-Isolation)", async () => {
+    const tenantA = await createTenant("t3a");
+    const tenantB = await createTenant("t3b");
+    const userA = await createUser(tenantA, "u1");
+    const userB = await createUser(tenantB, "u1");
 
-      await expect(
-        runWithTenantContext(ctx(tenantA, userA), () =>
-          createCampaign({ key: "shared-key", name: "A" }),
-        ),
-      ).resolves.toBeDefined();
-      await expect(
-        runWithTenantContext(ctx(tenantB, userB), () =>
-          createCampaign({ key: "shared-key", name: "B" }),
-        ),
-      ).resolves.toBeDefined();
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantA, userA), () =>
+        createCampaign({ key: "shared-key", name: "A" }),
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      runWithTenantContext(ctx(tenantB, userB), () =>
+        createCampaign({ key: "shared-key", name: "B" }),
+      ),
+    ).resolves.toBeDefined();
+  });
 
   // -------------------------------------------------------------------
   // 2. scopeId-Validierung (IDOR-Schutz, ChatGPT-Leitplanke Punkt 3)
   // -------------------------------------------------------------------
 
-  it(
-    "createDraftCampaignVersion() mit scopeType TENANT + scopeId === tenantId ist gueltig",
-    async () => {
-      const tenantId = await createTenant("t4");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
+  it("createDraftCampaignVersion() mit scopeType TENANT + scopeId === tenantId ist gueltig", async () => {
+    const tenantId = await createTenant("t4");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
 
-      const version = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
-      );
+    const version = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
+    );
 
-      expect(version.scopeType).toBe("TENANT");
-      expect(version.scopeId).toBe(tenantId);
-      expect(version.status).toBe("DRAFT");
-      expect(version.versionNumber).toBe(1);
-    },
-  );
+    expect(version.scopeType).toBe("TENANT");
+    expect(version.scopeId).toBe(tenantId);
+    expect(version.status).toBe("DRAFT");
+    expect(version.versionNumber).toBe(1);
+  });
 
-  it(
-    "createDraftCampaignVersion() mit scopeType TENANT + fremder scopeId -> CampaignScopeInvalidError",
-    async () => {
-      const tenantId = await createTenant("t5");
-      const otherTenantId = await createTenant("t5-other");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
+  it("createDraftCampaignVersion() mit scopeType TENANT + fremder scopeId -> CampaignScopeInvalidError", async () => {
+    const tenantId = await createTenant("t5");
+    const otherTenantId = await createTenant("t5-other");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: otherTenantId }),
-        ),
-      ).rejects.toBeInstanceOf(CampaignScopeInvalidError);
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantId, userId), () =>
+        createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: otherTenantId }),
+      ),
+    ).rejects.toBeInstanceOf(CampaignScopeInvalidError);
+  });
 
-  it(
-    "createDraftCampaignVersion() mit scopeType STORE + gueltigem Store desselben Mandanten ist zulaessig",
-    async () => {
-      const tenantId = await createTenant("t6");
-      const userId = await createUser(tenantId, "u1");
-      const companyId = await createCompany(tenantId, "co");
-      const storeId = await createStore(tenantId, companyId, "s1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
+  it("createDraftCampaignVersion() mit scopeType STORE + gueltigem Store desselben Mandanten ist zulaessig", async () => {
+    const tenantId = await createTenant("t6");
+    const userId = await createUser(tenantId, "u1");
+    const companyId = await createCompany(tenantId, "co");
+    const storeId = await createStore(tenantId, companyId, "s1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
 
-      const version = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, { scopeType: "STORE", scopeId: storeId }),
-      );
-      expect(version.scopeType).toBe("STORE");
-      expect(version.scopeId).toBe(storeId);
-    },
-  );
+    const version = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, { scopeType: "STORE", scopeId: storeId }),
+    );
+    expect(version.scopeType).toBe("STORE");
+    expect(version.scopeId).toBe(storeId);
+  });
 
-  it(
-    "createDraftCampaignVersion() mit scopeType STORE + Store eines FREMDEN Mandanten -> CampaignScopeInvalidError (IDOR)",
-    async () => {
-      const tenantId = await createTenant("t7");
-      const otherTenantId = await createTenant("t7-other");
-      const userId = await createUser(tenantId, "u1");
-      const otherCompanyId = await createCompany(otherTenantId, "co");
-      const foreignStoreId = await createStore(otherTenantId, otherCompanyId, "s1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
+  it("createDraftCampaignVersion() mit scopeType STORE + Store eines FREMDEN Mandanten -> CampaignScopeInvalidError (IDOR)", async () => {
+    const tenantId = await createTenant("t7");
+    const otherTenantId = await createTenant("t7-other");
+    const userId = await createUser(tenantId, "u1");
+    const otherCompanyId = await createCompany(otherTenantId, "co");
+    const foreignStoreId = await createStore(otherTenantId, otherCompanyId, "s1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          createDraftCampaignVersion(campaign.id, { scopeType: "STORE", scopeId: foreignStoreId }),
-        ),
-      ).rejects.toBeInstanceOf(CampaignScopeInvalidError);
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantId, userId), () =>
+        createDraftCampaignVersion(campaign.id, { scopeType: "STORE", scopeId: foreignStoreId }),
+      ),
+    ).rejects.toBeInstanceOf(CampaignScopeInvalidError);
+  });
 
-  it(
-    "updateCampaignVersionFields() mit nur scopeId-Patch validiert gegen den bestehenden (unveraenderten) scopeType",
-    async () => {
-      const tenantId = await createTenant("t8");
-      const otherTenantId = await createTenant("t8-other");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const version = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
-      );
+  it("updateCampaignVersionFields() mit nur scopeId-Patch validiert gegen den bestehenden (unveraenderten) scopeType", async () => {
+    const tenantId = await createTenant("t8");
+    const otherTenantId = await createTenant("t8-other");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const version = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          updateCampaignVersionFields(campaign.id, version.id, { scopeId: otherTenantId }),
-        ),
-      ).rejects.toBeInstanceOf(CampaignScopeInvalidError);
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantId, userId), () =>
+        updateCampaignVersionFields(campaign.id, version.id, { scopeId: otherTenantId }),
+      ),
+    ).rejects.toBeInstanceOf(CampaignScopeInvalidError);
+  });
 
   // -------------------------------------------------------------------
   // 3. Cross-Tenant-Zugriff (kein Zugriff auf fremde Campaign/Version)
   // -------------------------------------------------------------------
 
-  it(
-    "Campaign eines FREMDEN Mandanten ist unter der eigenen tenantId nicht adressierbar -> CampaignNotFoundError",
-    async () => {
-      const tenantA = await createTenant("t9a");
-      const tenantB = await createTenant("t9b");
-      const userA = await createUser(tenantA, "u1");
-      const userB = await createUser(tenantB, "u1");
+  it("Campaign eines FREMDEN Mandanten ist unter der eigenen tenantId nicht adressierbar -> CampaignNotFoundError", async () => {
+    const tenantA = await createTenant("t9a");
+    const tenantB = await createTenant("t9b");
+    const userA = await createUser(tenantA, "u1");
+    const userB = await createUser(tenantB, "u1");
 
-      const campaignA = await runWithTenantContext(ctx(tenantA, userA), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
+    const campaignA = await runWithTenantContext(ctx(tenantA, userA), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantB, userB), () =>
-          createDraftCampaignVersion(campaignA.id, { scopeType: "TENANT", scopeId: tenantB }),
-        ),
-      ).rejects.toBeInstanceOf(CampaignNotFoundError);
+    await expect(
+      runWithTenantContext(ctx(tenantB, userB), () =>
+        createDraftCampaignVersion(campaignA.id, { scopeType: "TENANT", scopeId: tenantB }),
+      ),
+    ).rejects.toBeInstanceOf(CampaignNotFoundError);
 
-      await expect(
-        runWithTenantContext(ctx(tenantB, userB), () => getCampaignVersionHistory(campaignA.id)),
-      ).rejects.toBeInstanceOf(CampaignNotFoundError);
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantB, userB), () => getCampaignVersionHistory(campaignA.id)),
+    ).rejects.toBeInstanceOf(CampaignNotFoundError);
+  });
 
-  it(
-    "copyFromVersionId, die zu einer ANDEREN Campaign gehoert -> CopySourceCampaignVersionNotFoundError",
-    async () => {
-      const tenantId = await createTenant("t10");
-      const userId = await createUser(tenantId, "u1");
-      const campaignA = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "a", name: "A" }),
-      );
-      const campaignB = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "b", name: "B" }),
-      );
-      const versionA = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaignA.id, { scopeType: "TENANT", scopeId: tenantId }),
-      );
+  it("copyFromVersionId, die zu einer ANDEREN Campaign gehoert -> CopySourceCampaignVersionNotFoundError", async () => {
+    const tenantId = await createTenant("t10");
+    const userId = await createUser(tenantId, "u1");
+    const campaignA = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "a", name: "A" }),
+    );
+    const campaignB = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "b", name: "B" }),
+    );
+    const versionA = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaignA.id, { scopeType: "TENANT", scopeId: tenantId }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          createDraftCampaignVersion(campaignB.id, {
-            scopeType: "TENANT",
-            scopeId: tenantId,
-            copyFromVersionId: versionA.id,
-          }),
-        ),
-      ).rejects.toBeInstanceOf(CopySourceCampaignVersionNotFoundError);
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantId, userId), () =>
+        createDraftCampaignVersion(campaignB.id, {
+          scopeType: "TENANT",
+          scopeId: tenantId,
+          copyFromVersionId: versionA.id,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CopySourceCampaignVersionNotFoundError);
+  });
 
   // -------------------------------------------------------------------
   // 4. Bedingungen: explizit vs. copyFromVersionId-Deep-Copy
@@ -396,97 +372,85 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
     expect(version.conditions[0].sourceType).toBe("ANSWER");
   });
 
-  it(
-    "createDraftCampaignVersion() mit copyFromVersionId UND weggelassenen conditions kopiert die Bedingungen der Quelle",
-    async () => {
-      const tenantId = await createTenant("t12");
-      const userId = await createUser(tenantId, "u1");
-      const { questionId } = await createActiveQuestionnaire(tenantId, "q");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const source = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, {
-          scopeType: "TENANT",
-          scopeId: tenantId,
-          conditions: [answerCondition(questionId)],
-        }),
-      );
+  it("createDraftCampaignVersion() mit copyFromVersionId UND weggelassenen conditions kopiert die Bedingungen der Quelle", async () => {
+    const tenantId = await createTenant("t12");
+    const userId = await createUser(tenantId, "u1");
+    const { questionId } = await createActiveQuestionnaire(tenantId, "q");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const source = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, {
+        scopeType: "TENANT",
+        scopeId: tenantId,
+        conditions: [answerCondition(questionId)],
+      }),
+    );
 
-      const copy = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, {
-          scopeType: "TENANT",
-          scopeId: tenantId,
-          copyFromVersionId: source.id,
-        }),
-      );
+    const copy = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, {
+        scopeType: "TENANT",
+        scopeId: tenantId,
+        copyFromVersionId: source.id,
+      }),
+    );
 
-      expect(copy.conditions).toHaveLength(1);
-      expect(copy.conditions[0].questionId).toBe(questionId);
-      expect(copy.versionNumber).toBe(2);
-    },
-  );
+    expect(copy.conditions).toHaveLength(1);
+    expect(copy.conditions[0].questionId).toBe(questionId);
+    expect(copy.versionNumber).toBe(2);
+  });
 
-  it(
-    "createDraftCampaignVersion() mit copyFromVersionId UND explizit leeren conditions ignoriert die Quelle (Aufrufer-Werte gewinnen)",
-    async () => {
-      const tenantId = await createTenant("t13");
-      const userId = await createUser(tenantId, "u1");
-      const { questionId } = await createActiveQuestionnaire(tenantId, "q");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const source = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, {
-          scopeType: "TENANT",
-          scopeId: tenantId,
-          conditions: [answerCondition(questionId)],
-        }),
-      );
+  it("createDraftCampaignVersion() mit copyFromVersionId UND explizit leeren conditions ignoriert die Quelle (Aufrufer-Werte gewinnen)", async () => {
+    const tenantId = await createTenant("t13");
+    const userId = await createUser(tenantId, "u1");
+    const { questionId } = await createActiveQuestionnaire(tenantId, "q");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const source = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, {
+        scopeType: "TENANT",
+        scopeId: tenantId,
+        conditions: [answerCondition(questionId)],
+      }),
+    );
 
-      const copy = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, {
-          scopeType: "TENANT",
-          scopeId: tenantId,
-          copyFromVersionId: source.id,
-          conditions: [],
-        }),
-      );
+    const copy = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, {
+        scopeType: "TENANT",
+        scopeId: tenantId,
+        copyFromVersionId: source.id,
+        conditions: [],
+      }),
+    );
 
-      expect(copy.conditions).toHaveLength(0);
-    },
-  );
+    expect(copy.conditions).toHaveLength(0);
+  });
 
-  it(
-    "updateCampaignVersionFields() mit conditions ERSETZT die gesamte bestehende Liste",
-    async () => {
-      const tenantId = await createTenant("t14");
-      const userId = await createUser(tenantId, "u1");
-      const { questionId } = await createActiveQuestionnaire(tenantId, "q");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const version = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, {
-          scopeType: "TENANT",
-          scopeId: tenantId,
-          conditions: [
-            answerCondition(questionId, "BASIC"),
-            answerCondition(questionId, "PREMIUM"),
-          ],
-        }),
-      );
-      expect(version.conditions).toHaveLength(2);
+  it("updateCampaignVersionFields() mit conditions ERSETZT die gesamte bestehende Liste", async () => {
+    const tenantId = await createTenant("t14");
+    const userId = await createUser(tenantId, "u1");
+    const { questionId } = await createActiveQuestionnaire(tenantId, "q");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const version = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, {
+        scopeType: "TENANT",
+        scopeId: tenantId,
+        conditions: [answerCondition(questionId, "BASIC"), answerCondition(questionId, "PREMIUM")],
+      }),
+    );
+    expect(version.conditions).toHaveLength(2);
 
-      const updated = await runWithTenantContext(ctx(tenantId, userId), () =>
-        updateCampaignVersionFields(campaign.id, version.id, {
-          conditions: [answerCondition(questionId, "PREMIUM")],
-        }),
-      );
-      expect(updated.conditions).toHaveLength(1);
-      expect(updated.conditions[0].comparisonValue).toBe("PREMIUM");
-    },
-  );
+    const updated = await runWithTenantContext(ctx(tenantId, userId), () =>
+      updateCampaignVersionFields(campaign.id, version.id, {
+        conditions: [answerCondition(questionId, "PREMIUM")],
+      }),
+    );
+    expect(updated.conditions).toHaveLength(1);
+    expect(updated.conditions[0].comparisonValue).toBe("PREMIUM");
+  });
 
   // -------------------------------------------------------------------
   // 5. Draft-only Mutation Guard
@@ -516,197 +480,172 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
   // 6. Validierung + Publish
   // -------------------------------------------------------------------
 
-  it(
-    "validateCampaignVersion() ohne Bedingungen ist gueltig (Campaign ohne Bedingungen = immer aktiv)",
-    async () => {
-      const tenantId = await createTenant("t16");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const version = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
-      );
+  it("validateCampaignVersion() ohne Bedingungen ist gueltig (Campaign ohne Bedingungen = immer aktiv)", async () => {
+    const tenantId = await createTenant("t16");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const version = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          validateCampaignVersion(campaign.id, version.id),
-        ),
-      ).resolves.toEqual({ valid: true });
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantId, userId), () =>
+        validateCampaignVersion(campaign.id, version.id),
+      ),
+    ).resolves.toEqual({ valid: true });
+  });
 
-  it(
-    "validateCampaignVersion() mit ANSWER-Bedingung auf inaktive/unbekannte Frage -> CampaignVersionInvalidError",
-    async () => {
-      const tenantId = await createTenant("t17");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const version = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, {
-          scopeType: "TENANT",
-          scopeId: tenantId,
-          conditions: [answerCondition(randomUUID())],
-        }),
-      );
+  it("validateCampaignVersion() mit ANSWER-Bedingung auf inaktive/unbekannte Frage -> CampaignVersionInvalidError", async () => {
+    const tenantId = await createTenant("t17");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const version = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, {
+        scopeType: "TENANT",
+        scopeId: tenantId,
+        conditions: [answerCondition(randomUUID())],
+      }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          validateCampaignVersion(campaign.id, version.id),
-        ),
-      ).rejects.toBeInstanceOf(CampaignVersionInvalidError);
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantId, userId), () =>
+        validateCampaignVersion(campaign.id, version.id),
+      ),
+    ).rejects.toBeInstanceOf(CampaignVersionInvalidError);
+  });
 
-  it(
-    "publishCampaignVersion() bei fachlich ungueltiger Version schlaegt fehl UND laesst die Version im Status DRAFT (kein Teil-Publish)",
-    async () => {
-      const tenantId = await createTenant("t18");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const version = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, {
-          scopeType: "TENANT",
-          scopeId: tenantId,
-          conditions: [answerCondition(randomUUID())],
-        }),
-      );
+  it("publishCampaignVersion() bei fachlich ungueltiger Version schlaegt fehl UND laesst die Version im Status DRAFT (kein Teil-Publish)", async () => {
+    const tenantId = await createTenant("t18");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const version = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, {
+        scopeType: "TENANT",
+        scopeId: tenantId,
+        conditions: [answerCondition(randomUUID())],
+      }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          publishCampaignVersion(campaign.id, version.id),
-        ),
-      ).rejects.toBeInstanceOf(CampaignVersionInvalidError);
+    await expect(
+      runWithTenantContext(ctx(tenantId, userId), () =>
+        publishCampaignVersion(campaign.id, version.id),
+      ),
+    ).rejects.toBeInstanceOf(CampaignVersionInvalidError);
 
-      const reloaded = await runWithTenantContext(ctx(tenantId, userId), () =>
-        getCampaignVersionDetail(campaign.id, version.id),
-      );
-      expect(reloaded.status).toBe("DRAFT");
-    },
-  );
+    const reloaded = await runWithTenantContext(ctx(tenantId, userId), () =>
+      getCampaignVersionDetail(campaign.id, version.id),
+    );
+    expect(reloaded.status).toBe("DRAFT");
+  });
 
-  it(
-    "publishCampaignVersion() aktiviert die Draft-Version und expiret die vorherige ACTIVE-Version DERSELBEN Campaign",
-    async () => {
-      const tenantId = await createTenant("t19");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const v1 = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
-      );
-      const publish1 = await runWithTenantContext(ctx(tenantId, userId), () =>
-        publishCampaignVersion(campaign.id, v1.id),
-      );
-      expect(publish1.version.status).toBe("ACTIVE");
-      expect(publish1.previousActiveVersionId).toBeNull();
+  it("publishCampaignVersion() aktiviert die Draft-Version und expiret die vorherige ACTIVE-Version DERSELBEN Campaign", async () => {
+    const tenantId = await createTenant("t19");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const v1 = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
+    );
+    const publish1 = await runWithTenantContext(ctx(tenantId, userId), () =>
+      publishCampaignVersion(campaign.id, v1.id),
+    );
+    expect(publish1.version.status).toBe("ACTIVE");
+    expect(publish1.previousActiveVersionId).toBeNull();
 
-      const v2 = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, {
-          scopeType: "TENANT",
-          scopeId: tenantId,
-          copyFromVersionId: v1.id,
-        }),
-      );
-      const publish2 = await runWithTenantContext(ctx(tenantId, userId), () =>
-        publishCampaignVersion(campaign.id, v2.id),
-      );
-      expect(publish2.version.status).toBe("ACTIVE");
-      expect(publish2.previousActiveVersionId).toBe(v1.id);
+    const v2 = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, {
+        scopeType: "TENANT",
+        scopeId: tenantId,
+        copyFromVersionId: v1.id,
+      }),
+    );
+    const publish2 = await runWithTenantContext(ctx(tenantId, userId), () =>
+      publishCampaignVersion(campaign.id, v2.id),
+    );
+    expect(publish2.version.status).toBe("ACTIVE");
+    expect(publish2.previousActiveVersionId).toBe(v1.id);
 
-      const historie = await runWithTenantContext(ctx(tenantId, userId), () =>
-        getCampaignVersionHistory(campaign.id),
-      );
-      const byId = new Map(historie.map((v) => [v.id, v]));
-      expect(byId.get(v1.id)?.status).toBe("EXPIRED");
-      expect(byId.get(v2.id)?.status).toBe("ACTIVE");
-      // Draft/Publish-Historie: neueste Version zuerst.
-      expect(historie[0].id).toBe(v2.id);
-    },
-  );
+    const historie = await runWithTenantContext(ctx(tenantId, userId), () =>
+      getCampaignVersionHistory(campaign.id),
+    );
+    const byId = new Map(historie.map((v) => [v.id, v]));
+    expect(byId.get(v1.id)?.status).toBe("EXPIRED");
+    expect(byId.get(v2.id)?.status).toBe("ACTIVE");
+    // Draft/Publish-Historie: neueste Version zuerst.
+    expect(historie[0].id).toBe(v2.id);
+  });
 
-  it(
-    "Publish einer bereits nicht mehr existierenden/fremden Version -> CampaignVersionNotFoundError",
-    async () => {
-      const tenantId = await createTenant("t20");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
+  it("Publish einer bereits nicht mehr existierenden/fremden Version -> CampaignVersionNotFoundError", async () => {
+    const tenantId = await createTenant("t20");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
 
-      await expect(
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          publishCampaignVersion(campaign.id, randomUUID()),
-        ),
-      ).rejects.toBeInstanceOf(CampaignVersionNotFoundError);
-    },
-  );
+    await expect(
+      runWithTenantContext(ctx(tenantId, userId), () =>
+        publishCampaignVersion(campaign.id, randomUUID()),
+      ),
+    ).rejects.toBeInstanceOf(CampaignVersionNotFoundError);
+  });
 
   // -------------------------------------------------------------------
   // 7. Concurrent Publish (EXCLUDE-Constraint-Backstop, analog Phase 10 AP9)
   // -------------------------------------------------------------------
 
-  it(
-    "zwei GLEICHZEITIGE Publish-Versuche fuer ZWEI VERSCHIEDENE DRAFT-Versionen DERSELBEN Campaign: genau einer gewinnt, der andere bekommt einen sauberen Fehler (kein rohes DB-Fehlerobjekt)",
-    async () => {
-      const tenantId = await createTenant("t21");
-      const userId = await createUser(tenantId, "u1");
-      const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createCampaign({ key: "c", name: "C" }),
-      );
-      const vA = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
-      );
-      const vB = await runWithTenantContext(ctx(tenantId, userId), () =>
-        createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
-      );
+  it("zwei GLEICHZEITIGE Publish-Versuche fuer ZWEI VERSCHIEDENE DRAFT-Versionen DERSELBEN Campaign: genau einer gewinnt, der andere bekommt einen sauberen Fehler (kein rohes DB-Fehlerobjekt)", async () => {
+    const tenantId = await createTenant("t21");
+    const userId = await createUser(tenantId, "u1");
+    const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createCampaign({ key: "c", name: "C" }),
+    );
+    const vA = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
+    );
+    const vB = await runWithTenantContext(ctx(tenantId, userId), () =>
+      createDraftCampaignVersion(campaign.id, { scopeType: "TENANT", scopeId: tenantId }),
+    );
 
-      const results = await Promise.allSettled([
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          publishCampaignVersion(campaign.id, vA.id),
-        ),
-        runWithTenantContext(ctx(tenantId, userId), () =>
-          publishCampaignVersion(campaign.id, vB.id),
-        ),
-      ]);
+    const results = await Promise.allSettled([
+      runWithTenantContext(ctx(tenantId, userId), () => publishCampaignVersion(campaign.id, vA.id)),
+      runWithTenantContext(ctx(tenantId, userId), () => publishCampaignVersion(campaign.id, vB.id)),
+    ]);
 
-      const fulfilled = results.filter((r) => r.status === "fulfilled");
-      const rejected = results.filter((r) => r.status === "rejected");
-      // Der Campaign-Row-Lock serialisiert beide Transaktionen -- BEIDE
-      // koennen strukturell erfolgreich sein (nacheinander, nicht wirklich
-      // "gleichzeitig" auf DB-Ebene), aber niemals darf einer der beiden mit
-      // einem rohen, unuebersetzten DB-Fehler durchfallen.
-      expect(fulfilled.length).toBeGreaterThanOrEqual(1);
-      for (const r of rejected) {
-        if (r.status === "rejected") {
-          expect(
-            r.reason instanceof CampaignVersionPublishConflictError ||
-              r.reason instanceof CampaignVersionNotDraftError,
-          ).toBe(true);
-        }
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    // Der Campaign-Row-Lock serialisiert beide Transaktionen -- BEIDE
+    // koennen strukturell erfolgreich sein (nacheinander, nicht wirklich
+    // "gleichzeitig" auf DB-Ebene), aber niemals darf einer der beiden mit
+    // einem rohen, unuebersetzten DB-Fehler durchfallen.
+    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+    for (const r of rejected) {
+      if (r.status === "rejected") {
+        expect(
+          r.reason instanceof CampaignVersionPublishConflictError ||
+            r.reason instanceof CampaignVersionNotDraftError,
+        ).toBe(true);
       }
+    }
 
-      const historie = await runWithTenantContext(ctx(tenantId, userId), () =>
-        getCampaignVersionHistory(campaign.id),
-      );
-      const activeCount = historie.filter((v) => v.status === "ACTIVE").length;
-      // Strukturelle Garantie der EXCLUDE-Constraint: nie mehr als eine
-      // gleichzeitig ACTIVE-Version DERSELBEN Campaign.
-      expect(activeCount).toBeLessThanOrEqual(1);
-    },
-  );
+    const historie = await runWithTenantContext(ctx(tenantId, userId), () =>
+      getCampaignVersionHistory(campaign.id),
+    );
+    const activeCount = historie.filter((v) => v.status === "ACTIVE").length;
+    // Strukturelle Garantie der EXCLUDE-Constraint: nie mehr als eine
+    // gleichzeitig ACTIVE-Version DERSELBEN Campaign.
+    expect(activeCount).toBeLessThanOrEqual(1);
+  });
 
-  it(
-    "translatePublishError() uebersetzt NUR die bekannte EXCLUDE-Constraint-Verletzung, alle anderen Fehler werden unveraendert weitergeworfen",
-    () => {
-      const versionId = randomUUID();
-      const otherError = new Error("irgendein anderer Fehler");
-      expect(() => translatePublishError(otherError, versionId)).toThrow(otherError);
-    },
-  );
+  it("translatePublishError() uebersetzt NUR die bekannte EXCLUDE-Constraint-Verletzung, alle anderen Fehler werden unveraendert weitergeworfen", () => {
+    const versionId = randomUUID();
+    const otherError = new Error("irgendein anderer Fehler");
+    expect(() => translatePublishError(otherError, versionId)).toThrow(otherError);
+  });
 });
