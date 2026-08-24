@@ -35,6 +35,13 @@ ALTER TABLE "campaign_versions" ADD CONSTRAINT "campaign_versions_tenant_id_crea
 CREATE INDEX "campaign_versions_tenant_id_scope_type_scope_id_idx" ON "campaign_versions" ("tenant_id", "scope_type", "scope_id");
 CREATE INDEX "campaign_versions_tenant_id_created_by_user_id_idx" ON "campaign_versions" ("tenant_id", "created_by_user_id");
 
+-- Nachbesserung (CI #113 rot, Prisma-Validierungsfehler P1012): fehlte im
+-- ersten Anlauf, wird von campaign_conditions.campaign_version_id und
+-- recommendation_campaign_signals.campaign_version_id referenziert -- analog
+-- den bestehenden *_tenant_id_id_key-Indizes bei question_versions,
+-- rule_set_versions, commission_model_versions, goal_versions.
+CREATE UNIQUE INDEX "campaign_versions_tenant_id_id_key" ON "campaign_versions" ("tenant_id", "id");
+
 -- =============================================================================
 -- 2) campaign_conditions
 -- =============================================================================

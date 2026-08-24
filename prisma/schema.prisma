@@ -794,6 +794,12 @@ model CampaignVersion {
   campaignSignals RecommendationCampaignSignal[]
 
   @@unique([tenantId, campaignId, versionNumber])
+  // Phase 13 AP1 Nachbesserung (CI #113 rot): fehlte im ersten Anlauf,
+  // wird von CampaignCondition.campaignVersion und
+  // RecommendationCampaignSignal.campaignVersion referenziert (references:
+  // [tenantId, id]) -- analog @@unique([tenantId, id]) bei
+  // QuestionVersion/RuleSetVersion/CommissionModelVersion/GoalVersion.
+  @@unique([tenantId, id])
   @@index([tenantId])
   @@index([campaignId, validFrom, validTo])
   @@index([tenantId, scopeType, scopeId])
