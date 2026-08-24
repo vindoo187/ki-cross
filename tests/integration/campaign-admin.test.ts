@@ -146,6 +146,46 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
     return { questionId: question.id };
   }
 
+  /**
+   * Legt eine ECHTE `Question`-Zeile an, deren `QuestionnaireVersion` NICHT
+   * den Status ACTIVE hat (hier: DRAFT). `loadActiveQuestionAnswerTypeMap()`
+   * (campaign-admin.ts) filtert ausschliesslich nach
+   * `questionnaireVersion.status === "ACTIVE"` -- eine solche Frage gilt
+   * damit fachlich als "nicht aktiv", OHNE die DB-FK
+   * `campaign_conditions_tenant_id_question_id_fkey` zu verletzen (die
+   * Frage existiert ja wirklich). Ein GENUIN unbekannter `questionId`
+   * (z. B. `randomUUID()`) ist dagegen bereits strukturell durch diese FK
+   * ausgeschlossen und kann eine DRAFT-`CampaignVersion` gar nicht erst
+   * erreichen -- identisches Prinzip wie in
+   * tests/integration/rule-admin-validate.test.ts dokumentiert (FK-
+   * geschuetzte Verstoesse sind nur als "existiert, aber fachlich invalide"
+   * testbar, nicht als "existiert gar nicht").
+   */
+  async function createInactiveQuestion(tenantId: string, key: string) {
+    const questionnaire = await rawClient.questionnaire.create({
+      data: { tenantId, key: `${key}-${suffix}` },
+    });
+    const questionnaireVersion = await rawClient.questionnaireVersion.create({
+      data: {
+        tenantId,
+        questionnaireId: questionnaire.id,
+        label: "v1",
+        status: "DRAFT",
+        validFrom: new Date("2026-01-01T00:00:00Z"),
+        validTo: null,
+      },
+    });
+    const question = await rawClient.question.create({
+      data: {
+        tenantId,
+        questionnaireVersionId: questionnaireVersion.id,
+        key: "q-inactive",
+        sortOrder: 1,
+      },
+    });
+    return { questionId: question.id };
+  }
+
   function answerCondition(
     questionId: string,
     comparisonValue = "PREMIUM",
@@ -500,6 +540,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
   it("validateCampaignVersion() mit ANSWER-Bedingung auf inaktive/unbekannte Frage -> CampaignVersionInvalidError", async () => {
     const tenantId = await createTenant("t17");
     const userId = await createUser(tenantId, "u1");
+    const { questionId } = await createInactiveQuestion(tenantId, "q");
     const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
       createCampaign({ key: "c", name: "C" }),
     );
@@ -507,7 +548,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
       createDraftCampaignVersion(campaign.id, {
         scopeType: "TENANT",
         scopeId: tenantId,
-        conditions: [answerCondition(randomUUID())],
+        conditions: [answerCondition(questionId)],
       }),
     );
 
@@ -521,6 +562,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
   it("publishCampaignVersion() bei fachlich ungueltiger Version schlaegt fehl UND laesst die Version im Status DRAFT (kein Teil-Publish)", async () => {
     const tenantId = await createTenant("t18");
     const userId = await createUser(tenantId, "u1");
+    const { questionId } = await createInactiveQuestion(tenantId, "q");
     const campaign = await runWithTenantContext(ctx(tenantId, userId), () =>
       createCampaign({ key: "c", name: "C" }),
     );
@@ -528,7 +570,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
       createDraftCampaignVersion(campaign.id, {
         scopeType: "TENANT",
         scopeId: tenantId,
-        conditions: [answerCondition(randomUUID())],
+        conditions: [answerCondition(questionId)],
       }),
     );
 
