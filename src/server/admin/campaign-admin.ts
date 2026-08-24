@@ -488,7 +488,9 @@ export async function updateCampaignVersionFields(
 
   await db.$transaction(async (tx) => {
     const fieldsChanged =
-      patch.scopeType !== undefined || patch.scopeId !== undefined || patch.description !== undefined;
+      patch.scopeType !== undefined ||
+      patch.scopeId !== undefined ||
+      patch.description !== undefined;
     if (fieldsChanged) {
       await tx.campaignVersion.update({
         where: { id: versionId },
