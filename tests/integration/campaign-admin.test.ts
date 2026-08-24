@@ -369,7 +369,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
     );
 
     expect(version.conditions).toHaveLength(1);
-    expect(version.conditions[0].sourceType).toBe("ANSWER");
+    expect(version.conditions[0]?.sourceType).toBe("ANSWER");
   });
 
   it("createDraftCampaignVersion() mit copyFromVersionId UND weggelassenen conditions kopiert die Bedingungen der Quelle", async () => {
@@ -396,7 +396,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
     );
 
     expect(copy.conditions).toHaveLength(1);
-    expect(copy.conditions[0].questionId).toBe(questionId);
+    expect(copy.conditions[0]?.questionId).toBe(questionId);
     expect(copy.versionNumber).toBe(2);
   });
 
@@ -449,7 +449,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
       }),
     );
     expect(updated.conditions).toHaveLength(1);
-    expect(updated.conditions[0].comparisonValue).toBe("PREMIUM");
+    expect(updated.conditions[0]?.comparisonValue).toBe("PREMIUM");
   });
 
   // -------------------------------------------------------------------
@@ -579,7 +579,7 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP2: Campaign-Management-Service", ()
     expect(byId.get(v1.id)?.status).toBe("EXPIRED");
     expect(byId.get(v2.id)?.status).toBe("ACTIVE");
     // Draft/Publish-Historie: neueste Version zuerst.
-    expect(historie[0].id).toBe(v2.id);
+    expect(historie[0]?.id).toBe(v2.id);
   });
 
   it("Publish einer bereits nicht mehr existierenden/fremden Version -> CampaignVersionNotFoundError", async () => {
