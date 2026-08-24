@@ -118,6 +118,15 @@ async function seedGlobalCatalog() {
     "config.goals.view",
     "config.goals.edit",
     "config.goals.publish",
+    // Phase 13 AP1 (Campaign Management, ChatGPT-GO 2026-08-24):
+    // Configuration-RBAC fuer die Kampagnenverwaltung, siehe
+    // src/server/authz/config-permissions.ts
+    // (CONFIG_CAMPAIGNS_PERMISSION_KEYS). Additive Erweiterung derselben
+    // config_editor/config_publisher-Rollen (keine neuen Rollen, siehe
+    // PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 4).
+    "config.campaigns.view",
+    "config.campaigns.edit",
+    "config.campaigns.publish",
     // Phase 12 AP1 (Freitext-KI-Angebotsfeature, ChatGPT-GO 2026-08-23):
     // Laufzeit-Permission (kein config.*-Namespace, siehe
     // src/server/authz/consultation-permissions.ts) fuer die KI-Extraktion

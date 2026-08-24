@@ -181,10 +181,19 @@ Deal (Abschluss)
 ## Ziele, Kampagnen, KPIs
 
 ```
-Campaign (Kampagne)       -- zeitlich begrenzt (CampaignVersion), priorisiert bestimmte Produkte/Cross-Selling-Schwerpunkte
-AnalyticsEvent            -- append-only Ereignisprotokoll, Basis aller KPI-Berechnungen
-BaselineMeasurement       -- Referenzwerte vor Rollout, fuer Vorher/Nachher-Vergleiche (siehe ANALYTICS_AND_KPIS.md)
+Campaign (Kampagne)       -- Draft/Publish-versioniert wie Question/RuleSet/CommissionModel (CampaignVersion)
+CampaignVersion            -- scopeType (TENANT|STORE) + scopeId (polymorph, kein DB-FK, serverseitig geprueft,
+                               analog Goal.scopeId), validFrom/validTo (EXCLUDE-Constraint pro Campaign, seit
+                               Phase-2-Skelett), createdByUserId (Audit, nullable/SetNull)
+CampaignCondition           -- DNF-Bedingungsbaum je CampaignVersion, sourceType (QUESTION_ANSWER|CUSTOMER_ATTRIBUTE),
+                               referenziert optional Question (analog EligibilityRuleCondition-Muster)
+RecommendationCampaignSignal -- append-only Analytics-Signal (Recommendation-Item x Campaign x CampaignVersion),
+                               Grundlage fuer spaetere KPI-Auswertung (Phase 13 AP7), analog RecommendationCrossSellingSignal
+AnalyticsEvent             -- append-only Ereignisprotokoll, Basis aller KPI-Berechnungen
+BaselineMeasurement        -- Referenzwerte vor Rollout, fuer Vorher/Nachher-Vergleiche (siehe ANALYTICS_AND_KPIS.md)
 ```
+
+Seit Phase 13 AP1 ist das Campaign-Datenmodell vollstaendig (Schema+Migration `20260824180000_campaign_management`); Admin-Service, API und UI folgen in AP2ff. gemaess [PHASE_13_IMPLEMENTATION_PLAN.md](PHASE_13_IMPLEMENTATION_PLAN.md).
 
 **Noch nicht implementiert (späterer Ausbau, kein Bestandteil von Phase 2/2B):** `Goal` (Ziel-Objekt) und `KpiSnapshot` (periodisch aggregierte KPI-Snapshots) sind Phase-1-Konzepte aus [ANALYTICS_AND_KPIS.md](ANALYTICS_AND_KPIS.md), aber (noch) keine Modelle in `schema.prisma`. Seit Phase 6 werden die priorisierten Kern-KPIs tatsächlich live direkt aus `AnalyticsEvent`/`ConsultationSession`/`Recommendation`/`Deal` berechnet (`src/server/analytics/kpis.ts`, kein persistierter Snapshot) – siehe [DEAL_CAPTURE.md](DEAL_CAPTURE.md) Abschnitt 5.
 
@@ -216,6 +225,7 @@ ConsultationSession 1─n Recommendation 1─1 RecommendationOutcome
 Recommendation 1─n RecommendationItem 1─n RecommendationRationale
 Recommendation 1─n RecommendationCrossSellingSignal 0─1 SalesOpportunity (mutable)
 ConsultationSession 0─1 Deal
-Tenant 1─n Campaign, AnalyticsEvent, BaselineMeasurement
+Tenant 1─n Campaign 1─n CampaignVersion 1─n CampaignCondition
+Tenant 1─n AnalyticsEvent, BaselineMeasurement
 alle Entitäten → AuditLog (bei Änderung)
 ```

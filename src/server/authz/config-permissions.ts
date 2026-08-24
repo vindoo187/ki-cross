@@ -12,6 +12,11 @@
  * -- regelt WER Ziele setzen darf; bewusst getrennt von der Frage, WER
  * welche Ziele SEHEN darf (weiterhin die bestehende Management-Scope-
  * Architektur aus Phase 7, siehe unten).
+ * Um `config.campaigns.*` erweitert in Phase 13 AP1 (ChatGPT-GO
+ * 2026-08-24, siehe PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 4)
+ * -- regelt WER Kampagnen pflegen darf; strikt getrennt von der fachlichen
+ * Scope-Begrenzung der einzelnen Kampagne (TENANT/STORE, CampaignVersion.
+ * scopeType/scopeId), analog der Goal-Trennung oben.
  * Durchgaengig additive Erweiterung der bestehenden `config_editor`/
  * `config_publisher`-Rollen statt neuer Rollen -- siehe
  * PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 2.1. Getrennt von der
@@ -64,12 +69,20 @@ export const CONFIG_GOALS_PERMISSION_KEYS = [
   "config.goals.publish",
 ] as const;
 
-/** Kombinierter Katalog aller Config-Permission-Keys (Fragen + Regeln + Provisionsmodelle + Ziele). */
+/** Phase 13 AP1 (Campaign Management, ChatGPT-GO 2026-08-24, Entscheidung D): Permission-Keys fuer die Kampagnenverwaltung. */
+export const CONFIG_CAMPAIGNS_PERMISSION_KEYS = [
+  "config.campaigns.view",
+  "config.campaigns.edit",
+  "config.campaigns.publish",
+] as const;
+
+/** Kombinierter Katalog aller Config-Permission-Keys (Fragen + Regeln + Provisionsmodelle + Ziele + Kampagnen). */
 export const ALL_CONFIG_PERMISSION_KEYS = [
   ...CONFIG_QUESTIONS_PERMISSION_KEYS,
   ...CONFIG_RULES_PERMISSION_KEYS,
   ...CONFIG_COMMISSIONS_PERMISSION_KEYS,
   ...CONFIG_GOALS_PERMISSION_KEYS,
+  ...CONFIG_CAMPAIGNS_PERMISSION_KEYS,
 ] as const;
 
 export type ConfigPermissionKey = (typeof ALL_CONFIG_PERMISSION_KEYS)[number];

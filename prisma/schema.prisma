@@ -385,6 +385,7 @@ model User {
   auditLogsAsActor       AuditLog[]
   configurationChanges   ConfigurationChange[]
   goalVersionsAsCreator  GoalVersion[]
+  campaignVersionsAsCreator CampaignVersion[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, id])
@@ -733,6 +734,16 @@ model ProductCostVersion {
   @@map("product_cost_versions")
 }
 
+// Phase 13 AP1 (Campaign Management, ChatGPT-GO 2026-08-24): eigenes,
+// kleineres Enum als GoalScopeType -- bewusst KEIN EMPLOYEE/COMPANY (siehe
+// PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 3, Entscheidung C).
+// NICHT RoleScopeType wiederverwenden (das hat COMPANY, hier bewusst nicht
+// erlaubt).
+enum CampaignScopeType {
+  TENANT
+  STORE
+}
+
 model Campaign {
   id        String   @id @default(uuid()) @db.Uuid
   tenantId  String   @map("tenant_id") @db.Uuid
@@ -742,6 +753,9 @@ model Campaign {
 
   tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   versions CampaignVersion[]
+
+  // Phase 13 AP7-Vorbereitung: Rueckrelation zu RecommendationCampaignSignal.
+  campaignSignals RecommendationCampaignSignal[]
 
   @@unique([tenantId, id])
   @@unique([tenantId, key])
@@ -755,17 +769,63 @@ model CampaignVersion {
   campaignId    String        @map("campaign_id") @db.Uuid
   versionNumber Int           @map("version_number")
   status        VersionStatus @default(DRAFT)
+  // Phase 13 AP1: scopeId ist bewusst KEIN Fremdschluessel (polymorph je
+  // nach scopeType: TENANT -> tenantId, STORE -> Store.id) -- analog
+  // Goal.scopeId. Tenant-/Store-Bindung wird serverseitig in AP2
+  // (campaign-admin.ts) geprueft, nicht per DB-FK.
+  scopeType     CampaignScopeType @map("scope_type")
+  scopeId       String            @map("scope_id") @db.Uuid
   validFrom     DateTime      @map("valid_from") @db.Timestamptz(6)
   validTo       DateTime?     @map("valid_to") @db.Timestamptz(6)
-  description   String
+  description   String?
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Nullable + onDelete SetNull, analog GoalVersion.createdByUserId: die
+  // historische CampaignVersion-Zeile bleibt bestehen, auch wenn der
+  // erstellende User spaeter deaktiviert/geloescht wird.
+  createdByUserId String?     @map("created_by_user_id") @db.Uuid
 
-  campaign Campaign @relation(fields: [tenantId, campaignId], references: [tenantId, id], onDelete: Restrict)
+  campaign  Campaign @relation(fields: [tenantId, campaignId], references: [tenantId, id], onDelete: Restrict)
+  createdBy User?    @relation(fields: [tenantId, createdByUserId], references: [tenantId, id], onDelete: SetNull)
+
+  conditions CampaignCondition[]
+
+  // Phase 13 AP7 (Analytics-Grundlage): Rueckrelation zu
+  // RecommendationCampaignSignal, s.u.
+  campaignSignals RecommendationCampaignSignal[]
 
   @@unique([tenantId, campaignId, versionNumber])
   @@index([tenantId])
   @@index([campaignId, validFrom, validTo])
+  @@index([tenantId, scopeType, scopeId])
+  @@index([tenantId, createdByUserId])
   @@map("campaign_versions")
+}
+
+// Phase 13 AP1 (ChatGPT-Detailentscheidung 2026-08-24, "Damit ist AP1 fuer
+// mich freigegeben", Punkt 1): eigene Tabelle statt Zweckentfremdung der
+// bestehenden PrioritizationRule-/CrossSellingRule-Conditions. Beschreibt,
+// WAS eine Kampagne fachlich betrifft (Zielgruppe/Produkte) -- unabhaengig
+// vom AP4-Wirkmechanismus CAMPAIGN_ACTIVE (ConditionSourceType-Erweiterung
+// folgt erst in AP4, NICHT Teil von AP1). Struktur analog
+// EligibilityRuleCondition/PrioritizationRuleCondition.
+model CampaignCondition {
+  id                String              @id @default(uuid()) @db.Uuid
+  tenantId          String              @map("tenant_id") @db.Uuid
+  campaignVersionId String              @map("campaign_version_id") @db.Uuid
+  groupIndex        Int                 @map("group_index")
+  sourceType        ConditionSourceType @map("source_type")
+  questionId        String?             @map("question_id") @db.Uuid
+  attributeKey      String?             @map("attribute_key")
+  operator          VisibilityOperator
+  comparisonValue   String              @map("comparison_value")
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  campaignVersion CampaignVersion @relation(fields: [tenantId, campaignVersionId], references: [tenantId, id], onDelete: Restrict)
+  question        Question?       @relation("CampaignConditionQuestion", fields: [tenantId, questionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, campaignVersionId])
+  @@map("campaign_conditions")
 }
 
 // ---------------------------------------------------------------------------
@@ -971,6 +1031,7 @@ model RecommendationItem {
 
   rationale RecommendationRationale[]
   outcome   RecommendationOutcome?
+  campaignSignals RecommendationCampaignSignal[]
 
   @@unique([tenantId, id])
   @@index([tenantId])
@@ -1254,6 +1315,7 @@ model Question {
   exclusionRuleConditions      ExclusionRuleCondition[]      @relation("ExclusionRuleConditionQuestion")
   prioritizationRuleConditions PrioritizationRuleCondition[] @relation("PrioritizationRuleConditionQuestion")
   crossSellingRuleConditions   CrossSellingRuleCondition[]   @relation("CrossSellingRuleConditionQuestion")
+  campaignConditions           CampaignCondition[]           @relation("CampaignConditionQuestion")
 
   @@unique([tenantId, id])
   @@index([tenantId, questionnaireVersionId])
@@ -1620,6 +1682,33 @@ model RecommendationCrossSellingSignal {
   @@unique([tenantId, id])
   @@index([tenantId, recommendationId])
   @@map("recommendation_cross_selling_signals")
+}
+
+// Phase 13 AP7-Vorbereitung (Analytics-Grundlage, ChatGPT-Detailentscheidung
+// 2026-08-24, Punkt 3): analog RecommendationCrossSellingSignal (append-only,
+// niemals Update/Delete), verknuepft ein RecommendationItem mit der Campaign/
+// CampaignVersion, deren CAMPAIGN_ACTIVE-Signal zur Auswahl beigetragen hat.
+// Feldbefuellung (welcher Codepfad diese Zeilen tatsaechlich erzeugt) ist
+// AP7-Scope, NICHT Teil von AP1 -- hier nur die Tabelle selbst, damit AP4/AP7
+// nicht nochmal das Datenmodell aendern muessen. Bewusst KEIN zusaetzliches
+// Feld auf RecommendationRationale (vermeidet dessen Aufblaehung, ermoeglicht
+// spaetere eindeutige Auswertung Kampagne->Deal-Conversion).
+model RecommendationCampaignSignal {
+  id                    String   @id @default(uuid()) @db.Uuid
+  tenantId              String   @map("tenant_id") @db.Uuid
+  recommendationItemId  String   @map("recommendation_item_id") @db.Uuid
+  campaignId            String   @map("campaign_id") @db.Uuid
+  campaignVersionId     String   @map("campaign_version_id") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  recommendationItem RecommendationItem @relation(fields: [tenantId, recommendationItemId], references: [tenantId, id], onDelete: Restrict, map: "rec_campaign_signal_item_fkey")
+  campaign            Campaign          @relation(fields: [tenantId, campaignId], references: [tenantId, id], onDelete: Restrict, map: "rec_campaign_signal_campaign_fkey")
+  campaignVersion     CampaignVersion   @relation(fields: [tenantId, campaignVersionId], references: [tenantId, id], onDelete: Restrict, map: "rec_campaign_signal_campaign_version_fkey")
+
+  @@unique([tenantId, id])
+  @@index([tenantId, recommendationItemId])
+  @@index([tenantId, campaignId])
+  @@map("recommendation_campaign_signals")
 }
 
 // Generic, versioned business threshold store. Seeded with

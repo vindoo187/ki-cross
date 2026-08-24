@@ -51,6 +51,16 @@ import { ALL_CONFIG_PERMISSION_KEYS } from "./config-permissions";
  * `ALL_CONFIG_PERMISSION_KEYS`). Dieselbe `sales_employee`-Ausschlussregel
  * gilt fuer `config.goals.*` genauso wie fuer die drei bestehenden
  * Config-Permission-Gruppen.
+ *
+ * Phase 13 AP1 (Campaign Management, ChatGPT-GO 2026-08-24) erweitert
+ * config_editor/config_publisher additiv um die neuen
+ * `config.campaigns.*`-Keys (keine neuen Rollen, siehe
+ * PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 4):
+ * config_editor -> zusaetzlich config.campaigns.view+edit, config_publisher
+ * -> zusaetzlich config.campaigns.view+edit+publish (wieder automatisch
+ * ueber `ALL_CONFIG_PERMISSION_KEYS`). Dieselbe `sales_employee`-
+ * Ausschlussregel gilt fuer `config.campaigns.*` genauso wie fuer die
+ * bestehenden Config-Permission-Gruppen.
  */
 
 export const SEED_ROLE_KEYS = [
@@ -84,10 +94,10 @@ export function permissionKeysForSeedRole(
   switch (roleKey) {
     case "sales_employee":
       // Alle Permissions AUSSER den drei Management-Analytics-Rechten UND
-      // allen config.questions.*/config.rules.*/config.commissions.*-
-      // Rechten -- ein normaler Verkaufsberater darf weder die
-      // Management-Sicht noch die Fragen-/Regel-/Provisionsmodell-
-      // Administration sehen.
+      // allen config.*-Rechten (Fragen/Regeln/Provisionsmodelle/Ziele/
+      // Kampagnen, siehe ALL_CONFIG_PERMISSION_KEYS) -- ein normaler
+      // Verkaufsberater darf weder die Management-Sicht noch irgendeine
+      // Fach-Administration sehen.
       return allPermissionKeys.filter(
         (key) =>
           !(MANAGEMENT_ANALYTICS_PERMISSION_KEYS as readonly string[]).includes(key) &&
@@ -109,7 +119,9 @@ export function permissionKeysForSeedRole(
           key === "config.commissions.view" ||
           key === "config.commissions.edit" ||
           key === "config.goals.view" ||
-          key === "config.goals.edit",
+          key === "config.goals.edit" ||
+          key === "config.campaigns.view" ||
+          key === "config.campaigns.edit",
       );
     case "config_publisher":
       return allPermissionKeys.filter((key) =>
