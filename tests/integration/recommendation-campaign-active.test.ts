@@ -437,6 +437,34 @@ describe.skipIf(!hasDatabaseUrl)(
       expect(result.items[0]?.businessPriorityScore).toBe(35);
     });
 
+    it("Tenant-Isolation: eine im FREMDEN Mandanten aktive Campaign (gleicher Key) zaehlt NICHT als aktiv", async () => {
+      const t = await setUpTenantWithRule("tenant-isolation");
+      const otherTenant = await createTenant("tenant-isolation-other");
+      // Campaign.key ist nur PRO TENANT eindeutig (@@unique([tenantId, key]))
+      // -- derselbe Key-String kann daher in einem fremden Mandanten
+      // parallel existieren UND dort aktiv sein. loadActiveCampaignKeys()
+      // laeuft ueber den tenant-gescopten db-Client und darf strukturell
+      // NICHT ueber Mandantengrenzen hinweg Treffer liefern (identisches
+      // Isolationsprinzip wie bei jeder anderen Query dieser Datei).
+      const sharedKey = await createCampaignWithVersion(
+        otherTenant.tenantId,
+        "shared-key",
+        "TENANT",
+        otherTenant.tenantId,
+        "ACTIVE",
+        FAR_PAST,
+        FAR_FUTURE,
+      );
+      // Tenant t hat KEINE eigene Campaign mit diesem Key -- die Bedingung
+      // verweist bewusst auf einen im eigenen Mandanten unbekannten Key
+      // (Rohinsert umgeht hier bewusst validateDraftRuleSetVersion(), um
+      // die reine Laufzeit-Auswertung zu testen).
+      await addCampaignActiveCondition(t.tenantId, t.ruleId, sharedKey);
+
+      const result = await asTenant(t.tenantId, () => evaluate(t.sessionId));
+      expect(result.items[0]?.businessPriorityScore).toBe(0);
+    });
+
     it("CrossSellingRule: CAMPAIGN_ACTIVE-Bedingung erzeugt ein Signal, wenn die Campaign aktiv ist", async () => {
       const tenant = await createTenant("cross-campaign");
       const qn = await createQuestionnaire(tenant.tenantId, "cross-campaign");
