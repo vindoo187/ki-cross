@@ -19,6 +19,7 @@ function baseInput(overrides: Partial<FingerprintInput> = {}): FingerprintInput 
     productInputs: [],
     sessionAttributes: new Map(),
     commissionModelVersionIds: [],
+    campaignVersionIds: [],
     ...overrides,
   };
 }
@@ -162,6 +163,22 @@ describe("buildFingerprintObject", () => {
       baseInput({ commissionModelVersionIds: ["cmv-z", "cmv-a"] }),
     );
     expect(result.commissionModelVersionIds).toEqual(["cmv-a", "cmv-z"]);
+  });
+
+  // Phase 13 AP8 (echter Befund aus dem Reproduzierbarkeits-
+  // Regressionstest, ChatGPT-GO 2026-08-30): campaignVersionIds muss -- exakt
+  // analog zu commissionModelVersionIds -- sortiert in den kanonischen
+  // Fingerprint einfliessen, damit eine Campaign-Versions-Aenderung den
+  // Fingerprint aendert und der Fast-Path nicht faelschlich greift.
+  it("campaignVersionIds werden sortiert", () => {
+    const result = buildFingerprintObject(baseInput({ campaignVersionIds: ["cv-z", "cv-a"] }));
+    expect(result.campaignVersionIds).toEqual(["cv-a", "cv-z"]);
+  });
+
+  it("unterschiedliche campaignVersionIds ergeben unterschiedliche Fingerprints", () => {
+    const a = computeEvaluationFingerprint(baseInput({ campaignVersionIds: ["cv-1"] }));
+    const b = computeEvaluationFingerprint(baseInput({ campaignVersionIds: ["cv-2"] }));
+    expect(a).not.toBe(b);
   });
 });
 

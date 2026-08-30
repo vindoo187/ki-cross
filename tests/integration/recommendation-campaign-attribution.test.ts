@@ -32,6 +32,23 @@
  * neue Version. Identisches Historisierungsprinzip wie
  * `DealItem.commissionModelVersionId` (Phase 10 AP6).
  *
+ * WICHTIG (echter AP8-Befund, CI #132, ChatGPT-Abstimmung 2026-08-30): dieser
+ * Test deckte einen echten Fehler in der Implementierung auf, keinen
+ * Testfehler -- `evaluationFingerprint` (fingerprint.ts) enthielt bislang
+ * KEINE aktiven CampaignVersion-IDs (im Unterschied zu
+ * `commissionModelVersionIds`, das exakt fuer diesen Zweck existiert).
+ * Dadurch aenderte eine Campaign-Aktivierung/-Deaktivierung nach der ersten
+ * Auswertung einer Session bei sonst unveraendertem Input den Fingerprint
+ * NICHT -- der Idempotenz-Fast-Path (service.ts) griff faelschlich, und eine
+ * erneute Auswertung lieferte weiterhin die alte, laengst veraltete
+ * Recommendation samt altem Signal zurueck, STATT neu auszuwerten. Fix:
+ * `FingerprintInput.campaignVersionIds` (analog `commissionModelVersionIds`,
+ * ChatGPT-GO) wurde ergaenzt und aus dem in evaluate() bereits geladenen
+ * `activeCampaignContext` befuellt -- kein zusaetzlicher DB-Zugriff. Dieser
+ * Test bewiest zusaetzlich (Schritt 1b), dass der Fast-Path bei UNVERAENDERTEM
+ * Campaign-Zustand weiterhin korrekt greift (ChatGPT-Vorgabe: der Fix darf
+ * die Idempotenz nicht generell deaktivieren).
+ *
  * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
  */
 
@@ -607,6 +624,16 @@ describe.skipIf(!hasDatabaseUrl)(
         where: { id: signalId },
       });
       expect(signalBeforePublish.campaignVersionId).toBe(originalActiveVersionId);
+
+      // --- Schritt 1b (Phase 13 AP8 Fix, ChatGPT-Vorgabe 2026-08-30): OHNE
+      // jegliche Aenderung (auch keine Campaign-Aenderung) MUSS der
+      // bestehende Fast-Path weiterhin greifen -- der campaignVersionIds-Fix
+      // im Fingerprint darf den Idempotenz-Mechanismus nicht generell
+      // deaktivieren, sondern nur bei einer TATSAECHLICHEN
+      // Campaign-Versions-Aenderung eine neue Auswertung erzwingen. ---
+      const resultRepeatedNoChange = await asTenant(t.tenantId, () => evaluate(t.sessionId));
+      expect(resultRepeatedNoChange.id).toBe(resultAtV1.id);
+      expect(resultRepeatedNoChange.evaluationFingerprint).toBe(resultAtV1.evaluationFingerprint);
 
       // --- Schritt 2: eine NEUE CampaignVersion (V2) erstellen und ECHT
       // ueber den bestehenden publishCampaignVersion()-Service-Pfad

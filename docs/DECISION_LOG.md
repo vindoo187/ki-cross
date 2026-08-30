@@ -748,3 +748,50 @@ Deduplizierung ueber zwei Regeln mit derselben Campaign, kein Signal bei
 IS_NOT_ANSWERED, kein Signal bei einem CrossSellingRule-Match (dokumentierte
 Luecke), kein Signal bei einer lediglich aktiven, unreferenzierten
 Campaign, OR-Gruppen-Korrektheit sowie Tenant-Isolation der Signal-Tabelle.
+
+## Phase 13 AP8: `evaluationFingerprint` fehlte `campaignVersionIds` -- echter Reproduzierbarkeits-Defekt, kein Testfehler
+
+**Kontext:** AP8 (Security/Regression/E2E) forderte einen expliziten
+Reproduzierbarkeits-Regressionstest fuer `RecommendationCampaignSignal`
+(`tests/integration/recommendation-campaign-attribution.test.ts`). Dieser
+Test deckte in CI #132 einen echten Fehler in der bestehenden Implementierung
+auf (kein Testfehler): eine erneute `evaluate()`-Auswertung derselben Session
+NACH einem echten `publishCampaignVersion()`-Aufruf (der die zuvor aktive
+CampaignVersion V1 EXPIRED und eine neue V2 aktiviert) referenzierte
+weiterhin V1, obwohl keine neue Recommendation und kein neues Signal fuer V2
+geschrieben wurde.
+
+**Root Cause:** `evaluationFingerprint` (`fingerprint.ts`) ist die Grundlage
+des Idempotenz-Fast-Path in `service.ts::evaluate()` (identischer Fingerprint
+fuer dieselbe Session -> die bestehende Recommendation wird unveraendert
+zurueckgegeben, keine neue Zeile). Der Fingerprint enthielt bereits bewusst
+`commissionModelVersionIds`, damit eine spaetere Provisionsaenderung den
+Fingerprint aendert -- fuer aktive CampaignVersion-IDs (seit Phase 13 AP4
+ebenfalls ein zeitabhaengiger Auswertungs-Input, siehe CAMPAIGN_ACTIVE) gab
+es aber KEIN Aequivalent. Aendert sich zwischen zwei `evaluate()`-Aufrufen
+derselben Session NUR der Campaign-Status (keine Antworten/Produkte/
+Session-Attribute/Provisionsmodelle), blieb der Fingerprint identisch, der
+Fast-Path griff faelschlich, und weder die CAMPAIGN_ACTIVE-Bedingungs-
+auswertung noch die `RecommendationCampaignSignal`-Attribution wurden fuer
+die neue Campaign-Version neu berechnet.
+
+**ChatGPT-Entscheidung (2026-08-30, verbindlich):** Echter AP8-Befund, kein
+Testproblem -- Fix gehoert in AP8, kein separater Vorab-Fix. Der Fix darf den
+Fast-Path nicht generell deaktivieren; ein zusaetzlicher Test muss beweisen,
+dass er bei UNVERAENDERTEM Campaign-Zustand weiterhin greift.
+
+**Fix:** `FingerprintInput.campaignVersionIds: string[]` (additiv, kein
+Schema-Change) -- exakt analog zu `commissionModelVersionIds`: sortiert in
+`buildFingerprintObject()` aufgenommen, in `service.ts::evaluate()` aus dem
+dort bereits fuer die Bedingungsauswertung/Signal-Schreibung geladenen
+`activeCampaignContext` befuellt (kein zusaetzlicher DB-Zugriff).
+
+**Test:** `tests/integration/recommendation-campaign-attribution.test.ts`
+("Reproduzierbarkeit") beweist explizit: Signal referenziert V1 vor dem
+Publish (Direkt-DB-Lesung), ein wiederholter `evaluate()`-Aufruf OHNE
+Campaign-Aenderung liefert weiterhin dieselbe Recommendation/denselben
+Fingerprint (Fast-Path bleibt aktiv), das urspruengliche Signal bleibt nach
+dem Publish unveraendert bei V1, und eine NEUE Auswertung NACH dem Publish
+erzeugt eine neue Recommendation mit einem neuen Signal fuer V2. Zusaetzlich
+deckt `tests/unit/recommendation/fingerprint.test.ts` die reine
+Sortierungs-/Hash-Aenderung fuer `campaignVersionIds` ab.

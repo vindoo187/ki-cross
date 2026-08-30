@@ -776,6 +776,19 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
     // Tenant-weit zum Auswertungszeitpunkt gueltige Versionen (nicht nur die
     // deterministisch aufgeloeste Teilmenge), siehe fingerprint.ts.
     commissionModelVersionIds: commissionRows.map((r) => r.id),
+    // Phase 13 AP8 (echter Befund aus dem Reproduzierbarkeits-
+    // Regressionstest, ChatGPT-GO 2026-08-30): analog zu
+    // commissionModelVersionIds MUESSEN die zum Auswertungszeitpunkt
+    // tatsaechlich aktiven CampaignVersion-IDs Teil des Fingerprints sein --
+    // sonst aendert eine Campaign-Aktivierung/-Deaktivierung nach der ersten
+    // Auswertung einer Session bei sonst unveraendertem Input den Fingerprint
+    // NICHT, der Fast-Path greift faelschlich, und weder die
+    // CAMPAIGN_ACTIVE-Bedingungsauswertung noch die
+    // RecommendationCampaignSignal-Attribution werden fuer die neue
+    // Campaign-Version neu berechnet. activeCampaignContext ist oben bereits
+    // fuer genau diesen Zeitpunkt (ruleSetAt) geladen -- kein zusaetzlicher
+    // DB-Zugriff noetig.
+    campaignVersionIds: [...activeCampaignContext.values()].map((c) => c.campaignVersionId),
   };
   const evaluationFingerprint = computeEvaluationFingerprint(fingerprintInput);
 

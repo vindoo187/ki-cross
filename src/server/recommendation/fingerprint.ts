@@ -8,9 +8,9 @@
  * @@unique([tenantId, consultationSessionId, evaluationFingerprint])).
  *
  * Kanonisches Schema (alphabetische Top-Level-Schluessel):
- * algorithmVersion, answers, commissionModelVersionIds, productInputs,
- * questionnaireVersionId, ruleSetVersionId, sessionAttributes, sessionId,
- * tenantId.
+ * algorithmVersion, answers, campaignVersionIds, commissionModelVersionIds,
+ * productInputs, questionnaireVersionId, ruleSetVersionId, sessionAttributes,
+ * sessionId, tenantId.
  *
  * Kanonisierungsregeln:
  * - Objektschluessel werden rekursiv alphabetisch sortiert
@@ -31,6 +31,15 @@
  *   weit potenziell relevanten, gueltigen CommissionModelVersion-IDs, damit
  *   eine spaetere Provisionsaenderung (neue ACTIVE Version) den Fingerprint
  *   aendert und keine veraltete Recommendation wiederverwendet wird.
+ * - campaignVersionIds erfasst analog dazu die zum Auswertungszeitpunkt
+ *   (ruleSetAt/JETZT, siehe service.ts::loadActiveCampaignContext())
+ *   tatsaechlich aktiven CampaignVersion-IDs (Phase 13 AP8, echter Befund aus
+ *   dem Reproduzierbarkeits-Regressionstest: ohne dieses Feld aendert eine
+ *   Campaign-Aktivierung/-Deaktivierung nach der ersten Auswertung einer
+ *   Session bei sonst unveraendertem Input den Fingerprint NICHT, der
+ *   Fast-Path greift faelschlich, und weder die CAMPAIGN_ACTIVE-Bedingungs-
+ *   auswertung noch die RecommendationCampaignSignal-Attribution werden fuer
+ *   die neue Campaign-Version neu berechnet).
  */
 
 import { createHash } from "node:crypto";
@@ -66,6 +75,12 @@ export interface FingerprintInput {
   sessionAttributes: ReadonlyMap<string, string>;
   /** Tenant-weit zum Auswertungszeitpunkt gueltige CommissionModelVersion-IDs. */
   commissionModelVersionIds: string[];
+  /**
+   * Zum Auswertungszeitpunkt tatsaechlich aktive CampaignVersion-IDs (Phase 13
+   * AP8, siehe Modulkommentar) -- dieselbe Werte-Menge wie
+   * activeCampaignContext in service.ts, nur als IDs statt Map.
+   */
+  campaignVersionIds: string[];
 }
 
 /**
@@ -148,6 +163,7 @@ export function buildFingerprintObject(input: FingerprintInput): Record<string, 
   return {
     algorithmVersion: input.algorithmVersion,
     answers,
+    campaignVersionIds: [...input.campaignVersionIds].sort(),
     commissionModelVersionIds: [...input.commissionModelVersionIds].sort(),
     productInputs,
     questionnaireVersionId: input.questionnaireVersionId,
