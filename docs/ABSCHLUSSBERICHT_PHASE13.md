@@ -1,53 +1,61 @@
 # Abschlussbericht Phase 13: Campaign Management
 
 Stand: 2026-08-30. Basis-Commit (letzter Phase-12-Commit): `ff3ee76`
-("Phase 12 AP5b: Provider-Evaluierung"). Letzter Phase-13-Commit: `961bb82`
-("Phase 13 AP9: Dokumentation"). Maßgeblicher CI-Nachweis für den
-Gesamtabschluss: **CI #135** (GitHub Actions, Commit `961bb82`, "completed
-successfully", 4m 52s) unter
+("Phase 12 AP5b: Provider-Evaluierung"). Letzter Phase-13-Commit: `2ffef2f`
+("Fix CI #137: Prettier-Formatierung ABSCHLUSSBERICHT_PHASE13.md"). Der
+AP10-Abschlussbericht-Commit selbst deckte einen echten
+Nebenlaeufigkeits-Defekt in drei Publish-Workflows auf (siehe Abschnitt 10) -- dessen Fix ist Teil dieser Phase. Maßgeblicher CI-Nachweis für den
+Gesamtabschluss: **CI #138** (GitHub Actions, Commit `2ffef2f`, "completed
+successfully", 5m 35s) unter
 https://github.com/vindoo187/ki-cross/actions?query=branch%3Amain.
 
 ## 1. Commit-Historie mit CI-Status
 
-| CI #        | Commit        | Status         | Inhalt                                                                                                                        |
-| ----------- | ------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 109 (Basis) | `ff3ee76`     | ✅             | Phase 12 AP5b: Provider-Evaluierung (Anthropic/OpenAI/Mistral), kein Code                                                     |
-| 110         | `c9c2f73`     | ✅             | Phase 13 AP0: Discovery Campaign Management (kein Code)                                                                       |
-| 111         | `4f03e00`     | ✅             | Phase 13: Implementation Plan, basierend auf ChatGPT-Entscheidungen A–E                                                       |
-| —           | `c4da4d0`     | _kein CI-Lauf_ | Plan: drei ChatGPT-Detailentscheidungen eingearbeitet, AP1-GO — **enthielt versehentliche Massenlöschung, siehe Abschnitt 8** |
-| —           | `4e30b1e`     | _kein CI-Lauf_ | Fix: Massenlöschung aus `c4da4d0` rückgängig gemacht (außer `ci.yml`, PAT-Scope-Limit)                                        |
-| —           | `af0e456`     | _kein CI-Lauf_ | Plan-Wiederherstellung nach Massenlöschungs-Incident                                                                          |
-| 112         | `54868a7`     | ✅             | CI: `.github/workflows/ci.yml` wiederhergestellt (fehlte seit dem Incident, PAT jetzt mit workflow-Scope)                     |
-| 113         | `64042bd`     | ❌             | Phase 13 AP1: Campaign-Datenmodell & Versionierung                                                                            |
-| 114         | `f7c13b8`     | ✅             | AP1 Fix: fehlenden Unique-Index auf `campaign_versions` ergänzt                                                               |
-| 115         | `d9a7615`     | ❌             | AP2: Campaign-Management-Service (`campaign-admin.ts`)                                                                        |
-| 116         | `591beb1`     | ❌             | AP2 Fix: Prettier-Formatierung                                                                                                |
-| 117         | `55fe06a`     | ❌             | AP2 Fix 2: Prettier-Formatierung korrekt angewendet                                                                           |
-| 118         | `8991597`     | ❌             | AP2 Fix 3: `tsc --noEmit` (`noUncheckedIndexedAccess`) behoben                                                                |
-| 119         | `982695b`     | ✅             | AP2 Fix 4: FK-Verletzung in Integrationstests behoben                                                                         |
-| 120         | `af5e4a9`     | ❌             | AP3: API-Routen für Campaign-Management                                                                                       |
-| 121         | `10847da`     | ✅             | AP3 Fix 1: `campaignInput()` Zufalls-Key durch fixen Key ersetzt                                                              |
-| 122         | `f3dadcb`     | ❌             | AP4: `CAMPAIGN_ACTIVE`-Bedingung in Prioritization-/Cross-Selling-Engine                                                      |
-| 123         | `fb7712b`     | ✅             | AP4 Fix 1: `tsc`-Fehler durch erweitertes `ConditionSourceType` behoben                                                       |
-| 124         | `ec69141`     | ✅             | AP4: Tenant-Isolation-Test für `loadActiveCampaignKeys()` (ChatGPT-Nachforderung)                                             |
-| 125         | `30e6470`     | ✅             | AP4: Architekturentscheidung `ruleSetAt`/JETZT dokumentiert                                                                   |
-| 126         | `1542b88`     | ❌             | AP5: Konflikt-/Parallelitätslogik mehrerer aktiver Campaigns (Tests)                                                          |
-| 127         | `440dba0`     | ✅             | AP5 Fix 1: `tsc`-Fehler in `recommendation-campaign-conflict.test.ts` behoben                                                 |
-| 128         | `d6d2fda`     | ❌             | AP6: Admin-UI `/admin/campaigns`                                                                                              |
-| 129         | `64ce116`     | ❌             | AP6 Fix 1: ungenutztes `eslint-disable` entfernt                                                                              |
-| 130         | `4881bd2`     | ✅             | AP6 Fix 2: 422-Validate-Test nutzt echte-aber-inaktive Frage statt `randomUUID()`                                             |
-| 131         | `3a7528b`     | ✅             | AP7: Campaign-Attribution (`RecommendationCampaignSignal`)                                                                    |
-| 132         | `3989ff1`     | ❌             | AP8: Security/Regression/E2E für Campaign Management                                                                          |
-| 133         | `2429cd6`     | ❌             | AP8 Fix 1: `evaluationFingerprint` um `campaignVersionIds` ergänzt (echter Defekt aus CI #132)                                |
-| 134         | `c6be8b8`     | ✅             | AP8 Fix 2: Kampagnenname in `admin-campaigns.spec.ts` projekt-/retry-eindeutig gemacht (Tablet-Flake aus CI #133)             |
-| **135**     | **`961bb82`** | **✅**         | **AP9: Dokumentation (`DATA_MODEL.md` + `RECOMMENDATION_ENGINE.md`)**                                                         |
+| CI #        | Commit        | Status         | Inhalt                                                                                                                          |
+| ----------- | ------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 109 (Basis) | `ff3ee76`     | ✅             | Phase 12 AP5b: Provider-Evaluierung (Anthropic/OpenAI/Mistral), kein Code                                                       |
+| 110         | `c9c2f73`     | ✅             | Phase 13 AP0: Discovery Campaign Management (kein Code)                                                                         |
+| 111         | `4f03e00`     | ✅             | Phase 13: Implementation Plan, basierend auf ChatGPT-Entscheidungen A–E                                                         |
+| —           | `c4da4d0`     | _kein CI-Lauf_ | Plan: drei ChatGPT-Detailentscheidungen eingearbeitet, AP1-GO — **enthielt versehentliche Massenlöschung, siehe Abschnitt 8**   |
+| —           | `4e30b1e`     | _kein CI-Lauf_ | Fix: Massenlöschung aus `c4da4d0` rückgängig gemacht (außer `ci.yml`, PAT-Scope-Limit)                                          |
+| —           | `af0e456`     | _kein CI-Lauf_ | Plan-Wiederherstellung nach Massenlöschungs-Incident                                                                            |
+| 112         | `54868a7`     | ✅             | CI: `.github/workflows/ci.yml` wiederhergestellt (fehlte seit dem Incident, PAT jetzt mit workflow-Scope)                       |
+| 113         | `64042bd`     | ❌             | Phase 13 AP1: Campaign-Datenmodell & Versionierung                                                                              |
+| 114         | `f7c13b8`     | ✅             | AP1 Fix: fehlenden Unique-Index auf `campaign_versions` ergänzt                                                                 |
+| 115         | `d9a7615`     | ❌             | AP2: Campaign-Management-Service (`campaign-admin.ts`)                                                                          |
+| 116         | `591beb1`     | ❌             | AP2 Fix: Prettier-Formatierung                                                                                                  |
+| 117         | `55fe06a`     | ❌             | AP2 Fix 2: Prettier-Formatierung korrekt angewendet                                                                             |
+| 118         | `8991597`     | ❌             | AP2 Fix 3: `tsc --noEmit` (`noUncheckedIndexedAccess`) behoben                                                                  |
+| 119         | `982695b`     | ✅             | AP2 Fix 4: FK-Verletzung in Integrationstests behoben                                                                           |
+| 120         | `af5e4a9`     | ❌             | AP3: API-Routen für Campaign-Management                                                                                         |
+| 121         | `10847da`     | ✅             | AP3 Fix 1: `campaignInput()` Zufalls-Key durch fixen Key ersetzt                                                                |
+| 122         | `f3dadcb`     | ❌             | AP4: `CAMPAIGN_ACTIVE`-Bedingung in Prioritization-/Cross-Selling-Engine                                                        |
+| 123         | `fb7712b`     | ✅             | AP4 Fix 1: `tsc`-Fehler durch erweitertes `ConditionSourceType` behoben                                                         |
+| 124         | `ec69141`     | ✅             | AP4: Tenant-Isolation-Test für `loadActiveCampaignKeys()` (ChatGPT-Nachforderung)                                               |
+| 125         | `30e6470`     | ✅             | AP4: Architekturentscheidung `ruleSetAt`/JETZT dokumentiert                                                                     |
+| 126         | `1542b88`     | ❌             | AP5: Konflikt-/Parallelitätslogik mehrerer aktiver Campaigns (Tests)                                                            |
+| 127         | `440dba0`     | ✅             | AP5 Fix 1: `tsc`-Fehler in `recommendation-campaign-conflict.test.ts` behoben                                                   |
+| 128         | `d6d2fda`     | ❌             | AP6: Admin-UI `/admin/campaigns`                                                                                                |
+| 129         | `64ce116`     | ❌             | AP6 Fix 1: ungenutztes `eslint-disable` entfernt                                                                                |
+| 130         | `4881bd2`     | ✅             | AP6 Fix 2: 422-Validate-Test nutzt echte-aber-inaktive Frage statt `randomUUID()`                                               |
+| 131         | `3a7528b`     | ✅             | AP7: Campaign-Attribution (`RecommendationCampaignSignal`)                                                                      |
+| 132         | `3989ff1`     | ❌             | AP8: Security/Regression/E2E für Campaign Management                                                                            |
+| 133         | `2429cd6`     | ❌             | AP8 Fix 1: `evaluationFingerprint` um `campaignVersionIds` ergänzt (echter Defekt aus CI #132)                                  |
+| 134         | `c6be8b8`     | ✅             | AP8 Fix 2: Kampagnenname in `admin-campaigns.spec.ts` projekt-/retry-eindeutig gemacht (Tablet-Flake aus CI #133)               |
+| 135         | `961bb82`     | ✅             | AP9: Dokumentation (`DATA_MODEL.md` + `RECOMMENDATION_ENGINE.md`)                                                               |
+| 136         | `131d275`     | ❌             | AP10: Abschlussbericht Phase 13 verfassen — deckte echten `now`-vor-Lock-Nebenlaeufigkeitsdefekt auf, siehe Abschnitt 10        |
+| 137         | `a6a7f12`     | ❌             | AP10 Fix: `now`-vor-Lock-Defekt in drei Publish-Workflows behoben — CI schlug an Prettier-Formatierung des Berichts selbst fehl |
+| **138**     | **`2ffef2f`** | **✅**         | **Fix CI #137: Prettier-Formatierung `ABSCHLUSSBERICHT_PHASE13.md`**                                                            |
 
-Von 29 Commits im Phase-13-Bereich wurden 26 durch CI geprüft (die drei
+Von 32 Commits im Phase-13-Bereich wurden 29 durch CI geprüft (die drei
 Commits des Massenlöschungs-Incidents liefen ohne CI, da die
-Workflow-Datei selbst zeitweise fehlte, siehe Abschnitt 8). Elf der 26
+Workflow-Datei selbst zeitweise fehlte, siehe Abschnitt 8). Dreizehn der 29
 CI-Läufe schlugen zunächst fehl und wurden im jeweils folgenden Commit
-behoben — durchweg AP-interne Fix-Iterationen, keine rückwirkenden
-Korrekturen an bereits abgenommenen Arbeitspaketen.
+behoben — davon zwei (CI #136/#137) im Zuge von AP10 selbst, ausgeloest
+durch den in Abschnitt 10 dokumentierten echten Nebenlaeufigkeitsdefekt
+und dessen Formatierungs-Nachbesserung; alle uebrigen sind AP-interne
+Fix-Iterationen, keine rückwirkenden Korrekturen an bereits abgenommenen
+Arbeitspaketen.
 
 ## 2. Technische Versionen
 
@@ -373,22 +381,26 @@ install`) und `node --experimental-strip-types --check` für
 `.ts`-Syntaxprüfung beschränkt (funktioniert nicht für `.tsx`). Die volle
 `tsc`-Typprüfung und der komplette Test-Lauf (Unit/Integration/E2E gegen
 echten PostgreSQL-Service-Container) laufen ausschließlich in GitHub
-Actions CI — siehe Abschnitt 1 für alle 26 CI-Läufe der Phase, CI #135
-(Commit `961bb82`) als letzter, vollständig grüner Lauf: alle Vitest-Unit-
-und Integrationstests (1019 Testfälle über 80 Dateien), alle 28
-Playwright-E2E-Testläufe (Desktop + Tablet, 14 Testfälle × 2 Projekte, 4m
-52s Gesamtlaufzeit), `tsc --noEmit` ohne Fehler, ESLint ohne Fehler,
-Prettier-Formatierung konsistent.
+Actions CI — siehe Abschnitt 1 für alle 29 CI-Läufe der Phase, CI #138
+(Commit `2ffef2f`) als letzter, vollständig grüner Lauf: alle Vitest-Unit-
+und Integrationstests (1019 Testfälle über 80 Dateien, unveraendert
+gegenueber CI #135 -- der AP10-Fix aenderte nur Implementierung, keine
+Tests), alle 28 Playwright-E2E-Testläufe (Desktop + Tablet, 14 Testfälle ×
+2 Projekte, 5m 35s Gesamtlaufzeit), `tsc --noEmit` ohne Fehler, ESLint
+ohne Fehler, Prettier-Formatierung konsistent.
 
 ## 16. Vollständige Liste erstellter und geänderter Dateien
 
-`git diff --stat ff3ee76..961bb82 -- . ':!package-lock.json'` (54 Dateien
-geändert, 8913 Zeilen hinzugefügt, 32 Zeilen entfernt, keine
-Dependency-Änderungen):
+`git diff --stat ff3ee76..2ffef2f -- . ':!package-lock.json'` (56 Dateien
+geändert, 9536 Zeilen hinzugefügt, 34 Zeilen entfernt, keine
+Dependency-Änderungen -- Differenz zur AP9-Zwischenzählung: 2 zusätzliche
+Dateien (`commission-admin.ts`, `rule-admin.ts`) durch den in Abschnitt 10
+dokumentierten AP10-Nebenläufigkeitsfix):
 
 ```
+docs/ABSCHLUSSBERICHT_PHASE13.md                                            | 501 ++++++++++
 docs/DATA_MODEL.md                                                          |  18 +-
-docs/DECISION_LOG.md                                                        | 192 +++++
+docs/DECISION_LOG.md                                                        | 275 +++++++
 docs/PHASE_13_DISCOVERY.md                                                  | 214 ++++++
 docs/PHASE_13_IMPLEMENTATION_PLAN.md                                        | 267 +++++++
 docs/RECOMMENDATION_ENGINE.md                                               |  64 +-
@@ -413,10 +425,11 @@ src/components/admin/CampaignVersionHistoryPanel.tsx                      |  61 
 src/components/admin/CreateCampaignButton.tsx                             | 118 +++
 src/components/admin/CreateDraftCampaignVersionButton.tsx                 | 120 +++
 src/server/admin/campaign-admin-errors.ts                                 | 123 +++
-src/server/admin/campaign-admin.ts                                        | 843 +++++++++++
+src/server/admin/campaign-admin.ts                                        | 861 +++++++++++++
 src/server/admin/campaign-schemas.ts                                       | 117 +++
 src/server/admin/campaign-scope-options.ts                                |  65 ++
-src/server/admin/rule-admin.ts                                             |  38 +
+src/server/admin/commission-admin.ts                                      |  13 +-
+src/server/admin/rule-admin.ts                                             |  48 +-
 src/server/admin/rule-schemas.ts                                           |  11 +-
 src/server/authz/config-permissions.ts                                    |  15 +-
 src/server/authz/seed-role-permissions.ts                                 |  22 +-
@@ -441,7 +454,7 @@ tests/unit/recommendation/conditions.test.ts                              | 255 
 tests/unit/recommendation/cross-selling.test.ts                           |  46 +-
 tests/unit/recommendation/fingerprint.test.ts                             |  17 +
 tests/unit/recommendation/prioritization.test.ts                          | 153 ++++
-54 files changed, 8913 insertions(+), 32 deletions(-)
+56 files changed, 9536 insertions(+), 34 deletions(-)
 ```
 
 ## 17. Vollständige bekannte Einschränkungen
@@ -494,8 +507,15 @@ Reproduzierbarkeitsdefekt im Idempotenz-Fingerprint der
 Recommendation-Engine auf, der korrekt durch eine Erweiterung der
 bestehenden Fingerprint-Struktur (nicht durch Abschwächung des Tests)
 behoben wurde — dieselbe Vorgehensweise, die bereits in früheren Phasen
-etabliert war. Der finale Commit `961bb82` ist durch CI #135 vollständig
-grün verifiziert (1019 Unit-/Integrationstests, 28 E2E-Testläufe, `tsc`,
-ESLint, Prettier). Offene, bewusst zurückgestellte Punkte
-(Cross-Selling-Attribution, KPI-Dashboard) sind dokumentiert und
+etabliert war. Der AP10-Abschlussbericht-Commit selbst deckte einen
+weiteren echten Nebenläufigkeitsdefekt auf (`now`-Zeitstempel vor statt
+nach dem jeweiligen Row-Lock in `publishCampaignVersion()`), der bei einem
+projektweiten, nicht-prophylaktischen Audit als identisches Muster auch in
+zwei Phase-9/10-Publish-Workflows gefunden und dort ebenfalls sauber
+behoben wurde, statt nur dokumentiert zu werden -- ein weiterer Beleg
+dafür, dass Regressionstests in diesem Projekt ernst genommen und nicht
+abgeschwächt werden. Der finale Commit `2ffef2f` ist durch CI #138
+vollständig grün verifiziert (1019 Unit-/Integrationstests, 28
+E2E-Testläufe, `tsc`, ESLint, Prettier). Offene, bewusst zurückgestellte
+Punkte (Cross-Selling-Attribution, KPI-Dashboard) sind dokumentiert und
 nicht Teil des Phase-13-Scopes.
