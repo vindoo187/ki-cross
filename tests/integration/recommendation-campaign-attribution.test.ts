@@ -21,6 +21,17 @@
  * aktive, aber von keiner Regel referenzierte/getroffene Campaign erzeugt
  * KEIN Signal, (6) Tenant-Isolation der Signal-Tabelle.
  *
+ * Phase 13 AP8 (Security/Regression/E2E, ChatGPT-GO 2026-08-30) ergaenzt
+ * einen expliziten Reproduzierbarkeits-Regressionstest (verbindlich
+ * gefordert: "nicht nur pruefen, dass die Zeile noch existiert -- die
+ * gespeicherten IDs muessen explizit vor und nach dem Publish verglichen
+ * werden"): eine bereits geschriebene RecommendationCampaignSignal-Zeile
+ * behaelt ihre campaignVersionId unveraendert, auch nachdem eine NEUE
+ * CampaignVersion derselben Campaign veroeffentlicht wurde -- und eine
+ * NACH diesem Publish neu erzeugte Recommendation referenziert bereits die
+ * neue Version. Identisches Historisierungsprinzip wie
+ * `DealItem.commissionModelVersionId` (Phase 10 AP6).
+ *
  * Ohne DATABASE_URL wird die gesamte Suite uebersprungen statt fehlzuschlagen.
  */
 
@@ -29,6 +40,7 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, describe, expect, it } from "vitest";
 import { runWithTenantContext } from "@/server/tenant/context";
 import { evaluate } from "@/server/recommendation/service";
+import { createDraftCampaignVersion, publishCampaignVersion } from "@/server/admin/campaign-admin";
 
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 
@@ -71,7 +83,7 @@ describe.skipIf(!hasDatabaseUrl)(
       const employee = await rawClient.employee.create({
         data: { tenantId: tenant.id, storeId: store.id, userId: user.id, displayName: `MA ${key}` },
       });
-      return { tenantId: tenant.id, storeId: store.id, employeeId: employee.id };
+      return { tenantId: tenant.id, storeId: store.id, employeeId: employee.id, userId: user.id };
     }
 
     /** Fragebogen mit genau einer optionalen BOOLEAN-Frage, ohne Sichtbarkeitsbedingungen. */
@@ -557,6 +569,84 @@ describe.skipIf(!hasDatabaseUrl)(
         where: { campaignId: campaignB.campaignId },
       });
       expect(rowsB.every((r) => r.tenantId === otherTenant.tenantId)).toBe(true);
+    });
+
+    it("Reproduzierbarkeit (Phase 13 AP8): campaignVersionId einer bereits geschriebenen Signal-Zeile bleibt nach einem spaeteren Publish unveraendert; eine NEUE Recommendation nach dem Publish referenziert die neue Version", async () => {
+      const t = await setUpTenantWithSession("signal-reproducibility");
+      const campaign = await createActiveTenantCampaign(t.tenantId, "reproducibility-sale");
+      const originalActiveVersionId = campaign.campaignVersionId;
+
+      const rule = await rawClient.prioritizationRule.create({
+        data: {
+          tenantId: t.tenantId,
+          ruleSetVersionId: t.ruleSetVersionId,
+          key: "bonus-reproducibility",
+          description: "Campaign-Bonus fuer Reproduzierbarkeitstest.",
+          weight: 25,
+          commissionRequired: false,
+        },
+      });
+      await addCampaignActiveConditionToPrioritizationRule(
+        t.tenantId,
+        rule.id,
+        campaign.campaignKey,
+      );
+
+      // --- Schritt 1: Recommendation zu T1 auswerten -- Signal referenziert
+      // die zu diesem Zeitpunkt aktive Version V1. ---
+      const resultAtV1 = await asTenant(t.tenantId, () => evaluate(t.sessionId));
+      expect(resultAtV1.items[0]?.campaignSignals).toHaveLength(1);
+      const signalId = resultAtV1.items[0]!.campaignSignals[0]!.id;
+      expect(resultAtV1.items[0]?.campaignSignals[0]?.campaignVersionId).toBe(
+        originalActiveVersionId,
+      );
+
+      // Direkte DB-Kontrolle des IST-Zustands VOR dem Publish (nicht nur
+      // ueber das zusammengesetzte Lese-DTO).
+      const signalBeforePublish = await rawClient.recommendationCampaignSignal.findUniqueOrThrow({
+        where: { id: signalId },
+      });
+      expect(signalBeforePublish.campaignVersionId).toBe(originalActiveVersionId);
+
+      // --- Schritt 2: eine NEUE CampaignVersion (V2) erstellen und ECHT
+      // ueber den bestehenden publishCampaignVersion()-Service-Pfad
+      // veroeffentlichen (keine Rohmanipulation) -- das expiriert V1 und
+      // aktiviert V2. ---
+      // publishCampaignVersion()/createDraftCampaignVersion() schreiben einen
+      // AuditLog-Eintrag mit einer echten FK auf User -- anders als
+      // asTenant() (fingierte randomUUID() als userId, ausreichend fuer
+      // evaluate(), das keinen actorUserId referenziert) wird hier daher der
+      // ECHTE, in createTenant() angelegte User verwendet.
+      const newVersionId = await runWithTenantContext(
+        { tenantId: t.tenantId, userId: t.userId, roles: [], managementScope: null },
+        async () => {
+          const draft = await createDraftCampaignVersion(campaign.campaignId, {
+            scopeType: "TENANT",
+            scopeId: t.tenantId,
+          });
+          await publishCampaignVersion(campaign.campaignId, draft.id);
+          return draft.id;
+        },
+      );
+      expect(newVersionId).not.toBe(originalActiveVersionId);
+
+      // --- Schritt 3: dieselbe, bereits VOR dem Publish geschriebene
+      // Signal-Zeile erneut aus der DB laden -- campaignVersionId MUSS
+      // weiterhin V1 sein, NICHT rueckwirkend auf V2 aktualisiert. ---
+      const signalAfterPublish = await rawClient.recommendationCampaignSignal.findUniqueOrThrow({
+        where: { id: signalId },
+      });
+      expect(signalAfterPublish.campaignVersionId).toBe(originalActiveVersionId);
+      expect(signalAfterPublish.campaignVersionId).not.toBe(newVersionId);
+
+      // --- Schritt 4: eine NEUE Auswertung DERSELBEN Session NACH dem
+      // Publish erzeugt eine neue Recommendation, deren Signal bereits V2
+      // referenziert -- historische Trennung: alte Recommendation -> V1,
+      // neue Recommendation -> V2. ---
+      const resultAtV2 = await asTenant(t.tenantId, () => evaluate(t.sessionId));
+      expect(resultAtV2.items[0]?.campaignSignals).toHaveLength(1);
+      expect(resultAtV2.items[0]?.campaignSignals[0]?.campaignVersionId).toBe(newVersionId);
+      expect(resultAtV2.id).not.toBe(resultAtV1.id);
     });
   },
 );

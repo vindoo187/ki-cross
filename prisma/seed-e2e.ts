@@ -93,6 +93,13 @@ async function seedGlobalCatalog() {
     "config.commissions.publish",
     "config.goals.view",
     "config.goals.edit",
+    // Phase 13 AP8 (E2E-Suite fuer /admin/campaigns): analog den anderen
+    // drei Gruppen erhalten config_editor/config_publisher config.campaigns.*
+    // automatisch ueber permissionKeysForSeedRole() (Phase 13 AP1, siehe
+    // dortigen Modulkommentar) -- hier nur der Permission-Katalog-Eintrag.
+    "config.campaigns.view",
+    "config.campaigns.edit",
+    "config.campaigns.publish",
   ];
   const permissions = await Promise.all(
     rulePermissionKeys.map((key) =>
@@ -274,6 +281,26 @@ async function seedTenantA(
       commissionType: CommissionType.FLAT,
       currency: "EUR",
       commissionAmountMinor: 4200,
+    },
+  });
+
+  // Phase 13 AP8: Campaign + eine ACTIVE, TENANT-gescopte CampaignVersion
+  // fuer die /admin/campaigns-E2E-Suite (tests/e2e/admin-campaigns.spec.ts) --
+  // analog dem CommissionModel-Fixture oben, dient als Ausgangspunkt fuer
+  // den "Neuen Entwurf erstellen"-Fluss.
+  const campaign = await prisma.campaign.create({
+    data: { tenantId, key: "e2e-sommeraktion", name: "E2E Sommeraktion" },
+  });
+  const campaignVersion = await prisma.campaignVersion.create({
+    data: {
+      tenantId,
+      campaignId: campaign.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      scopeType: "TENANT",
+      scopeId: tenantId,
+      validFrom: VALID_FROM,
+      validTo: null,
     },
   });
 
@@ -670,6 +697,8 @@ async function seedTenantA(
     commissionModelId: commissionModel.id,
     commissionModelVersionId: commissionModelVersion.id,
     commissionModelSecondaryId: commissionModelSecondary.id,
+    campaignId: campaign.id,
+    campaignVersionId: campaignVersion.id,
     configEditorAdmin: { email: configEditorEmail, password: E2E_ADMIN_PASSWORD },
     configPublisherAdmin: { email: configPublisherEmail, password: E2E_ADMIN_PASSWORD },
   };
@@ -787,6 +816,25 @@ async function seedTenantB() {
     },
   });
 
+  // Phase 13 AP8: minimale Campaign + CampaignVersion fuer den negativen
+  // /admin/campaigns-Tenant-Isolationstest (Tenant-A-Admin versucht per
+  // manipulierter URL auf eine CampaignVersion von Tenant B zuzugreifen).
+  const campaignB = await prisma.campaign.create({
+    data: { tenantId, key: "e2e-b-kampagne", name: "E2E B Kampagne" },
+  });
+  const campaignVersionB = await prisma.campaignVersion.create({
+    data: {
+      tenantId,
+      campaignId: campaignB.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      scopeType: "TENANT",
+      scopeId: tenantId,
+      validFrom: VALID_FROM,
+      validTo: null,
+    },
+  });
+
   return {
     ...base,
     consultationSessionId: session.id,
@@ -794,6 +842,8 @@ async function seedTenantB() {
     ruleSetVersionId: ruleSetVersion.id,
     commissionModelId: commissionModelB.id,
     commissionModelVersionId: commissionModelVersionB.id,
+    campaignId: campaignB.id,
+    campaignVersionId: campaignVersionB.id,
   };
 }
 
@@ -825,6 +875,8 @@ async function main() {
       commissionModelId: tenantA.commissionModelId,
       commissionModelVersionId: tenantA.commissionModelVersionId,
       commissionModelSecondaryId: tenantA.commissionModelSecondaryId,
+      campaignId: tenantA.campaignId,
+      campaignVersionId: tenantA.campaignVersionId,
       configEditorAdmin: tenantA.configEditorAdmin,
       configPublisherAdmin: tenantA.configPublisherAdmin,
     },
@@ -836,6 +888,8 @@ async function main() {
       ruleSetVersionId: tenantB.ruleSetVersionId,
       commissionModelId: tenantB.commissionModelId,
       commissionModelVersionId: tenantB.commissionModelVersionId,
+      campaignId: tenantB.campaignId,
+      campaignVersionId: tenantB.campaignVersionId,
     },
   };
   writeFileSync(SEED_OUTPUT_PATH, JSON.stringify(output, null, 2), "utf-8");

@@ -33,9 +33,15 @@ export interface E2eSeedOutput {
      * Modell NICHT veraendern).
      */
     commissionModelSecondaryId: string;
-    /** config.rules.view+edit + config.commissions.view+edit, KEIN .publish. */
+    /**
+     * Campaign mit einer ACTIVE, TENANT-gescopten CampaignVersion (Phase 13
+     * AP8, /admin/campaigns-E2E-Suite).
+     */
+    campaignId: string;
+    campaignVersionId: string;
+    /** config.rules.view+edit + config.commissions.view+edit + config.campaigns.view+edit, KEIN .publish. */
     configEditorAdmin: E2eAdminCredentials;
-    /** config.rules.view+edit+publish + config.commissions.view+edit+publish. */
+    /** config.rules.view+edit+publish + config.commissions.view+edit+publish + config.campaigns.view+edit+publish. */
     configPublisherAdmin: E2eAdminCredentials;
   };
   tenantB: {
@@ -48,6 +54,9 @@ export interface E2eSeedOutput {
     /** Fuer den negativen /admin/commissions-Tenant-Isolationstest (Phase 10 AP9). */
     commissionModelId: string;
     commissionModelVersionId: string;
+    /** Fuer den negativen /admin/campaigns-Tenant-Isolationstest (Phase 13 AP8). */
+    campaignId: string;
+    campaignVersionId: string;
   };
 }
 
