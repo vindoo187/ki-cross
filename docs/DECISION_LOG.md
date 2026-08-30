@@ -648,3 +648,103 @@ deckt Zeitfenster-Grenzen (DRAFT/EXPIRED/noch-nicht-gueltig zaehlen nicht
 als aktiv), TENANT-/STORE-Scope, mehrere gleichzeitig aktive Campaigns
 sowie Tenant-Isolation (identischer `Campaign.key` in fremdem Mandanten
 zaehlt nicht als aktiv) ab.
+
+## Phase 13 AP7: Campaign-Attribution nur fuer PrioritizationRule -> RecommendationItem, Cross-Selling-Attribution ist eine bekannte, bewusst zurueckgestellte Luecke
+
+**Kontext:** AP7 sollte technisch nachvollziehbar machen, WELCHE aktiven
+Campaigns tatsaechlich zu einer Empfehlung beigetragen haben (Vorstufe fuer
+spaetere Campaign-Analytics/Reporting, siehe
+[[Phase 13 AP4: Campaign-Aktivitaet wird zum Auswertungszeitpunkt (ruleSetAt) aufgeloest, nicht an den Session-Start gepinnt]]
+oben, das die CAMPAIGN_ACTIVE-Bedingung selbst eingefuehrt hat). Bereits
+in der `20260824180000_campaign_management`-Migration (gleichzeitig mit
+AP1) existierte im Schema eine dedizierte Tabelle
+`RecommendationCampaignSignal` mit FK ausschliesslich auf
+`RecommendationItem` -- ohne dass zu diesem Zeitpunkt Code hineinschrieb.
+Diese FK-Struktur legt die Architektur strukturell fest: eine Signal-Zeile
+kann nur einem `RecommendationItem` zugeordnet werden, es gibt KEINE
+FK-Moeglichkeit auf `RecommendationCrossSellingSignal`.
+
+**Entscheidung 1 (ChatGPT, 2026-08-30):** `RecommendationCampaignSignal`
+bleibt die Architektur -- kein Rueckbau auf eine polymorphe Erweiterung
+von `RecommendationRationale`, keine Ruecknahme der Migration.
+
+**Entscheidung 2 (ChatGPT, 2026-08-30):** Der AP7-Scope ist bewusst auf
+**PrioritizationRule -> RecommendationItem** beschraenkt. Eine
+`CrossSellingRule` kann seit AP4 ebenfalls eine `CAMPAIGN_ACTIVE`-Bedingung
+nutzen und ueber sie matchen (siehe
+`tests/integration/recommendation-campaign-active.test.ts`, Testfall
+"CrossSellingRule: CAMPAIGN_ACTIVE-Bedingung erzeugt ein Signal") -- diese
+Treffer erzeugen bewusst KEIN `RecommendationCampaignSignal`, weil die
+Tabelle dafuer strukturell keinen Attributionspunkt vorsieht
+(`RecommendationCrossSellingSignal` ist keine `RecommendationItem`-Zeile).
+Diese Luecke ist ChatGPTs ausdruecklicher, dokumentierter Beschluss, keine
+versehentliche Unvollstaendigkeit: eine polymorphe Erweiterung der
+Signal-Tabelle (z. B. optionale `recommendationCrossSellingSignalId`-
+Spalte) waere moeglich, wurde aber bewusst NICHT im Rahmen von AP7
+nachgezogen, um den Scope klein und pruefbar zu halten. Cross-Selling-
+Campaign-Attribution bleibt damit ein bekannter, spaeter zu behebender
+Nachtrag fuer eine kuenftige Phase, sobald ein konkreter
+Reporting-/Analytics-Bedarf dafuer entsteht.
+
+**Entscheidung 3 (ChatGPT, 2026-08-30):** Statt den bestehenden
+Rueckgabevertrag von `loadActiveCampaignKeys()` (`Set<string>`, siehe AP4)
+zu aendern, erhaelt `service.ts` eine NEUE Funktion
+`loadActiveCampaignContext()` mit Rueckgabetyp
+`Map<campaignKey, { campaignId, campaignVersionId }>`. Der bisherige
+`Set<string>`-Pfad (fuer die reine, bereits abgenommene
+Bedingungsauswertung in `conditions.ts`) wird direkt aus
+`context.keys()` abgeleitet -- eine einzige Query/ein einziger
+Auswertungszeitpunkt fuer Campaign-Aktivitaet UND -Attribution, kein
+zweiter, potenziell inkonsistenter Datenbankzugriff. Das Verfahren, WELCHE
+Campaigns tatsaechlich zu einer getroffenen `PrioritizationRule`
+beigetragen haben, dupliziert bewusst die DNF-Gruppierungslogik von
+`evaluateConditionGroups()` in einer neuen, rein lesenden Funktion
+`extractMatchedCampaignActiveKeys()` (`conditions.ts`), statt die bereits
+abgenommene Funktion umzubauen -- beide verwenden dieselbe
+`evaluateCondition()`-Primitive und sind daher garantiert konsistent.
+
+**Attributionsregeln (verbindlich, ChatGPT 2026-08-30):**
+
+- Nur tatsaechlich GETROFFENE `PrioritizationRule`s werden attribuiert;
+  eine referenzierte, aber ueber ihre DNF-Gruppe nicht getroffene Campaign
+  (z. B. in einem nicht erfuellten OR-Zweig) wird NICHT attribuiert.
+- Nur der Operator `IS_ANSWERED` traegt zur Attribution bei.
+  `IS_NOT_ANSWERED` (Abwesenheits-Match: "diese Campaign ist gerade NICHT
+  aktiv") erzeugt bewusst KEIN Signal fuer die referenzierte Campaign --
+  hier war die Abwesenheit die Matchbedingung, keine inhaltliche
+  Zurechnung zu dieser Campaign.
+- Mehrere `PrioritizationRule`s, die dieselbe Campaign fuer dasselbe
+  `RecommendationItem` referenzieren, erzeugen MAXIMAL EIN Signal
+  (Deduplizierung ueber ein `Set` in `evaluatePrioritizationRules()`,
+  explizit getestet).
+- `campaignId`/`campaignVersionId` stammen aus derselben
+  `loadActiveCampaignContext()`-Aufloesung wie die Regelbewertung selbst
+  (identischer `ruleSetAt`-Zeitpunkt, siehe AP4-Eintrag oben).
+- Die Signal-Schreibung erfolgt ATOMAR in derselben Transaktion wie
+  `recommendation.create()`/`recommendationItem.create()` -- bei Rollback
+  bleibt kein Signal zurueck.
+- Fuer lediglich aktive, aber von keiner getroffenen Regel referenzierte
+  Campaigns entsteht kein Signal.
+
+**Code:** `conditions.ts::extractMatchedCampaignActiveKeys()` (neu),
+`types.ts::PrioritizationResult.matchedCampaignKeys` (neu),
+`prioritization.ts::evaluatePrioritizationRules()` (dedupliziert und
+sortiert `matchedCampaignKeys` ueber alle getroffenen Regeln),
+`service.ts::loadActiveCampaignContext()` (ersetzt
+`loadActiveCampaignKeys()`), `service.ts::evaluate()` (Signal-Schreibpfad
+in der bestehenden Transaktion je `RecommendationItem`),
+`service.ts::loadRecommendationResult()` (einfache Lesefunktion:
+`campaignSignals`-Include + Mapping auf `RecommendationCampaignSignalResult`,
+bewusst KEINE neue Reporting-API/KPI-Berechnung).
+
+**Test:** `tests/unit/recommendation/conditions.test.ts`
+("extractMatchedCampaignActiveKeys") und
+`tests/unit/recommendation/prioritization.test.ts`
+("evaluatePrioritizationRules - matchedCampaignKeys") decken die reine
+Zuordnungslogik ab (inkl. OR-Gruppen, AND-Gruppen, IS_NOT_ANSWERED,
+Dedup/Sortierung). `tests/integration/recommendation-campaign-attribution.test.ts`
+deckt gegen eine echte Postgres-DB ab: Signal-Erzeugung bei Treffer,
+Deduplizierung ueber zwei Regeln mit derselben Campaign, kein Signal bei
+IS_NOT_ANSWERED, kein Signal bei einem CrossSellingRule-Match (dokumentierte
+Luecke), kein Signal bei einer lediglich aktiven, unreferenzierten
+Campaign, OR-Gruppen-Korrektheit sowie Tenant-Isolation der Signal-Tabelle.

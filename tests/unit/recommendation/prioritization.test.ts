@@ -164,3 +164,122 @@ describe("evaluatePrioritizationRules", () => {
     expect(result.rationales.map((r) => r.commissionModelVersionId)).toEqual(["cmv-a", "cmv-b"]);
   });
 });
+
+describe("evaluatePrioritizationRules - matchedCampaignKeys (Phase 13 AP7)", () => {
+  it("liefert den Campaign-Key einer getroffenen CAMPAIGN_ACTIVE-Regel", () => {
+    const conditions = [
+      {
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE" as const,
+        attributeKey: "summer-sale",
+        operator: "IS_ANSWERED" as const,
+        comparisonValue: "",
+      },
+    ];
+    const result = evaluatePrioritizationRules(
+      [rule({ key: "campaign_bonus", weight: 15, conditions })],
+      "prod-1",
+      { ...emptyContext, activeCampaignKeys: new Set(["summer-sale"]) },
+      () => resolution,
+    );
+    expect(result.matchedCampaignKeys).toEqual(["summer-sale"]);
+  });
+
+  it("leer, wenn keine Regel matcht", () => {
+    const conditions = [
+      {
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE" as const,
+        attributeKey: "summer-sale",
+        operator: "IS_ANSWERED" as const,
+        comparisonValue: "",
+      },
+    ];
+    const result = evaluatePrioritizationRules(
+      [rule({ key: "campaign_bonus", weight: 15, conditions })],
+      "prod-1",
+      emptyContext,
+      () => resolution,
+    );
+    expect(result.matchedCampaignKeys).toEqual([]);
+  });
+
+  it("leer fuer eine getroffene Regel OHNE CAMPAIGN_ACTIVE-Bedingung", () => {
+    const result = evaluatePrioritizationRules(
+      [rule({ key: "plain", weight: 10 })],
+      "prod-1",
+      emptyContext,
+      () => resolution,
+    );
+    expect(result.matchedCampaignKeys).toEqual([]);
+  });
+
+  it("dedupliziert ueber MEHRERE getroffene Regeln, die dieselbe Campaign referenzieren, und sortiert das Ergebnis", () => {
+    const conditionsA = [
+      {
+        id: "ca",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE" as const,
+        attributeKey: "zeta-sale",
+        operator: "IS_ANSWERED" as const,
+        comparisonValue: "",
+      },
+    ];
+    const conditionsB = [
+      {
+        id: "cb",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE" as const,
+        attributeKey: "alpha-sale",
+        operator: "IS_ANSWERED" as const,
+        comparisonValue: "",
+      },
+    ];
+    const conditionsC = [
+      {
+        id: "cc",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE" as const,
+        attributeKey: "zeta-sale",
+        operator: "IS_ANSWERED" as const,
+        comparisonValue: "",
+      },
+    ];
+    const result = evaluatePrioritizationRules(
+      [
+        rule({ key: "a", weight: 10, conditions: conditionsA }),
+        rule({ key: "b", weight: 20, conditions: conditionsB }),
+        rule({ key: "c", weight: 5, conditions: conditionsC }),
+      ],
+      "prod-1",
+      { ...emptyContext, activeCampaignKeys: new Set(["zeta-sale", "alpha-sale"]) },
+      () => resolution,
+    );
+    // "zeta-sale" wird durch ZWEI Regeln (a und c) referenziert -> genau
+    // einmal im Ergebnis (Dedup), sortiert.
+    expect(result.matchedCampaignKeys).toEqual(["alpha-sale", "zeta-sale"]);
+  });
+
+  it("IS_NOT_ANSWERED traegt nicht zu matchedCampaignKeys bei, auch wenn die Regel dadurch matcht", () => {
+    const conditions = [
+      {
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE" as const,
+        attributeKey: "inactive-sale",
+        operator: "IS_NOT_ANSWERED" as const,
+        comparisonValue: "",
+      },
+    ];
+    const result = evaluatePrioritizationRules(
+      [rule({ key: "absence_bonus", weight: 15, conditions })],
+      "prod-1",
+      emptyContext,
+      () => resolution,
+    );
+    expect(result.businessPriorityScore).toBe(15);
+    expect(result.matchedCampaignKeys).toEqual([]);
+  });
+});

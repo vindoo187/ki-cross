@@ -150,6 +150,17 @@ export interface ExclusionResult {
 export interface PrioritizationResult {
   businessPriorityScore: number;
   rationales: RationaleEntry[];
+  /**
+   * Phase 13 AP7: `Campaign.key`-Werte ALLER Campaigns, die ueber eine
+   * getroffene CAMPAIGN_ACTIVE-Bedingung (Operator IS_ANSWERED, siehe
+   * conditions.ts::extractMatchedCampaignActiveKeys()) tatsaechlich zu einer
+   * GETROFFENEN PrioritizationRule beigetragen haben -- bereits ueber alle
+   * getroffenen Regeln dedupliziert (eine Campaign, die von mehreren Regeln
+   * fuer dasselbe Produkt referenziert wird, erscheint hier nur einmal),
+   * sortiert fuer deterministische Tests. Grundlage fuer
+   * RecommendationCampaignSignal (service.ts).
+   */
+  matchedCampaignKeys: readonly string[];
 }
 
 /** Ergebnis einer getroffenen CrossSellingRule, Grundlage fuer RecommendationCrossSellingSignal. */

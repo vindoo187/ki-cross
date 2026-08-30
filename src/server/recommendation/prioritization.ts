@@ -15,7 +15,7 @@
  * reine, ohne Datenbank testbare Funktion bleibt.
  */
 
-import { evaluateConditionGroups } from "./conditions";
+import { evaluateConditionGroups, extractMatchedCampaignActiveKeys } from "./conditions";
 import { CommissionModelUnresolvedError } from "./errors";
 import type { AnsweredValue } from "../questionnaire/types";
 import type {
@@ -45,8 +45,16 @@ export function evaluatePrioritizationRules(
 
   let businessPriorityScore = 0;
   const rationales: RationaleEntry[] = [];
+  // Phase 13 AP7: Campaign-Attribution -- ueber ALLE getroffenen Regeln
+  // dedupliziert (Set), siehe conditions.ts::extractMatchedCampaignActiveKeys()
+  // und PrioritizationResult.matchedCampaignKeys-Modulkommentar (types.ts).
+  const matchedCampaignKeys = new Set<string>();
 
   for (const rule of matched) {
+    for (const key of extractMatchedCampaignActiveKeys(rule.conditions, context)) {
+      matchedCampaignKeys.add(key);
+    }
+
     businessPriorityScore += rule.weight;
 
     const resolution = resolveCommission(productId);
@@ -79,5 +87,9 @@ export function evaluatePrioritizationRules(
     });
   }
 
-  return { businessPriorityScore, rationales };
+  return {
+    businessPriorityScore,
+    rationales,
+    matchedCampaignKeys: [...matchedCampaignKeys].sort(),
+  };
 }

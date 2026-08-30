@@ -295,12 +295,25 @@ async function loadActiveRuleSetVersion(
  * Muster wie `loadActiveRuleSetVersion()`/`loadProductCandidates()` -- keine
  * neue parallele Scope-/Visibility-Logik (ChatGPT-Vorgabe), sondern
  * Wiederverwendung des etablierten Musters fuer eine neue Entitaet.
+ *
+ * Phase 13 AP7 (Analytics-Grundlage Campaign-Attribution, ChatGPT-GO
+ * 2026-08-30, "loadActiveCampaignContext() als neue Funktion statt
+ * loadActiveCampaignKeys() zu aendern"): urspruenglich `loadActiveCampaignKeys()`
+ * mit Rueckgabetyp `Set<string>` -- liefert seit AP7 zusaetzlich `campaignId`/
+ * `campaignVersionId` je Key (fuer die RecommendationCampaignSignal-Schreibung,
+ * siehe evaluate()), damit Campaign-Aktivitaet und -Attribution GARANTIERT
+ * denselben Auswertungszeitpunkt (`ruleSetAt`) und dieselbe Query verwenden --
+ * kein zweiter, potenziell inkonsistenter Datenbankzugriff. Der bisherige
+ * `Set<string>`-Aufrufvertrag (fuer die reine Bedingungsauswertung in
+ * conditions.ts, die nur Praesenz braucht) bleibt erhalten, wird aber jetzt
+ * direkt am Call-Standort aus `context.keys()` abgeleitet (siehe evaluate()),
+ * OHNE eine zweite Funktion/Query zu pflegen.
  */
-async function loadActiveCampaignKeys(
+async function loadActiveCampaignContext(
   client: QueryClient,
   storeId: string,
   atTime: Date,
-): Promise<Set<string>> {
+): Promise<Map<string, { campaignId: string; campaignVersionId: string }>> {
   const rows = await client.campaignVersion.findMany({
     where: {
       status: "ACTIVE",
@@ -310,9 +323,13 @@ async function loadActiveCampaignKeys(
         { OR: [{ scopeType: "TENANT" }, { scopeType: "STORE", scopeId: storeId }] },
       ],
     },
-    include: { campaign: { select: { key: true } } },
+    include: { campaign: { select: { id: true, key: true } } },
   });
-  return new Set(rows.map((r) => r.campaign.key));
+  const context = new Map<string, { campaignId: string; campaignVersionId: string }>();
+  for (const row of rows) {
+    context.set(row.campaign.key, { campaignId: row.campaign.id, campaignVersionId: row.id });
+  }
+  return context;
 }
 
 function mapCondition(c: {
@@ -453,6 +470,22 @@ export interface RecommendationItemResult {
     commissionModelVersionId: string | null;
     commissionValueMinor: number | null;
   }[];
+  /**
+   * Phase 13 AP7: einfache Lesefunktion fuer bereits geschriebene
+   * RecommendationCampaignSignal-Zeilen dieses Items (siehe
+   * PHASE_13_IMPLEMENTATION_PLAN.md AP7, ChatGPT-Vorgabe "nur Schreibpfad +
+   * eine einfache Lesefunktion, keine neue Reporting-API"). Nur
+   * PrioritizationRule-Attribution (siehe types.ts::PrioritizationResult) --
+   * KEINE Cross-Selling-Attribution (bekannte, dokumentierte Luecke, siehe
+   * docs/DECISION_LOG.md AP7-Eintrag).
+   */
+  campaignSignals: RecommendationCampaignSignalResult[];
+}
+
+export interface RecommendationCampaignSignalResult {
+  id: string;
+  campaignId: string;
+  campaignVersionId: string;
 }
 
 export interface RecommendationCrossSellingSignalResult {
@@ -482,7 +515,10 @@ async function loadRecommendationResult(
   const row = await client.recommendation.findUniqueOrThrow({
     where: { id: recommendationId },
     include: {
-      items: { include: { rationale: true }, orderBy: { priorityRank: "asc" } },
+      items: {
+        include: { rationale: true, campaignSignals: true },
+        orderBy: { priorityRank: "asc" },
+      },
       crossSellingSignals: true,
     },
   });
@@ -508,6 +544,11 @@ async function loadRecommendationResult(
         commissionModelVersionId: r.commissionModelVersionId,
         commissionValueMinor: r.commissionValueMinor,
       })),
+      campaignSignals: item.campaignSignals.map((s): RecommendationCampaignSignalResult => ({
+        id: s.id,
+        campaignId: s.campaignId,
+        campaignVersionId: s.campaignVersionId,
+      })),
     })),
     crossSellingSignals: row.crossSellingSignals.map(
       (s): RecommendationCrossSellingSignalResult => ({
@@ -530,6 +571,8 @@ interface EvaluatedProductItem extends RankableItem {
   eligibilityPassed: boolean;
   exclusionReasonCodes: string[];
   rationales: RationaleEntry[];
+  /** Phase 13 AP7: siehe PrioritizationResult.matchedCampaignKeys-Modulkommentar (types.ts). */
+  matchedCampaignKeys: readonly string[];
 }
 
 /** value === null/undefined -> Prisma.DbNull (Json?-Feld explizit auf NULL setzen), sonst als InputJsonValue durchreichen. */
@@ -643,9 +686,13 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
 
   const sessionAttributes = buildSessionAttributes(session);
   // Phase 13 AP4: bewusst zu ruleSetAt (JETZT), NICHT zu commercialAt/
-  // questionnaireAt aufgeloest -- siehe loadActiveCampaignKeys()-
-  // Modulkommentar.
-  const activeCampaignKeys = await loadActiveCampaignKeys(db, session.storeId, ruleSetAt);
+  // questionnaireAt aufgeloest -- siehe loadActiveCampaignContext()-
+  // Modulkommentar. Phase 13 AP7: EINE Query/EIN Zeitpunkt fuer Aktivitaet
+  // UND Attribution -- activeCampaignKeys (reine Praesenz, fuer die
+  // Bedingungsauswertung) wird direkt aus activeCampaignContext (campaignId/
+  // campaignVersionId je Key, fuer die spaetere Signal-Schreibung) abgeleitet.
+  const activeCampaignContext = await loadActiveCampaignContext(db, session.storeId, ruleSetAt);
+  const activeCampaignKeys = new Set(activeCampaignContext.keys());
 
   const evaluatedItems: EvaluatedProductItem[] = productCandidates.map((candidate) => {
     const evalContext = {
@@ -681,6 +728,7 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
         ...exclusionResult.rationales,
         ...prioritizationResult.rationales,
       ],
+      matchedCampaignKeys: prioritizationResult.matchedCampaignKeys,
     };
   });
 
@@ -790,6 +838,34 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
               weight: rationale.weight ?? null,
               commissionModelVersionId: rationale.commissionModelVersionId ?? null,
               commissionValueMinor: rationale.commissionValueMinor ?? null,
+            },
+          });
+        }
+
+        // Phase 13 AP7: Signal-Schreibung ATOMAR mit recommendation.create()/
+        // recommendationItem.create() (dieselbe Transaktion, ChatGPT-Vorgabe)
+        // -- bei Rollback bleibt kein Signal zurueck. `item.matchedCampaignKeys`
+        // enthaelt nur Keys aus tatsaechlich GETROFFENEN PrioritizationRules
+        // (siehe prioritization.ts), dedupliziert (Set in prioritization.ts) --
+        // hier daher max. EIN Signal pro (Campaign, RecommendationItem), auch
+        // wenn mehrere Regeln dieselbe Campaign referenzieren.
+        for (const campaignKey of item.matchedCampaignKeys) {
+          const campaignContextEntry = activeCampaignContext.get(campaignKey);
+          if (!campaignContextEntry) {
+            // Strukturell unmoeglich: ein Key erreicht matchedCampaignKeys nur,
+            // wenn er zuvor in activeCampaignKeys war, was direkt aus
+            // activeCampaignContext.keys() abgeleitet wurde (siehe evaluate()
+            // oben). Als Invariante abgesichert statt still zu ignorieren.
+            throw new Error(
+              `Invariante verletzt: matchedCampaignKeys enthaelt "${campaignKey}", der nicht in activeCampaignContext vorkommt.`,
+            );
+          }
+          await tx.recommendationCampaignSignal.create({
+            data: {
+              tenantId,
+              recommendationItemId: createdItem.id,
+              campaignId: campaignContextEntry.campaignId,
+              campaignVersionId: campaignContextEntry.campaignVersionId,
             },
           });
         }

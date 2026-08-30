@@ -46,7 +46,7 @@ describe.skipIf(!hasDatabaseUrl)(
 
     // Bewusst weit in der Vergangenheit/Zukunft (Campaign-Aktivitaet wird zu
     // ruleSetAt = new Date() ausgewertet, siehe
-    // service.ts::loadActiveCampaignKeys()-Modulkommentar).
+    // service.ts::loadActiveCampaignContext()-Modulkommentar).
     const FAR_PAST = new Date("2020-01-01T00:00:00Z");
     const FAR_FUTURE = new Date("2099-01-01T00:00:00Z");
     const SESSION_AT = new Date("2026-03-01T00:00:00Z");

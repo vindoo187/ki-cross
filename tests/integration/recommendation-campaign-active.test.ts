@@ -52,7 +52,7 @@ describe.skipIf(!hasDatabaseUrl)(
     // Bewusst weit in der Vergangenheit/Zukunft (nicht an SESSION_AT
     // gebunden): Campaign-Aktivitaet wird zu ruleSetAt = new Date() (ECHTES
     // "JETZT" zum Testlaufzeitpunkt) ausgewertet, siehe
-    // service.ts::loadActiveCampaignKeys()-Modulkommentar -- identisches
+    // service.ts::loadActiveCampaignContext()-Modulkommentar -- identisches
     // Prinzip wie die RuleSetVersion-Aufloesung, die in
     // recommendation-engine.test.ts ebenfalls mit einem FROM weit in der
     // Vergangenheit gegen echtes `new Date()` getestet wird.
@@ -442,7 +442,7 @@ describe.skipIf(!hasDatabaseUrl)(
       const otherTenant = await createTenant("tenant-isolation-other");
       // Campaign.key ist nur PRO TENANT eindeutig (@@unique([tenantId, key]))
       // -- derselbe Key-String kann daher in einem fremden Mandanten
-      // parallel existieren UND dort aktiv sein. loadActiveCampaignKeys()
+      // parallel existieren UND dort aktiv sein. loadActiveCampaignContext()
       // laeuft ueber den tenant-gescopten db-Client und darf strukturell
       // NICHT ueber Mandantengrenzen hinweg Treffer liefern (identisches
       // Isolationsprinzip wie bei jeder anderen Query dieser Datei).

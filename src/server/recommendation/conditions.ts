@@ -181,3 +181,55 @@ export function evaluateConditionGroups(
   }
   return false;
 }
+
+/**
+ * Phase 13 AP7 (Analytics-Grundlage Campaign-Attribution, ChatGPT-GO
+ * 2026-08-30, siehe PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 3 AP7).
+ * Liefert die `Campaign.key`-Werte ALLER CAMPAIGN_ACTIVE-Bedingungen
+ * (Operator `IS_ANSWERED`, siehe Modulkommentar oben), die zu einer
+ * tatsaechlich GETROFFENEN DNF-Gruppe dieser Conditions-Liste gehoeren --
+ * bewusst NICHT einfach "jede CAMPAIGN_ACTIVE-Condition irgendwo in der
+ * Regel", sondern ausschliesslich aus Gruppen, die selbst ursaechlich zum
+ * Match beigetragen haben (ChatGPTs Leitplanke: "nur Campaigns, die
+ * tatsaechlich zur Empfehlung beigetragen haben"). Ein Operator
+ * `IS_NOT_ANSWERED` traegt bewusst NICHT bei -- dort war die ABWESENHEIT
+ * der Campaign die Matchbedingung, keine Attribution zu dieser Campaign.
+ *
+ * Reine, lesende Zusatzauswertung -- dupliziert absichtlich die
+ * Gruppierungs-/AND-Logik aus `evaluateConditionGroups()` (bewusst KEIN
+ * Umbau dieser bereits abgenommenen Funktion, um deren Ergebnis/Verhalten
+ * fuer Eligibility/Exclusion/Prioritization/CrossSelling nicht anzufassen)
+ * -- verwendet aber dieselbe `evaluateCondition()`-Primitive, daher
+ * garantiert konsistent mit dem eigentlichen Match-Ergebnis. Nur fuer
+ * bereits als "getroffen" identifizierte Regeln sinnvoll aufzurufen (siehe
+ * `evaluatePrioritizationRules()`); fuer eine NICHT getroffene Regel liefert
+ * die Funktion strukturell ohnehin eine leere Menge (keine Gruppe matcht).
+ */
+export function extractMatchedCampaignActiveKeys(
+  conditions: ConditionInput[],
+  context: {
+    answersByQuestionId: ReadonlyMap<string, AnsweredValue>;
+    productAttributes: ReadonlyMap<string, string>;
+    sessionAttributes: ReadonlyMap<string, string>;
+    activeCampaignKeys?: ReadonlySet<string>;
+  },
+): ReadonlySet<string> {
+  const groups = new Map<number, ConditionInput[]>();
+  for (const condition of conditions) {
+    const group = groups.get(condition.groupIndex) ?? [];
+    group.push(condition);
+    groups.set(condition.groupIndex, group);
+  }
+
+  const matchedCampaignKeys = new Set<string>();
+  for (const group of groups.values()) {
+    const allMatch = group.every((condition) => evaluateCondition(condition, context));
+    if (!allMatch) continue;
+    for (const condition of group) {
+      if (condition.sourceType === "CAMPAIGN_ACTIVE" && condition.operator === "IS_ANSWERED") {
+        matchedCampaignKeys.add(condition.attributeKey as string);
+      }
+    }
+  }
+  return matchedCampaignKeys;
+}

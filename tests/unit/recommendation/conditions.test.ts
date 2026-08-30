@@ -3,6 +3,7 @@ import {
   assertValidConditionSource,
   evaluateCondition,
   evaluateConditionGroups,
+  extractMatchedCampaignActiveKeys,
 } from "@/server/recommendation/conditions";
 import {
   InvalidConditionSourceError,
@@ -367,5 +368,155 @@ describe("evaluateConditionGroups (DNF)", () => {
     ];
     const sessionAttributes = new Map([["consultationType", "RENEWAL"]]);
     expect(evaluateConditionGroups(conditions, { ...emptyContext, sessionAttributes })).toBe(false);
+  });
+});
+
+describe("extractMatchedCampaignActiveKeys (Phase 13 AP7)", () => {
+  it("liefert den Campaign-Key einer IS_ANSWERED-Bedingung aus einer getroffenen Gruppe", () => {
+    const conditions = [
+      condition({
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE",
+        questionId: null,
+        attributeKey: "summer-sale",
+        operator: "IS_ANSWERED",
+        comparisonValue: "",
+      }),
+    ];
+    const activeCampaignKeys = new Set(["summer-sale"]);
+    expect(
+      extractMatchedCampaignActiveKeys(conditions, { ...emptyContext, activeCampaignKeys }),
+    ).toEqual(new Set(["summer-sale"]));
+  });
+
+  it("liefert eine leere Menge, wenn die Gruppe NICHT matcht (Campaign nicht aktiv)", () => {
+    const conditions = [
+      condition({
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE",
+        questionId: null,
+        attributeKey: "summer-sale",
+        operator: "IS_ANSWERED",
+        comparisonValue: "",
+      }),
+    ];
+    expect(extractMatchedCampaignActiveKeys(conditions, emptyContext)).toEqual(new Set());
+  });
+
+  it("IS_NOT_ANSWERED traegt NICHT bei, auch wenn die Gruppe matcht (Campaign-Abwesenheit ist die Matchbedingung, keine Attribution zu dieser Campaign)", () => {
+    const conditions = [
+      condition({
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE",
+        questionId: null,
+        attributeKey: "inactive-sale",
+        operator: "IS_NOT_ANSWERED",
+        comparisonValue: "",
+      }),
+    ];
+    expect(extractMatchedCampaignActiveKeys(conditions, emptyContext)).toEqual(new Set());
+  });
+
+  it("OR-Gruppen (unterschiedlicher groupIndex): nur die Campaign aus der TATSAECHLICH getroffenen Gruppe wird attribuiert, nicht aus der ungetroffenen", () => {
+    const conditions = [
+      condition({
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE",
+        questionId: null,
+        attributeKey: "campaign-a",
+        operator: "IS_ANSWERED",
+        comparisonValue: "",
+      }),
+      condition({
+        id: "c2",
+        groupIndex: 1,
+        sourceType: "CAMPAIGN_ACTIVE",
+        questionId: null,
+        attributeKey: "campaign-b",
+        operator: "IS_ANSWERED",
+        comparisonValue: "",
+      }),
+    ];
+    // Nur campaign-b ist aktiv -> nur Gruppe 1 (campaign-b) matcht, Gruppe 0
+    // (campaign-a) bleibt ungetroffen und darf NICHT attribuiert werden.
+    const activeCampaignKeys = new Set(["campaign-b"]);
+    expect(
+      extractMatchedCampaignActiveKeys(conditions, { ...emptyContext, activeCampaignKeys }),
+    ).toEqual(new Set(["campaign-b"]));
+  });
+
+  it("AND-Gruppe: eine CAMPAIGN_ACTIVE-Bedingung neben einer ANSWER-Bedingung wird nur attribuiert, wenn BEIDE in der Gruppe erfuellt sind", () => {
+    const answersByQuestionId = new Map<string, AnsweredValue>([
+      ["q-1", { answerType: "BOOLEAN", isAnswered: true, booleanValue: true }],
+    ]);
+    const conditions = [
+      condition({
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "ANSWER",
+        questionId: "q-1",
+        comparisonValue: "true",
+      }),
+      condition({
+        id: "c2",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE",
+        questionId: null,
+        attributeKey: "summer-sale",
+        operator: "IS_ANSWERED",
+        comparisonValue: "",
+      }),
+    ];
+    const activeCampaignKeys = new Set(["summer-sale"]);
+
+    // ANSWER-Teil erfuellt + Campaign aktiv -> Gruppe matcht -> Attribution.
+    expect(
+      extractMatchedCampaignActiveKeys(conditions, {
+        ...emptyContext,
+        answersByQuestionId,
+        activeCampaignKeys,
+      }),
+    ).toEqual(new Set(["summer-sale"]));
+
+    // ANSWER-Teil NICHT erfuellt -> Gruppe matcht nicht -> KEINE Attribution,
+    // obwohl die Campaign selbst aktiv ist.
+    expect(
+      extractMatchedCampaignActiveKeys(conditions, { ...emptyContext, activeCampaignKeys }),
+    ).toEqual(new Set());
+  });
+
+  it("mehrere CAMPAIGN_ACTIVE-Bedingungen in derselben getroffenen Gruppe liefern beide Keys", () => {
+    const conditions = [
+      condition({
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE",
+        questionId: null,
+        attributeKey: "campaign-a",
+        operator: "IS_ANSWERED",
+        comparisonValue: "",
+      }),
+      condition({
+        id: "c2",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE",
+        questionId: null,
+        attributeKey: "campaign-b",
+        operator: "IS_ANSWERED",
+        comparisonValue: "",
+      }),
+    ];
+    const activeCampaignKeys = new Set(["campaign-a", "campaign-b"]);
+    expect(
+      extractMatchedCampaignActiveKeys(conditions, { ...emptyContext, activeCampaignKeys }),
+    ).toEqual(new Set(["campaign-a", "campaign-b"]));
+  });
+
+  it("leere Bedingungsliste liefert eine leere Menge", () => {
+    expect(extractMatchedCampaignActiveKeys([], emptyContext)).toEqual(new Set());
   });
 });
