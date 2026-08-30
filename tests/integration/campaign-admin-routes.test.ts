@@ -104,7 +104,13 @@ describe.skipIf(!hasDatabaseUrl)("Phase 13 AP3: HTTP-Routen /api/admin/campaigns
   }
 
   function campaignInput(overrides: Record<string, unknown> = {}) {
-    return { key: `c-${randomUUID().slice(0, 8)}`, name: "Testkampagne", ...overrides };
+    // Fixer, nicht-numerischer Key (Praezedenz: campaign-admin.test.ts) --
+    // KEIN randomUUID()-Hex-Suffix: ein rein numerischer Zufalls-Slice kann
+    // den PHONE_REGEX-Heuristik-Check in contact-data-guard.ts ausloesen
+    // (Wert "sieht wie eine Telefonnummer aus"), sobald der Campaign-Key im
+    // AuditLog.metadata landet (CI #120, flaky ~3.6% der Laeufe). Jeder Test
+    // erstellt ohnehin einen frischen Tenant, ein fixer Key reicht.
+    return { key: "c", name: "Testkampagne", ...overrides };
   }
 
   function tenantVersionInput(tenantId: string, overrides: Record<string, unknown> = {}) {
