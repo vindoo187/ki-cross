@@ -603,3 +603,48 @@ veröffentlicht (v1 dadurch mandantenweit EXPIRED), dieselbe Session wird
 erneut ausgewertet und muss v2 verwenden, während `questionnaireVersionId`
 der Session unverändert bleibt; zusätzlich verwendet eine neu gestartete
 Session ebenfalls v2.
+
+## Phase 13 AP4: Campaign-Aktivität wird zum Auswertungszeitpunkt (`ruleSetAt`) aufgelöst, nicht an den Session-Start gepinnt
+
+**Kontext:** AP4 führt `CAMPAIGN_ACTIVE` als neuen `ConditionSourceType`
+ein, mit dem `PrioritizationRule`/`CrossSellingRule` prüfen können, ob
+eine Campaign für die aktuelle Beratung gerade aktiv ist. Damit stellte
+sich dieselbe Zeitpunkt-Frage wie bereits bei `RuleSetVersion`
+(siehe [[Phase 9 AP9: RuleSetVersion-Auswahl auf Auswertungszeitpunkt korrigiert]]
+oben): soll Campaign-Aktivität an `session.startedAt` gepinnt werden
+(stabil über die gesamte Beratung) oder am tatsächlichen
+Auswertungszeitpunkt (`new Date()` bei jedem `evaluate()`-Aufruf)
+aufgelöst werden? ChatGPT hat vor der AP4-Abnahme explizit verlangt, diese
+Entscheidung als bewusste, dokumentierte Wahl festzuhalten statt sie
+implizit im Code zu belassen.
+
+**Entscheidung:** `loadActiveCampaignKeys()` (`service.ts`) verwendet
+denselben `ruleSetAt = new Date()`, der bereits für die
+`RuleSetVersion`-Auflösung existiert -- Campaign-Aktivität folgt also
+bewusst der "JETZT"-Semantik, NICHT der Session-Pinning-Semantik von
+`questionnaireAt`/`commercialAt`. Begründung: eine Campaign kann während
+einer laufenden, ggf. langen Beratung starten oder enden (z. B. eine
+zeitlich befristete Wochenend-Aktion), und die Empfehlungslogik soll das
+sofort bei der naechsten Auswertung widerspiegeln -- analog zur
+`RuleSetVersion`, die ebenfalls "der zum Auswertungszeitpunkt aktuell
+gueltige Regelstand" ist, nicht ein bei Session-Start eingefrorener
+Snapshot. Das unterscheidet sich bewusst von Fragebogen (inhaltliche
+Konsistenz waehrend der Beratung) und Preis-/Provisionsstand
+(Preisstabilitaet waehrend der Beratung), wo Session-Pinning die richtige
+Wahl ist.
+
+**Konsequenz:** Zwei identische `evaluate()`-Aufrufe fuer dieselbe, noch
+laufende Session koennen unterschiedliche `CAMPAIGN_ACTIVE`-Ergebnisse
+liefern, wenn zwischen den Aufrufen eine Campaign-Version veroeffentlicht
+wird oder ihr Gueltigkeitsfenster beginnt/endet -- das ist beabsichtigtes
+Verhalten, kein Bug.
+
+**Code:** `loadActiveCampaignKeys()` erhaelt `ruleSetAt` als Parameter
+(dieselbe Variable, kein zweiter `new Date()`-Aufruf), mit Inline-
+Kommentar im Funktionskopf, der genau diese Begründung wiederholt.
+
+**Test:** `tests/integration/recommendation-campaign-active.test.ts`
+deckt Zeitfenster-Grenzen (DRAFT/EXPIRED/noch-nicht-gueltig zaehlen nicht
+als aktiv), TENANT-/STORE-Scope, mehrere gleichzeitig aktive Campaigns
+sowie Tenant-Isolation (identischer `Campaign.key` in fremdem Mandanten
+zaehlt nicht als aktiv) ab.
