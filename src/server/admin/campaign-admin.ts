@@ -385,7 +385,13 @@ export async function createDraftCampaignVersion(
       ? input.conditions
       : sourceConditions.map((c) => ({
           groupIndex: c.groupIndex,
-          sourceType: c.sourceType as ConditionSourceType,
+          // Narrower Cast als das globale ConditionSourceType (das seit
+          // Phase 13 AP4 zusaetzlich CAMPAIGN_ACTIVE kennt) -- CampaignCondition
+          // erlaubt CAMPAIGN_ACTIVE als sourceType NICHT (siehe
+          // validateDraftCampaignVersion()-Kommentar unten), daher hier auf
+          // CampaignConditionInput["sourceType"] (ANSWER/PRODUCT_ATTRIBUTE/
+          // SESSION_ATTRIBUTE) beschraenkt.
+          sourceType: c.sourceType as CampaignConditionInput["sourceType"],
           questionId: c.questionId,
           attributeKey: c.attributeKey,
           operator: c.operator as VisibilityOperator,
@@ -642,6 +648,21 @@ export async function validateCampaignVersion(
           );
         }
       }
+      continue;
+    }
+
+    // Phase 13 AP4: CAMPAIGN_ACTIVE ist strukturell im globalen
+    // ConditionSourceType-Enum vorhanden (gemeinsamer DB-Typ), fuer
+    // CampaignCondition aber bewusst NICHT vorgesehen -- CampaignCondition
+    // beschreibt WAS eine Kampagne fachlich betrifft (Zielgruppe/Produkte,
+    // ChatGPTs AP1-Detailentscheidung 2026-08-24), waehrend CAMPAIGN_ACTIVE
+    // der AP4-Wirkmechanismus fuer PrioritizationRule/CrossSellingRule ist
+    // (siehe recommendation/conditions.ts-Modulkommentar). Structural
+    // moeglich (gleicher Enum-Typ), serverseitig hier abgelehnt.
+    if (sourceType === "CAMPAIGN_ACTIVE") {
+      issues.push(
+        "CAMPAIGN_ACTIVE ist fuer CampaignCondition nicht zulaessig (nur fuer PrioritizationRule/CrossSellingRule vorgesehen).",
+      );
       continue;
     }
 
