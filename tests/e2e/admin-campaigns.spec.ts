@@ -152,6 +152,13 @@ test.describe("/admin/campaigns – Kampagnen-Verwaltung (Phase 13 AP8)", () => 
     // Playwright-Projekten oder einem CI-Retry (identisches Prinzip wie
     // `periodStartForProject()` in admin-goals.spec.ts).
     const campaignKey = `e2e-neue-kampagne-${testInfo.project.name}-${testInfo.retry}`;
+    // Der ANZEIGENAME muss -- exakt wie der Key -- projekt-/retry-eindeutig
+    // sein: Playwright fuehrt desktop-chromium und tablet-ipad-landscape
+    // parallel gegen DIESELBE Test-DB/denselben Tenant aus (kein Schema-Reset
+    // zwischen Projekten), daher wuerde ein hartkodierter Name zu ZWEI
+    // Listeneintraegen mit identischem Heading-Text fuehren (Playwright
+    // strict-mode-Fehler, CI #133 real beobachtet).
+    const campaignName = `E2E Neue Testkampagne (${testInfo.project.name}-${testInfo.retry})`;
 
     await loginAsAdmin(page, {
       tenantId: seed.tenantA.tenantId,
@@ -163,7 +170,7 @@ test.describe("/admin/campaigns – Kampagnen-Verwaltung (Phase 13 AP8)", () => 
     await page.getByRole("button", { name: "Neue Kampagne anlegen" }).click();
     await expect(page.getByRole("heading", { name: "Neue Kampagne anlegen" })).toBeVisible();
     await page.getByLabel("Schluessel (eindeutig je Mandant)").fill(campaignKey);
-    await page.getByLabel("Name").fill("E2E Neue Testkampagne");
+    await page.getByLabel("Name").fill(campaignName);
 
     // Anlegen erzeugt KEINE Weiterleitung (Campaign ohne Version hat keine
     // eigene Detailseite, siehe CreateCampaignButton.tsx-Modulkommentar) --
@@ -178,11 +185,11 @@ test.describe("/admin/campaigns – Kampagnen-Verwaltung (Phase 13 AP8)", () => 
       page.getByRole("button", { name: "Kampagne anlegen" }).click(),
     ]);
     const { campaign } = (await createCampaignResponse.json()) as { campaign: { id: string } };
-    await expect(page.getByRole("heading", { name: "E2E Neue Testkampagne" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: campaignName })).toBeVisible();
 
     const newItem = page
       .getByRole("listitem")
-      .filter({ has: page.getByRole("heading", { name: "E2E Neue Testkampagne" }) });
+      .filter({ has: page.getByRole("heading", { name: campaignName }) });
     await expect(newItem.getByText("Keine Versionen vorhanden.")).toBeVisible();
 
     // --- Ersten Entwurf erstellen (kein copyFromVersionId, Default
