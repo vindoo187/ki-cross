@@ -80,6 +80,41 @@ describe.skipIf(!hasDatabaseUrl)(
       return user.id;
     }
 
+    /**
+     * Legt eine ECHTE `Question`-Zeile an, deren `QuestionnaireVersion`
+     * NICHT den Status ACTIVE hat (hier: DRAFT) -- analog
+     * `createInactiveQuestion()` in `campaign-admin.test.ts` (AP2). Ein
+     * genuin unbekannter `questionId` (`randomUUID()`) wuerde bereits an
+     * der DB-FK `campaign_conditions_tenant_id_question_id_fkey`
+     * scheitern (PrismaClientKnownRequestError P2003, kein 422) -- diese
+     * Funktion liefert stattdessen eine FK-gueltige, aber fachlich
+     * ungueltige Frage-ID fuer den 422-Validator-Pfad.
+     */
+    async function createInactiveQuestion(tenantId: string, key: string) {
+      const questionnaire = await rawClient.questionnaire.create({
+        data: { tenantId, key: `${key}-${suffix}` },
+      });
+      const questionnaireVersion = await rawClient.questionnaireVersion.create({
+        data: {
+          tenantId,
+          questionnaireId: questionnaire.id,
+          label: "v1",
+          status: "DRAFT",
+          validFrom: new Date("2026-01-01T00:00:00Z"),
+          validTo: null,
+        },
+      });
+      const question = await rawClient.question.create({
+        data: {
+          tenantId,
+          questionnaireVersionId: questionnaireVersion.id,
+          key: "q-inactive",
+          sortOrder: 1,
+        },
+      });
+      return { questionId: question.id };
+    }
+
     function requestWithCookie(
       url: string,
       token: string,
@@ -386,7 +421,7 @@ describe.skipIf(!hasDatabaseUrl)(
       expect(body.valid).toBe(true);
     });
 
-    it("POST .../validate mit einer Bedingung, die auf eine nicht existierende Frage verweist -> 422", async () => {
+    it("POST .../validate mit einer Bedingung, die auf eine nicht (mehr) aktive Frage verweist -> 422", async () => {
       const tenantId = await createTenant("http-422-validate");
       const userId = await createUser(tenantId, "actor");
       const editToken = createSessionToken({
@@ -394,8 +429,9 @@ describe.skipIf(!hasDatabaseUrl)(
         configPermissions: ["config.campaigns.edit"],
       });
       const { campaignId, versionId } = await createCampaignWithDraftVersion(tenantId, editToken);
+      const { questionId } = await createInactiveQuestion(tenantId, "q");
 
-      await patchCampaignVersionRoute(
+      const patchResponse = await patchCampaignVersionRoute(
         requestWithCookie(basePath(campaignId, versionId), editToken, {
           method: "PATCH",
           body: JSON.stringify({
@@ -403,7 +439,7 @@ describe.skipIf(!hasDatabaseUrl)(
               {
                 groupIndex: 0,
                 sourceType: "ANSWER",
-                questionId: randomUUID(),
+                questionId,
                 operator: "EQUALS",
                 comparisonValue: "ja",
               },
@@ -412,6 +448,7 @@ describe.skipIf(!hasDatabaseUrl)(
         }),
         routeParams({ id: campaignId, versionId }),
       );
+      expect(patchResponse.status).toBe(200);
 
       const response = await validateCampaignVersionRoute(
         requestWithCookie(`${basePath(campaignId, versionId)}/validate`, editToken, {
