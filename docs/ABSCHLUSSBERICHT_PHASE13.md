@@ -244,8 +244,7 @@ Nebenlaeufigkeit konnte die zweite, durch den Lock blockierte Transaktion
 nach dessen Freigabe einen FRUEHEREN Zeitstempel besitzen als das
 `validFrom`, das die erste Transaktion soeben gesetzt hatte. Der Versuch,
 die frisch aktivierte Version mit diesem zu fruehen `validTo` zu expiren,
-erzeugte einen ungueltigen Bereich (`validFrom > validTo`, Postgres-Fehler
-22000) -- ein roher, von `translatePublishError()` nicht abgefangener
+erzeugte einen ungueltigen Bereich (`validFrom > validTo`, Postgres-Fehler 22000) -- ein roher, von `translatePublishError()` nicht abgefangener
 Fehler, genau das, was der Test verhindern soll.
 
 **ChatGPT-Entscheidung (2026-08-30, verbindlich):** Echter
