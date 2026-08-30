@@ -804,6 +804,14 @@ export async function deleteCommissionTier(
 //    0. CommissionModel-Row-Lock (`SELECT id FROM commission_models WHERE
 //       id = $1 AND tenant_id = $2 FOR UPDATE`) -- MUSS die erste Operation
 //       sein, vor Schritt (a).
+//    0b. `now = new Date()` wird ERST NACH erfolgreichem Erwerb dieses Locks
+//       bestimmt (Phase 13 AP10-Audit-Fund, analog zum dort behobenen
+//       Campaign-Defekt, siehe DECISION_LOG.md) -- NICHT davor, sonst kann
+//       eine durch den Lock blockierte, zweite Publish-Transaktion nach
+//       Freigabe des Locks einen FRUEHEREN Zeitstempel als das soeben
+//       gesetzte `validFrom` der jetzt ACTIVE-Version besitzen und beim
+//       Expiren-Versuch einen ungueltigen Bereich (`validFrom > validTo`,
+//       Postgres-Fehler 22000) erzeugen.
 //    a. Bisherige ACTIVE-Version DESSELBEN CommissionModel (falls vorhanden)
 //       zuerst auf EXPIRED setzen (`validTo = now`) -- MUSS vor (b)
 //       passieren, sonst schlaegt die EXCLUDE-Constraint sofort fehl.
@@ -866,7 +874,6 @@ export async function publishCommissionModelVersion(
 
   const tenantId = getTenantId();
   const actorUserId = getTenantContext().userId;
-  const now = new Date();
 
   let previousActiveVersionId: string | null;
   try {
@@ -881,6 +888,10 @@ export async function publishCommissionModelVersion(
       // trotzdem bewusst gesetzt (anders als bei Phase 9s `tenants`-Zeile,
       // die ein GLOBAL_MODEL ist, ist `commission_models` mandantengebunden).
       await tx.$queryRaw`SELECT id FROM commission_models WHERE id = ${commissionModelId}::uuid AND tenant_id = ${tenantId}::uuid FOR UPDATE`;
+
+      // Schritt 0b: `now` ERST NACH dem Lock-Erwerb bestimmen (siehe
+      // Abschnittskommentar oben, Phase 13 AP10-Audit-Fund) -- NICHT davor.
+      const now = new Date();
 
       // PRO-CommissionModel-Scope: bewusst MIT commissionModelId-Filter
       // (anders als Phase 9s mandantenweiter Scope) -- der tenant-gescopte

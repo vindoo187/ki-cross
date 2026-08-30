@@ -743,6 +743,19 @@ export function translatePublishError(error: unknown, versionId: string): never 
  * 2. Innerhalb EINER Transaktion:
  *    0. Campaign-Row-Lock (`SELECT id FROM campaigns WHERE id = $1 AND
  *       tenant_id = $2 FOR UPDATE`) -- MUSS die erste Operation sein.
+ *    0b. `now = new Date()` wird ERST NACH erfolgreichem Erwerb dieses
+ *       Locks bestimmt (Phase 13 AP10-Regressionsfund, ChatGPT-GO
+ *       2026-08-30, siehe DECISION_LOG.md) -- NICHT davor. Bei einer vor
+ *       dem Lock bestimmten Zeit kann eine durch den Lock blockierte,
+ *       zweite Publish-Transaktion nach Freigabe des Locks einen
+ *       FRUEHEREN Zeitstempel als das soeben (durch die erste Transaktion)
+ *       gesetzte `validFrom` der jetzt ACTIVE-Version besitzen; der
+ *       Versuch, diese Version mit `validTo = now(frueher)` zu expiren,
+ *       erzeugt dann einen ungueltigen Bereich (`validFrom > validTo`,
+ *       Postgres-Fehler 22000), den `translatePublishError()` nicht
+ *       abfaengt. Da der Row-Lock die Transaktionen serialisiert, ist ein
+ *       ERST NACH Lock-Erwerb bestimmter Zeitstempel dagegen garantiert
+ *       monoton in Serialisierungsreihenfolge.
  *    a. Bisherige ACTIVE-Version DERSELBEN Campaign (falls vorhanden)
  *       zuerst auf EXPIRED setzen (`validTo = now`) -- MUSS vor (b)
  *       passieren, sonst schlaegt die EXCLUDE-Constraint sofort fehl.
@@ -771,7 +784,6 @@ export async function publishCampaignVersion(
 
   const tenantId = getTenantId();
   const actorUserId = getTenantContext().userId;
-  const now = new Date();
 
   let previousActiveVersionId: string | null;
   try {
@@ -780,6 +792,12 @@ export async function publishCampaignVersion(
       // MUSS die erste Operation dieser Transaktion sein. Serialisiert
       // alle Publish-Transaktionen DERSELBEN Campaign.
       await tx.$queryRaw`SELECT id FROM campaigns WHERE id = ${campaignId}::uuid AND tenant_id = ${tenantId}::uuid FOR UPDATE`;
+
+      // Schritt 0b: `now` ERST NACH dem Lock-Erwerb bestimmen (siehe
+      // Funktionskommentar oben, Phase 13 AP10-Regressionsfund) -- NICHT
+      // davor, sonst kann eine durch den Lock blockierte Transaktion nach
+      // Freigabe einen bereits ueberholten Zeitstempel verwenden.
+      const now = new Date();
 
       const previousActive = await tx.campaignVersion.findFirst({
         where: { campaignId, status: "ACTIVE", id: { not: versionId } },

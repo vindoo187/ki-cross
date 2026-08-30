@@ -229,7 +229,64 @@ dauerhaft unverändert bei V1 (append-only-Trigger auf
 `recommendation_campaign_signals` bestätigt dies zusätzlich auf
 DB-Ebene).
 
-## 10. Audit und Reproduzierbarkeit
+## 10. Notable Incident: `now`-vor-Lock-Nebenlaeufigkeitsdefekt in drei Publish-Workflows (AP10)
+
+Der AP10-Commit selbst (`docs/ABSCHLUSSBERICHT_PHASE13.md`, rein
+dokumentarisch) loeste CI #136 aus, das FEHLSCHLUG -- an einer Stelle, die
+nichts mit dem Bericht zu tun hat: dem bestehenden AP2-Regressionstest
+"zwei GLEICHZEITIGE Publish-Versuche fuer ZWEI VERSCHIEDENE
+DRAFT-Versionen DERSELBEN Campaign" in
+`tests/integration/campaign-admin.test.ts`. Root Cause:
+`publishCampaignVersion()` (`campaign-admin.ts`) bestimmte
+`const now = new Date()` VOR dem `db.$transaction()`-Aufruf, also VOR dem
+Warten auf den Campaign-Row-Lock (`SELECT ... FOR UPDATE`). Bei echter
+Nebenlaeufigkeit konnte die zweite, durch den Lock blockierte Transaktion
+nach dessen Freigabe einen FRUEHEREN Zeitstempel besitzen als das
+`validFrom`, das die erste Transaktion soeben gesetzt hatte. Der Versuch,
+die frisch aktivierte Version mit diesem zu fruehen `validTo` zu expiren,
+erzeugte einen ungueltigen Bereich (`validFrom > validTo`, Postgres-Fehler
+22000) -- ein roher, von `translatePublishError()` nicht abgefangener
+Fehler, genau das, was der Test verhindern soll.
+
+**ChatGPT-Entscheidung (2026-08-30, verbindlich):** Echter
+Nebenlaeufigkeits-Defekt, kein Testfehler, kein Flake. GO fuer den Fix
+(Implementierung reparieren, Test unveraendert lassen) sowie fuer einen
+zusaetzlichen, nicht-prophylaktischen projektweiten Audit desselben Musters
+in allen anderen Draft-&gt;Publish-Workflows mit Row-Lock.
+
+**Fix:** In allen drei betroffenen Funktionen wird `now = new Date()` jetzt
+INNERHALB der Transaktion, UNMITTELBAR NACH dem erfolgreichen Erwerb des
+jeweiligen Row-Locks bestimmt, statt davor:
+
+- `publishCampaignVersion()` (`campaign-admin.ts`, Campaign-Row-Lock)
+- `publishCommissionModelVersion()` (`commission-admin.ts`, Phase 10,
+  CommissionModel-Row-Lock) -- identisches Muster im Audit gefunden,
+  ebenfalls behoben
+- `publishRuleSetVersion()` (`rule-admin.ts`, Phase 9, Tenant-Row-Lock) --
+  identisches Muster im Audit gefunden, ebenfalls behoben
+
+Kein Schema-Change, keine Aenderung an `translatePublishError()` noetig. Da
+der jeweilige Row-Lock die Publish-Transaktionen bereits serialisiert, ist
+ein danach bestimmter Zeitstempel garantiert monoton in
+Serialisierungsreihenfolge.
+
+**Audit-Ergebnis fuer die uebrigen Workflows:** `publishDraftVersion()`
+(Fragebogen, `question-admin.ts`, Phase 8) verwendet KEINEN Row-Lock und
+verlaesst sich ausschliesslich auf den EXCLUDE-Constraint als
+Nebenlaeufigkeitsschutz -- es gibt keine Lock-Wartephase, in der ein vorab
+bestimmter Zeitstempel veralten koennte, das Muster ist nicht anwendbar.
+Goals (`goal-admin.ts`) haben keinen Draft-&gt;Publish-&gt;ACTIVE/EXPIRED-
+Lebenszyklus, ebenfalls nicht anwendbar.
+
+**Test:** Die drei bereits bestehenden Nebenlaeufigkeits-Regressionstests
+(`campaign-admin.test.ts`, `commission-admin.test.ts`,
+`rule-admin-publish.test.ts`) decken den Fix vollstaendig ab und wurden
+unveraendert gelassen -- sie sind die Regression, die den jeweiligen Fix
+beweist. Vollstaendiger Root-Cause- und Fix-Eintrag: `docs/DECISION_LOG.md`
+("Phase 13 AP10: `publishCampaignVersion()` bestimmte `now` VOR statt NACH
+dem Campaign-Row-Lock").
+
+## 11. Audit und Reproduzierbarkeit
 
 `RecommendationCampaignSignal` ist strukturell append-only: DB-Trigger
 `recommendation_campaign_signals_append_only` (BEFORE UPDATE OR DELETE,
@@ -242,7 +299,7 @@ Zustandsänderung (Campaign-Publish, Regel-/Provisions-/Zielwechsel) korrekt
 eine neue Auswertung mit neuer, ebenfalls unveränderlicher Signal-Historie
 erzeugt.
 
-## 11. Admin-UI
+## 12. Admin-UI
 
 `/admin/campaigns` (Listing + Erstellung über `CreateCampaignButton.tsx`)
 und `/admin/campaigns/[id]/versions/[versionId]` (Detailseite) mit
@@ -253,7 +310,7 @@ und `/admin/campaigns/[id]/versions/[versionId]` (Detailseite) mit
 und CSS-Ergänzungen (`globals.css`) folgen bewusst denselben Konventionen
 wie Rules/Commissions/Goals (Phase 9–11).
 
-## 12. Dokumentationsentscheidung (AP9)
+## 13. Dokumentationsentscheidung (AP9)
 
 `docs/PHASE_13_IMPLEMENTATION_PLAN.md` sah für AP9 ursprünglich eine
 eigenständige `CAMPAIGN_MANAGEMENT.md` "analog RECOMMENDATION_ENGINE.md/
@@ -271,7 +328,7 @@ Priorisierung und Attribution" ergänzt (deckt `CAMPAIGN_ACTIVE`,
 `ruleSetAt`/JETZT-Semantik, Attributionsregeln inkl. Dedup und
 Cross-Selling-Lücke sowie den AP8-Fingerprint-Befund samt Fix ab).
 
-## 13. Anzahl und Art aller Tests
+## 14. Anzahl und Art aller Tests
 
 Test-Gesamtbestand vor (`ff3ee76`) und nach (`961bb82`) Phase 13:
 
@@ -309,7 +366,7 @@ Test-Gesamtbestand vor (`ff3ee76`) und nach (`961bb82`) Phase 13:
 **Neue E2E-Spec-Datei:** `tests/e2e/admin-campaigns.spec.ts` (6 Testfälle,
 Desktop+Tablet-Playwright-Projekte, analog Goals/Rules/Commissions).
 
-## 14. Vollständige Prüfkommandos mit Ergebnissen
+## 15. Vollständige Prüfkommandos mit Ergebnissen
 
 Lokale Verifikation ist in diesem Sandbox-Setup auf Prettier-
 Formatierungsprüfung (abhängigkeitsfreies Standalone-Tarball, kein `npm
@@ -324,7 +381,7 @@ Playwright-E2E-Testläufe (Desktop + Tablet, 14 Testfälle × 2 Projekte, 4m
 52s Gesamtlaufzeit), `tsc --noEmit` ohne Fehler, ESLint ohne Fehler,
 Prettier-Formatierung konsistent.
 
-## 15. Vollständige Liste erstellter und geänderter Dateien
+## 16. Vollständige Liste erstellter und geänderter Dateien
 
 `git diff --stat ff3ee76..961bb82 -- . ':!package-lock.json'` (54 Dateien
 geändert, 8913 Zeilen hinzugefügt, 32 Zeilen entfernt, keine
@@ -388,7 +445,7 @@ tests/unit/recommendation/prioritization.test.ts                          | 153 
 54 files changed, 8913 insertions(+), 32 deletions(-)
 ```
 
-## 16. Vollständige bekannte Einschränkungen
+## 17. Vollständige bekannte Einschränkungen
 
 - **Cross-Selling-Attribution-Lücke (bewusst, ChatGPT-Entscheidung
   2026-08-30):** eine `CrossSellingRule` kann seit AP4 ebenfalls über
@@ -417,7 +474,7 @@ tests/unit/recommendation/prioritization.test.ts                          | 153 
   behoben, ohne Auswirkung auf späteren Anwendungscode, aber Teil der
   vollständigen Commit-Historie der Phase.
 
-## 17. Explizit nicht implementierte Funktionen
+## 18. Explizit nicht implementierte Funktionen
 
 - Cross-Selling-Campaign-Attribution (siehe Abschnitt 16).
 - Campaign-KPI-/Reporting-Dashboard.
@@ -428,7 +485,7 @@ tests/unit/recommendation/prioritization.test.ts                          | 153 
   neue Tabellen, keine Änderung an bestehenden Verhaltensweisen dieser
   Domänen).
 
-## 18. Fazit
+## 19. Fazit
 
 Phase 13 (Campaign Management) ist mit AP0–AP9 vollständig umgesetzt:
 Datenmodell, Admin-Service/-API/-UI, Regel-Integration

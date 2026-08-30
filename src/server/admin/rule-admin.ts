@@ -1768,7 +1768,6 @@ export async function publishRuleSetVersion(
 
   const tenantId = getTenantId();
   const actorUserId = getTenantContext().userId;
-  const now = new Date();
 
   let previousActiveVersionId: string | null;
   try {
@@ -1785,6 +1784,15 @@ export async function publishRuleSetVersion(
       // Modelle gilt dafuer nicht, und `tenantId` stammt bereits aus dem
       // validierten `TenantContext`.
       await tx.$queryRaw`SELECT id FROM tenants WHERE id = ${tenantId}::uuid FOR UPDATE`;
+
+      // Schritt 0b: `now` ERST NACH dem Lock-Erwerb bestimmen (Phase 13
+      // AP10-Audit-Fund, analog zum dort behobenen Campaign-Defekt, siehe
+      // DECISION_LOG.md) -- NICHT davor, sonst kann eine durch den Lock
+      // blockierte, zweite Publish-Transaktion nach Freigabe des Locks
+      // einen FRUEHEREN Zeitstempel als das soeben gesetzte `validFrom`
+      // besitzen und beim Expiren-Versuch einen ungueltigen Bereich
+      // (`validFrom > validTo`, Postgres-Fehler 22000) erzeugen.
+      const now = new Date();
 
       // Mandantenweiter Scope: bewusst OHNE ruleSetId-Filter (siehe
       // Modulkommentar oben) -- der tenant-gescopte Client injiziert die

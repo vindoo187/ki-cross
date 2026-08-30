@@ -795,3 +795,86 @@ dem Publish unveraendert bei V1, und eine NEUE Auswertung NACH dem Publish
 erzeugt eine neue Recommendation mit einem neuen Signal fuer V2. Zusaetzlich
 deckt `tests/unit/recommendation/fingerprint.test.ts` die reine
 Sortierungs-/Hash-Aenderung fuer `campaignVersionIds` ab.
+
+## Phase 13 AP10: `publishCampaignVersion()` bestimmte `now` VOR statt NACH dem Campaign-Row-Lock -- echter Nebenlaeufigkeits-Defekt, sichtbar erst durch den AP10-CI-Lauf
+
+**Kontext:** Der Abschlussbericht-Commit fuer AP10 (`docs/ABSCHLUSSBERICHT_PHASE13.md`,
+reine Dokumentation, keine Code-Aenderung) loeste dennoch einen roten CI-Lauf
+(CI #136) aus: der bestehende AP2-Regressionstest
+`tests/integration/campaign-admin.test.ts` > "zwei GLEICHZEITIGE
+Publish-Versuche fuer ZWEI VERSCHIEDENE DRAFT-Versionen DERSELBEN Campaign"
+schlug fehl. Der Test garantiert, dass bei zwei gleichzeitigen
+`publishCampaignVersion()`-Aufrufen niemals ein roher, unuebersetzter
+DB-Fehler an den Aufrufer durchschlaegt (nur
+`CampaignVersionPublishConflictError`/`CampaignVersionNotDraftError` sind
+zulaessig). Aus dem CI-Log: der tatsaechlich geworfene Fehler war Postgres
+Code 22000 "range lower bound must be less than or equal to range upper
+bound" bei `tx.campaignVersion.update()` (Schritt "vorherige Version
+expiren").
+
+**Root Cause:** `publishCampaignVersion()` (`campaign-admin.ts`) bestimmte
+`const now = new Date()` VOR dem `db.$transaction()`-Aufruf, also VOR dem
+Warten auf den Campaign-Row-Lock (`SELECT ... FOR UPDATE`, der die
+Publish-Transaktionen DERSELBEN Campaign serialisiert). Bei zwei echt
+gleichzeitigen Publish-Versuchen kann die zweite Transaktion (die den Lock
+erst NACH der ersten erhaelt) einen `now`-Zeitstempel besitzen, der bereits
+VOR dem `validFrom` liegt, das die ERSTE Transaktion soeben fuer die von ihr
+aktivierte Version gesetzt hat. Versucht die zweite Transaktion danach,
+genau diese frisch aktivierte Version mit `validTo = now(frueher)` zu
+expiren (weil sie sie als "vorherige ACTIVE-Version" liest), entsteht ein
+Bereich mit `validFrom > validTo` -- Postgres lehnt das mit Fehler 22000 ab,
+NICHT mit der von `translatePublishError()` erwarteten
+EXCLUDE-Constraint-Verletzung. Der rohe 22000-Fehler wird daher unveraendert
+weitergereicht.
+
+**ChatGPT-Entscheidung (2026-08-30, verbindlich):** Root-Cause-Diagnose
+bestaetigt, echter Concurrency-Bug (kein Testfehler, kein Flake). GO fuer
+den Fix mit der Auflage, den Test NICHT abzuschwaechen und 22000 NICHT
+zusaetzlich als "erwarteten" Fehler zu akzeptieren -- der Publish-Pfad soll
+bei korrekter Serialisierung deterministisch funktionieren. Zusaetzlich GO
+fuer einen separaten, nicht-prophylaktischen Audit desselben
+Zeitstempel-vor-Lock-Musters in anderen Draft-&gt;Publish-Workflows
+(Commission-Modelle Phase 10, RuleSet-Publish, Questionnaire-Publish,
+Goal-Publish) -- Ergebnis siehe ggf. separater Eintrag/Abschlussbericht.
+
+**Fix:** `now = new Date()` wird jetzt INNERHALB der Transaktion, UNMITTELBAR
+NACH dem erfolgreichen Erwerb des Campaign-Row-Locks, bestimmt (statt davor).
+Der Row-Lock serialisiert die Publish-Transaktionen DERSELBEN Campaign daher
+zusammen mit der Zeitstempel-Bestimmung: eine durch den Lock blockierte
+Transaktion bestimmt ihren `now`-Wert garantiert ERST NACH Freigabe des
+Locks und damit garantiert NACH dem `validFrom`, das eine vorausgegangene
+Transaktion gesetzt hat. Kein Schema-Change, keine Aenderung an
+`translatePublishError()` noetig.
+
+**Test:** Der bestehende Regressionstest
+(`tests/integration/campaign-admin.test.ts`, "zwei GLEICHZEITIGE
+Publish-Versuche...") deckt dies bereits vollstaendig ab und wurde
+unveraendert gelassen -- er ist die Regression, die den Fix beweist.
+
+**Projektweiter Audit (ChatGPT-Auflage, nicht-prophylaktisch, nur
+identifizieren -- bei Fund sauber beheben statt nur dokumentieren):**
+Geprueft wurden alle bestehenden Draft-&gt;Publish-Workflows mit
+Row-Lock-Muster auf denselben Fehler (`now` vor statt nach dem Lock):
+
+- `publishCommissionModelVersion()` (`commission-admin.ts`, Phase 10 AP5):
+  IDENTISCHES Muster gefunden -- `now` wurde vor dem
+  CommissionModel-Row-Lock bestimmt. Ebenfalls behoben (`now` jetzt nach
+  Lock-Erwerb innerhalb der Transaktion), exakt analog zum Campaign-Fix.
+  Der bestehende Regressionstest in `commission-admin.test.ts`
+  ("gleichzeitig ... DASSELBE CommissionModel") deckt dies unveraendert ab.
+- `publishRuleSetVersion()` (`rule-admin.ts`, Phase 9): IDENTISCHES Muster
+  gefunden -- `now` wurde vor dem Tenant-Row-Lock bestimmt. Ebenfalls
+  behoben, exakt analog. Der bestehende Regressionstest in
+  `rule-admin-publish.test.ts` deckt dies unveraendert ab.
+- `publishDraftVersion()` (`question-admin.ts`, Fragebogen, Phase 8): KEIN
+  Row-Lock vorhanden -- dieser Workflow verlaesst sich ausschliesslich auf
+  den EXCLUDE-Constraint (`questionnaire_versions_no_overlap`) als
+  Nebenlaeufigkeitsschutz, es gibt daher keine Lock-Wartephase, in der ein
+  vorab bestimmter Zeitstempel veralten koennte. Das Muster ist nicht
+  anwendbar, kein Fund.
+- Goals (`goal-admin.ts`): kein Draft-&gt;Publish-&gt;ACTIVE/EXPIRED-
+  Lebenszyklus (siehe Modulkommentar), Muster nicht anwendbar.
+
+Alle drei betroffenen Publish-Pfade (Campaign, CommissionModel, RuleSet)
+folgen jetzt demselben korrigierten Muster: Row-Lock zuerst, `now` danach,
+innerhalb derselben Transaktion.
