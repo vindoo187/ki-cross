@@ -1730,3 +1730,26 @@ code {
   cursor: pointer;
   font-size: 13px;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Phase 13 AP6 -- Kampagnenverwaltung (/admin/campaigns). Reuses the
+   .admin-questions class family above (badges, forms, history, actions,
+   condition rows) 1:1, analog Phase 9 (.admin-rules) / Phase 10
+   (.admin-commissions). Der Veroeffentlichen-Hinweis ist -- wie bei
+   Provisionsmodellen -- PRO Kampagne gescoped, keine mandantenweite
+   Warnung (siehe CampaignVersionActionsBar.tsx Modulkommentar), daher
+   dieselbe ruhige Farbgebung wie .admin-commissions__publish-note statt
+   der mandantenweiten .admin-rules__publish-warning-Optik. Fuer das
+   "Neue Kampagne anlegen"-Toggle-Formular (CreateCampaignButton.tsx)
+   werden bewusst die bestehenden .admin-goals__* Klassen wiederverwendet
+   (identisches Toggle-Formular-Muster wie CreateGoalButton.tsx, Phase 11
+   AP6) statt eines eigenen, redundanten Klassensatzes. */
+/* ---------------------------------------------------------------------- */
+
+.admin-campaigns__publish-note {
+  padding: 8px 12px;
+  border: 1px solid #9aa5b1;
+  border-radius: 6px;
+  background: #f2f4f6;
+  color: #3a4552;
+}

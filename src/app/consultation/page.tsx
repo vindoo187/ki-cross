@@ -110,6 +110,17 @@ export default async function ConsultationEntryPage() {
           <Link href="/admin/goals">Zielverwaltung oeffnen</Link>
         </p>
       )}
+
+      {/* Phase 13 AP6: Einstiegspunkt zur Kampagnenverwaltung -- nur sichtbar,
+          wenn die Session ueberhaupt config.campaigns.view traegt (reine
+          UI-Bequemlichkeit, KEINE Sicherheitsgrenze: der eigentliche Zugriff
+          wird ausschliesslich serverseitig ueber requireConfigPermission()
+          durchgesetzt, siehe /admin/campaigns/page.tsx). */}
+      {session.configPermissions.includes("config.campaigns.view") && (
+        <p className="consultation-entry__analytics-link">
+          <Link href="/admin/campaigns">Kampagnenverwaltung oeffnen</Link>
+        </p>
+      )}
     </main>
   );
 }
