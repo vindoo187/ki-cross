@@ -32,6 +32,7 @@
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, describe, expect, it } from "vitest";
+import type { VisibilityOperator } from "@/server/questionnaire/types";
 import { runWithTenantContext } from "@/server/tenant/context";
 import { evaluate } from "@/server/recommendation/service";
 
@@ -254,7 +255,7 @@ describe.skipIf(!hasDatabaseUrl)(
       groupIndex: number,
       sourceType: "CAMPAIGN_ACTIVE" | "PRODUCT_ATTRIBUTE",
       attributeKey: string,
-      operator: string,
+      operator: VisibilityOperator,
       comparisonValue: string,
     ) {
       await rawClient.prioritizationRuleCondition.create({
@@ -720,9 +721,9 @@ describe.skipIf(!hasDatabaseUrl)(
           ruleSetVersionId,
           key: "cross-multi-b",
           description: "Cross-Selling bei Campaign B.",
-          needType: "INSURANCE",
+          needType: "DEVICE_PROTECTION",
           priority: 30,
-          reasonCode: "CAMPAIGN_INSURANCE_SUGGESTED",
+          reasonCode: "CAMPAIGN_PROTECTION_SUGGESTED",
         },
       });
       await rawClient.crossSellingRuleCondition.create({
@@ -746,7 +747,7 @@ describe.skipIf(!hasDatabaseUrl)(
       const result = await asTenant(tenant.tenantId, () => evaluate(sessionId));
       expect(result.crossSellingSignals).toHaveLength(2);
       const reasonCodes = result.crossSellingSignals.map((s) => s.reasonCode).sort();
-      expect(reasonCodes).toEqual(["CAMPAIGN_ADDON_SUGGESTED", "CAMPAIGN_INSURANCE_SUGGESTED"]);
+      expect(reasonCodes).toEqual(["CAMPAIGN_ADDON_SUGGESTED", "CAMPAIGN_PROTECTION_SUGGESTED"]);
     });
 
     it("Determinismus: zweimalige Auswertung derselben Session mit mehreren aktiven Campaigns liefert identischen businessPriorityScore", async () => {
