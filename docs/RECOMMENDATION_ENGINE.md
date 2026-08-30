@@ -119,8 +119,11 @@ Auswertbarkeitsprüfung und funktioniert auch für `COMPLETED`-Sitzungen.
 SHA-256-Fingerprint (`fingerprint.ts`) über eine kanonische
 JSON-Repräsentation aller Eingaben (Antworten, Produktattribute,
 Sitzungsattribute, Regelset-/Fragebogenversion, Algorithmusversion,
-tenant-weit gültige Provisionsversionen). Zwei Auswertungen derselben
-Sitzung mit identischem Fingerprint erzeugen **keinen** neuen Datensatz
+tenant-weit gültige Provisionsversionen, seit Phase 13 AP8 zusätzlich
+tenant-/filialweit zum Auswertungszeitpunkt aktive `CampaignVersion`-IDs –
+siehe Abschnitt "Campaign-Priorisierung und Attribution" unten). Zwei
+Auswertungen derselben Sitzung mit identischem Fingerprint erzeugen
+**keinen** neuen Datensatz
 (Fast-Path-`SELECT` auf `(consultationSessionId, evaluationFingerprint)`
 vor jedem Schreibversuch, außerhalb der Transaktion) — die bestehende
 `Recommendation` wird unverändert zurückgegeben, insbesondere ohne erneute
@@ -147,6 +150,63 @@ auflösen kann), `RecommendationConsistencyError` (P2002 ohne
 Fingerprint-Treffer bei der Recovery-Suche — deutet auf Datenkorruption
 oder einen Fingerprint-Berechnungsfehler hin). Vollständige Liste in
 `src/server/recommendation/errors.ts`.
+
+## Campaign-Priorisierung und Attribution (Phase 13)
+
+**Bedingungstyp `CAMPAIGN_ACTIVE` (AP4):** `PrioritizationRule` und
+`CrossSellingRule` können seit Phase 13 zusätzlich zu `ANSWER`/
+`PRODUCT_ATTRIBUTE`/`SESSION_ATTRIBUTE` eine Bedingung vom
+`sourceType = CAMPAIGN_ACTIVE` besitzen (`attributeKey` = Campaign-Key,
+Operator `IS_ANSWERED`/`IS_NOT_ANSWERED` als "ist aktiv"/"ist nicht
+aktiv"). Welche `Campaign`s zu einem Auswertungszeitpunkt aktiv sind, wird
+über `loadActiveCampaignContext()` (`service.ts`) aufgelöst: genau wie
+`ruleSetAt` (siehe oben) wird bewusst **JETZT** (der tatsächliche
+Auswertungszeitpunkt), nicht der Session-Start verwendet – eine spätere
+Kampagnen-Aktivierung/-Deaktivierung soll eine laufende Beratung
+beeinflussen können, anders als das bewusst session-gepinnte
+`commercialAt` für Preise/Provisionen (siehe DECISION_LOG.md,
+Phase-13-AP4-Eintrag). `activeCampaignKeys` (reine Präsenzprüfung für die
+Bedingungsauswertung) und `activeCampaignContext`
+(`campaignId`/`campaignVersionId` je Key, für die Attribution unten)
+stammen aus derselben Query/demselben Zeitpunkt, damit beide garantiert
+konsistent sind.
+
+**Attribution (`RecommendationCampaignSignal`, AP7):** Trägt eine
+tatsächlich **getroffene** `PrioritizationRule`-Bedingung zu einer
+Empfehlung bei einer Kampagne bei, wird dies als eigene, append-only
+Analytics-Zeile (`RecommendationCampaignSignal`, FK auf
+`RecommendationItem` + `Campaign` + `CampaignVersion`) atomar in derselben
+Transaktion wie `Recommendation`/`RecommendationItem` gespeichert – nicht
+als weiteres `RecommendationRationale`-Feld, um Attribution und
+Begründungstext strukturell getrennt zu halten. Nur der Operator
+`IS_ANSWERED` erzeugt ein Signal (`IS_NOT_ANSWERED` – "Kampagne ist gerade
+NICHT aktiv" – ist eine gültige Bedingung, aber keine inhaltliche
+Zurechnung zu dieser Kampagne). Referenzieren mehrere Regeln dieselbe
+Kampagne für dasselbe `RecommendationItem`, entsteht **maximal ein**
+Signal (Deduplizierung in `evaluatePrioritizationRules()`). **Bewusst
+zurückgestellte Lücke:** `CrossSellingRule` kann `CAMPAIGN_ACTIVE`
+ebenfalls als Bedingung nutzen, aber `RecommendationCampaignSignal` hat
+strukturell nur eine FK auf `RecommendationItem`, nicht auf
+`RecommendationCrossSellingSignal` – ein CrossSelling-Treffer erzeugt
+daher aktuell **kein** Attributions-Signal (siehe DECISION_LOG.md,
+Phase-13-AP7-Eintrag).
+
+**Fingerprint-Fix (AP8, echter Befund):** Der Reproduzierbarkeits-
+Regressionstest aus AP8 deckte auf, dass `evaluationFingerprint`
+ursprünglich keine aktiven `CampaignVersion`-IDs enthielt. Da sich
+zwischen zwei `evaluate()`-Aufrufen derselben Sitzung oft **nur** der
+Kampagnenstatus ändert (keine Antworten/Produkte/Provisionsmodelle),
+blieb der Fingerprint in diesem Fall identisch, der Idempotenz-Fast-Path
+griff fälschlich, und eine erneute Auswertung nach einer
+Kampagnen-Änderung lieferte weiterhin die alte, veraltete Empfehlung samt
+altem Signal zurück, statt neu auszuwerten. Behoben durch
+`FingerprintInput.campaignVersionIds` (siehe oben) – exakt analog zu
+`commissionModelVersionIds`, aus dem ohnehin bereits geladenen
+`activeCampaignContext` befüllt, keine Schemaänderung. Ein expliziter
+Testschritt bestätigt zusätzlich, dass der Fast-Path bei unverändertem
+Kampagnenstatus weiterhin korrekt greift (der Fix darf die Idempotenz
+nicht generell deaktivieren). Details siehe DECISION_LOG.md,
+Phase-13-AP8-Eintrag, und `tests/integration/recommendation-campaign-attribution.test.ts`.
 
 Details und die vollständige Historie der Entscheidungsrevisionen (inkl.
 aller vom Projektleiter geforderten Korrekturen) siehe
