@@ -9,16 +9,46 @@
  * (questionnaire/visibility.ts), um Drift zwischen den beiden Engines zu
  * vermeiden. PRODUCT_ATTRIBUTE/SESSION_ATTRIBUTE-Conditions laufen ueber
  * die geschlossene attribute-registry.ts.
+ *
+ * CAMPAIGN_ACTIVE-Conditions (Phase 13 AP4, ChatGPT-GO 2026-08-30, siehe
+ * PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 3 AP4) sind bewusst KEINE
+ * eigene Engine, sondern folgen exakt demselben "Praesenz-Check in einer
+ * Map"-Muster wie PRODUCT_ATTRIBUTE/SESSION_ATTRIBUTE mit
+ * IS_ANSWERED/IS_NOT_ANSWERED: `context.activeCampaignKeys` enthaelt genau
+ * die `Campaign.key`-Werte, die zum Auswertungszeitpunkt fuer die Session
+ * aktiv sind (veroeffentlichte CampaignVersion + gueltiger Zeitraum +
+ * passender Scope -- Aufloesung in `recommendation/service.ts`, siehe
+ * dortigen Modulkommentar). Andere Operatoren als IS_ANSWERED/
+ * IS_NOT_ANSWERED ergeben fachlich keinen Sinn (es gibt keinen
+ * Vergleichswert, nur "aktiv"/"nicht aktiv") und werden abgelehnt. Anders
+ * als PRODUCT_ATTRIBUTE/SESSION_ATTRIBUTE ist `attributeKey` hier KEIN
+ * Eintrag in einer geschlossenen Code-Registry, sondern ein
+ * `Campaign.key`-Wert des Mandanten (Existenzpruefung erfolgt
+ * anwendungsseitig im Validator, `rule-admin.ts::validateDraftRuleSetVersion()`,
+ * analog zur "unbekannte Frage"-Pruefung bei ANSWER-Conditions).
+ * Ausschliesslich fuer PrioritizationRuleCondition/CrossSellingRuleCondition
+ * vorgesehen -- ebenfalls serverseitig im Validator durchgesetzt, nicht per
+ * DB-Constraint.
  */
 
 import { evaluateSingleCondition } from "../questionnaire/visibility";
-import type { AnsweredValue, VisibilityConditionInput } from "../questionnaire/types";
+import type {
+  AnsweredValue,
+  VisibilityConditionInput,
+  VisibilityOperator,
+} from "../questionnaire/types";
 import {
   assertOperatorAllowedForAttribute,
   evaluateAttributeComparison,
 } from "./attribute-registry";
-import { InvalidConditionSourceError } from "./errors";
+import { InvalidConditionSourceError, InvalidOperatorForAttributeError } from "./errors";
 import type { ConditionInput } from "./types";
+
+/** Einzig sinnvolle Operatoren fuer CAMPAIGN_ACTIVE -- siehe Modulkommentar. */
+const CAMPAIGN_ACTIVE_OPERATORS: ReadonlySet<VisibilityOperator> = new Set([
+  "IS_ANSWERED",
+  "IS_NOT_ANSWERED",
+]);
 
 /**
  * Validiert die strukturelle Invariante "genau eines von
@@ -49,6 +79,7 @@ export function assertValidConditionSource(condition: ConditionInput): void {
  * @param answersByQuestionId Antworten der Session (fuer ANSWER-Conditions), keyed nach `Question.id`.
  * @param productAttributes Aufgeloeste TariffAttribute-Werte des aktuell geprueften ProductVersion-Kandidaten (fuer PRODUCT_ATTRIBUTE-Conditions).
  * @param sessionAttributes Session-Attribute (fuer SESSION_ATTRIBUTE-Conditions).
+ * @param activeCampaignKeys `Campaign.key`-Werte, die zum Auswertungszeitpunkt fuer diese Session aktiv sind (fuer CAMPAIGN_ACTIVE-Conditions, Phase 13 AP4). Optional -- Aufrufer, die keine CAMPAIGN_ACTIVE-Conditions erwarten (Eligibility/Exclusion), muessen das Feld nicht setzen.
  */
 export function evaluateCondition(
   condition: ConditionInput,
@@ -56,6 +87,7 @@ export function evaluateCondition(
     answersByQuestionId: ReadonlyMap<string, AnsweredValue>;
     productAttributes: ReadonlyMap<string, string>;
     sessionAttributes: ReadonlyMap<string, string>;
+    activeCampaignKeys?: ReadonlySet<string>;
   },
 ): boolean {
   assertValidConditionSource(condition);
@@ -70,6 +102,19 @@ export function evaluateCondition(
     };
     const answer = context.answersByQuestionId.get(condition.questionId as string);
     return evaluateSingleCondition(legacyCondition, answer);
+  }
+
+  if (condition.sourceType === "CAMPAIGN_ACTIVE") {
+    const campaignKey = condition.attributeKey as string;
+    if (!CAMPAIGN_ACTIVE_OPERATORS.has(condition.operator)) {
+      throw new InvalidOperatorForAttributeError(
+        condition.sourceType,
+        campaignKey,
+        condition.operator,
+      );
+    }
+    const isActive = (context.activeCampaignKeys ?? new Set<string>()).has(campaignKey);
+    return condition.operator === "IS_ANSWERED" ? isActive : !isActive;
   }
 
   const attributeKey = condition.attributeKey as string;
@@ -118,6 +163,7 @@ export function evaluateConditionGroups(
     answersByQuestionId: ReadonlyMap<string, AnsweredValue>;
     productAttributes: ReadonlyMap<string, string>;
     sessionAttributes: ReadonlyMap<string, string>;
+    activeCampaignKeys?: ReadonlySet<string>;
   },
 ): boolean {
   if (conditions.length === 0) return true;

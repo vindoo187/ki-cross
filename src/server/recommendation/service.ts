@@ -277,6 +277,44 @@ async function loadActiveRuleSetVersion(
   });
 }
 
+/**
+ * Phase 13 AP4 (Campaign Rule Integration, ChatGPT-GO 2026-08-30, siehe
+ * PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 3 AP4): laedt die `Campaign.key`-
+ * Werte, die zum Auswertungszeitpunkt (`ruleSetAt`, siehe evaluate() -
+ * Campaigns folgen bewusst derselben "JETZT"-Semantik wie RuleSetVersion,
+ * NICHT der Session-Pinning-Semantik von Questionnaire/Produkt-/
+ * Provisionsaufloesung) fuer DIESE Session aktiv sind. "Aktiv" bedeutet
+ * hier fachlich mehr als `status = "ACTIVE"` (ChatGPTs ausdrueckliche
+ * Leitplanke 2026-08-30): eine veroeffentlichte CampaignVersion, deren
+ * Zeitraum den Auswertungszeitpunkt einschliesst, UND deren Scope zur
+ * Session passt -- TENANT-Scope gilt tenantweit (jede Session), STORE-Scope
+ * nur fuer Sessions der exakt gleichen Filiale. Mehrere gleichzeitig aktive
+ * Campaigns sind ausdruecklich erlaubt (AP5-Vorbereitung); pro Campaign
+ * verhindert die bestehende EXCLUDE-Constraint (AP1) mehr als eine
+ * ueberlappend-aktive Version. Folgt exakt demselben Zeitraum-Aufloesungs-
+ * Muster wie `loadActiveRuleSetVersion()`/`loadProductCandidates()` -- keine
+ * neue parallele Scope-/Visibility-Logik (ChatGPT-Vorgabe), sondern
+ * Wiederverwendung des etablierten Musters fuer eine neue Entitaet.
+ */
+async function loadActiveCampaignKeys(
+  client: QueryClient,
+  storeId: string,
+  atTime: Date,
+): Promise<Set<string>> {
+  const rows = await client.campaignVersion.findMany({
+    where: {
+      status: "ACTIVE",
+      validFrom: { lte: atTime },
+      AND: [
+        { OR: [{ validTo: null }, { validTo: { gt: atTime } }] },
+        { OR: [{ scopeType: "TENANT" }, { scopeType: "STORE", scopeId: storeId }] },
+      ],
+    },
+    include: { campaign: { select: { key: true } } },
+  });
+  return new Set(rows.map((r) => r.campaign.key));
+}
+
 function mapCondition(c: {
   id: string;
   groupIndex: number;
@@ -604,12 +642,17 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
   const resolveCommission = buildResolveCommission(commissionRows);
 
   const sessionAttributes = buildSessionAttributes(session);
+  // Phase 13 AP4: bewusst zu ruleSetAt (JETZT), NICHT zu commercialAt/
+  // questionnaireAt aufgeloest -- siehe loadActiveCampaignKeys()-
+  // Modulkommentar.
+  const activeCampaignKeys = await loadActiveCampaignKeys(db, session.storeId, ruleSetAt);
 
   const evaluatedItems: EvaluatedProductItem[] = productCandidates.map((candidate) => {
     const evalContext = {
       answersByQuestionId: answers,
       productAttributes: candidate.attributes,
       sessionAttributes,
+      activeCampaignKeys,
     };
 
     const eligibilityMatches = evaluateEligibilityRuleMatches(eligibilityRules, evalContext);
@@ -647,6 +690,7 @@ export async function evaluate(consultationSessionId: string): Promise<Recommend
     answersByQuestionId: answers,
     answerIdByQuestionId,
     sessionAttributes,
+    activeCampaignKeys,
   };
   const crossSellingSignals = evaluateCrossSellingRules(
     crossSellingRules,

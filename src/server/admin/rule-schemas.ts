@@ -50,7 +50,16 @@ const visibilityOperatorSchema = z.enum([
   "IS_NOT_ANSWERED",
 ]);
 
-const conditionSourceTypeSchema = z.enum(["ANSWER", "PRODUCT_ATTRIBUTE", "SESSION_ATTRIBUTE"]);
+// Phase 13 AP4: CAMPAIGN_ACTIVE strukturell fuer alle vier Regeltypen
+// zugelassen (gemeinsames Schema, siehe Modulkommentar oben), aber
+// serverseitig auf PrioritizationRule/CrossSellingRule beschraenkt --
+// siehe rule-admin.ts::validateDraftRuleSetVersion().
+const conditionSourceTypeSchema = z.enum([
+  "ANSWER",
+  "PRODUCT_ATTRIBUTE",
+  "SESSION_ATTRIBUTE",
+  "CAMPAIGN_ACTIVE",
+]);
 
 /**
  * `questionId`/`attributeKey` sind hier BEIDE optional/nullable -- welches

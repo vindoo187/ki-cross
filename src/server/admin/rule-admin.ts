@@ -1359,6 +1359,11 @@ async function loadCrossSellingRuleDetail(
  *   `assertOperatorAllowedForAttribute()` (bestehend), zusaetzlich muss
  *   `comparisonValue` (bzw. jeder Wert bei IN/NOT_IN) gemaess dem
  *   `AttributeValueType` parsebar sein.
+ * - CAMPAIGN_ACTIVE-Conditions (Phase 13 AP4, ChatGPT-GO 2026-08-30):
+ *   ausschliesslich fuer PrioritizationRule/CrossSellingRule zulaessig,
+ *   `attributeKey` muss zu einer existierenden `Campaign` dieses Mandanten
+ *   gehoeren (kein DB-FK, siehe `conditions.ts`-Modulkommentar), Operator
+ *   auf IS_ANSWERED/IS_NOT_ANSWERED beschraenkt.
  * - `description` nicht leer (redundant zur Zod-Struktur-Validierung bei
  *   AP3, aber defensiv fuer per Deep-Copy uebernommene Altdaten).
  * - `EligibilityRule.fitWeight` nicht negativ (siehe Code-Check oben).
@@ -1396,6 +1401,13 @@ export async function validateDraftRuleSetVersion(
   }
 
   const activeQuestions = await loadActiveQuestionAnswerTypeMap(db);
+  // Phase 13 AP4: Campaign.key-Werte des Mandanten fuer die
+  // Existenzpruefung von CAMPAIGN_ACTIVE-Bedingungen (analog
+  // activeQuestions fuer ANSWER-Bedingungen, aber ohne DB-FK -- siehe
+  // conditions.ts-Modulkommentar).
+  const campaignKeys = new Set(
+    (await db.campaign.findMany({ select: { key: true } })).map((c) => c.key),
+  );
 
   function validateConditions(
     ruleLabel: string,
@@ -1451,6 +1463,32 @@ export async function validateDraftRuleSetVersion(
               `${ruleLabel} "${ruleKey}": Bedingung verweist auf ungueltige AnswerOption(en) "${invalid.join(", ")}" der Frage "${questionId}".`,
             );
           }
+        }
+        continue;
+      }
+
+      // Phase 13 AP4: CAMPAIGN_ACTIVE ist strukturell fuer alle vier
+      // Regeltypen moeglich (gemeinsames Zod-Schema), serverseitig aber
+      // ausschliesslich fuer PrioritizationRule/CrossSellingRule vorgesehen
+      // (ChatGPTs ausdrueckliche AP4-Leitplanke 2026-08-30).
+      if (sourceType === "CAMPAIGN_ACTIVE") {
+        if (ruleLabel !== "PrioritizationRule" && ruleLabel !== "CrossSellingRule") {
+          issues.push(
+            `${ruleLabel} "${ruleKey}": CAMPAIGN_ACTIVE-Bedingungen sind ausschliesslich fuer PrioritizationRule/CrossSellingRule vorgesehen.`,
+          );
+          continue;
+        }
+        const campaignKey = conditionInput.attributeKey as string;
+        if (!campaignKeys.has(campaignKey)) {
+          issues.push(
+            `${ruleLabel} "${ruleKey}": Bedingung verweist auf Campaign-Key "${campaignKey}", der zu keiner Campaign dieses Mandanten gehoert.`,
+          );
+          continue;
+        }
+        if (operator !== "IS_ANSWERED" && operator !== "IS_NOT_ANSWERED") {
+          issues.push(
+            `${ruleLabel} "${ruleKey}": Operator "${operator}" ist fuer CAMPAIGN_ACTIVE-Bedingungen nicht zulaessig (nur IS_ANSWERED/IS_NOT_ANSWERED zulaessig).`,
+          );
         }
         continue;
       }

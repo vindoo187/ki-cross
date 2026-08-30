@@ -32,6 +32,7 @@ describe("evaluateCrossSellingRules", () => {
       answersByQuestionId: new Map(),
       answerIdByQuestionId: new Map(),
       sessionAttributes: new Map(),
+      activeCampaignKeys: new Set(),
     });
     expect(result).toEqual([]);
   });
@@ -45,6 +46,7 @@ describe("evaluateCrossSellingRules", () => {
       answersByQuestionId,
       answerIdByQuestionId,
       sessionAttributes: new Map(),
+      activeCampaignKeys: new Set(),
     });
     expect(result).toEqual([
       {
@@ -68,6 +70,7 @@ describe("evaluateCrossSellingRules", () => {
       answersByQuestionId,
       answerIdByQuestionId: new Map(),
       sessionAttributes: new Map(),
+      activeCampaignKeys: new Set(),
     });
     expect(result[0]?.sourceAnswerId).toBeNull();
   });
@@ -85,7 +88,12 @@ describe("evaluateCrossSellingRules", () => {
     const result = evaluateCrossSellingRules(
       [rule({ conditions: [productOnlyCondition] })],
       "rsv-1",
-      { answersByQuestionId: new Map(), answerIdByQuestionId: new Map(), sessionAttributes },
+      {
+        answersByQuestionId: new Map(),
+        answerIdByQuestionId: new Map(),
+        sessionAttributes,
+        activeCampaignKeys: new Set(),
+      },
     );
     expect(result[0]?.sourceAnswerId).toBeNull();
   });
@@ -106,6 +114,7 @@ describe("evaluateCrossSellingRules", () => {
         answersByQuestionId: new Map(),
         answerIdByQuestionId: new Map(),
         sessionAttributes: new Map(),
+        activeCampaignKeys: new Set(),
       },
     );
     expect(result).toEqual([]);
@@ -121,8 +130,43 @@ describe("evaluateCrossSellingRules", () => {
         answersByQuestionId: new Map(),
         answerIdByQuestionId: new Map(),
         sessionAttributes: new Map(),
+        activeCampaignKeys: new Set(),
       },
     );
     expect(matched).toHaveLength(1);
+  });
+
+  it("Phase 13 AP4: CAMPAIGN_ACTIVE-Bedingung matcht ueber activeCampaignKeys", () => {
+    const campaignCondition: ConditionInput = {
+      id: "c1",
+      groupIndex: 0,
+      sourceType: "CAMPAIGN_ACTIVE",
+      attributeKey: "summer-sale",
+      operator: "IS_ANSWERED",
+      comparisonValue: "",
+    };
+    const matched = evaluateCrossSellingRules(
+      [rule({ conditions: [campaignCondition] })],
+      "rsv-1",
+      {
+        answersByQuestionId: new Map(),
+        answerIdByQuestionId: new Map(),
+        sessionAttributes: new Map(),
+        activeCampaignKeys: new Set(["summer-sale"]),
+      },
+    );
+    expect(matched).toHaveLength(1);
+
+    const notMatched = evaluateCrossSellingRules(
+      [rule({ conditions: [campaignCondition] })],
+      "rsv-1",
+      {
+        answersByQuestionId: new Map(),
+        answerIdByQuestionId: new Map(),
+        sessionAttributes: new Map(),
+        activeCampaignKeys: new Set(),
+      },
+    );
+    expect(notMatched).toEqual([]);
   });
 });

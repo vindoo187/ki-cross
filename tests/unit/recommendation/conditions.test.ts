@@ -4,7 +4,10 @@ import {
   evaluateCondition,
   evaluateConditionGroups,
 } from "@/server/recommendation/conditions";
-import { InvalidConditionSourceError } from "@/server/recommendation/errors";
+import {
+  InvalidConditionSourceError,
+  InvalidOperatorForAttributeError,
+} from "@/server/recommendation/errors";
 import type { ConditionInput } from "@/server/recommendation/types";
 import type { AnsweredValue } from "@/server/questionnaire/types";
 
@@ -80,6 +83,105 @@ describe("assertValidConditionSource", () => {
         }),
       ),
     ).toThrow(InvalidConditionSourceError);
+  });
+
+  it("CAMPAIGN_ACTIVE: attributeKey gesetzt, questionId leer -> gueltig", () => {
+    expect(() =>
+      assertValidConditionSource(
+        condition({
+          sourceType: "CAMPAIGN_ACTIVE",
+          questionId: null,
+          attributeKey: "summer-sale",
+          operator: "IS_ANSWERED",
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("CAMPAIGN_ACTIVE ohne attributeKey -> InvalidConditionSourceError", () => {
+    expect(() =>
+      assertValidConditionSource(
+        condition({ sourceType: "CAMPAIGN_ACTIVE", questionId: null, attributeKey: null }),
+      ),
+    ).toThrow(InvalidConditionSourceError);
+  });
+});
+
+describe("evaluateCondition - CAMPAIGN_ACTIVE (Phase 13 AP4)", () => {
+  it("IS_ANSWERED liefert true, wenn der Campaign-Key in activeCampaignKeys enthalten ist", () => {
+    const activeCampaignKeys = new Set(["summer-sale"]);
+    expect(
+      evaluateCondition(
+        condition({
+          sourceType: "CAMPAIGN_ACTIVE",
+          questionId: null,
+          attributeKey: "summer-sale",
+          operator: "IS_ANSWERED",
+          comparisonValue: "",
+        }),
+        { ...emptyContext, activeCampaignKeys },
+      ),
+    ).toBe(true);
+  });
+
+  it("IS_ANSWERED liefert false, wenn der Campaign-Key NICHT aktiv ist", () => {
+    expect(
+      evaluateCondition(
+        condition({
+          sourceType: "CAMPAIGN_ACTIVE",
+          questionId: null,
+          attributeKey: "summer-sale",
+          operator: "IS_ANSWERED",
+          comparisonValue: "",
+        }),
+        emptyContext,
+      ),
+    ).toBe(false);
+  });
+
+  it("IS_NOT_ANSWERED liefert true, wenn der Campaign-Key NICHT aktiv ist", () => {
+    expect(
+      evaluateCondition(
+        condition({
+          sourceType: "CAMPAIGN_ACTIVE",
+          questionId: null,
+          attributeKey: "summer-sale",
+          operator: "IS_NOT_ANSWERED",
+          comparisonValue: "",
+        }),
+        emptyContext,
+      ),
+    ).toBe(true);
+  });
+
+  it("activeCampaignKeys fehlt im Kontext (optionales Feld) -> gilt wie leere Menge", () => {
+    expect(
+      evaluateCondition(
+        condition({
+          sourceType: "CAMPAIGN_ACTIVE",
+          questionId: null,
+          attributeKey: "summer-sale",
+          operator: "IS_NOT_ANSWERED",
+          comparisonValue: "",
+        }),
+        emptyContext,
+      ),
+    ).toBe(true);
+  });
+
+  it("Vergleichsoperator (z.B. EQUALS) ist nicht zulaessig -> InvalidOperatorForAttributeError", () => {
+    expect(() =>
+      evaluateCondition(
+        condition({
+          sourceType: "CAMPAIGN_ACTIVE",
+          questionId: null,
+          attributeKey: "summer-sale",
+          operator: "EQUALS",
+          comparisonValue: "true",
+        }),
+        emptyContext,
+      ),
+    ).toThrow(InvalidOperatorForAttributeError);
   });
 });
 

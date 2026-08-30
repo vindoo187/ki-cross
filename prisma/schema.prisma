@@ -168,6 +168,16 @@ enum ConditionSourceType {
   ANSWER
   PRODUCT_ATTRIBUTE
   SESSION_ATTRIBUTE
+  // Phase 13 AP4 (Campaign Rule Integration, ChatGPT-GO 2026-08-30, siehe
+  // PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 3 AP4): "Ist Campaign X
+  // gerade aktiv?" -- ausschliesslich fuer PrioritizationRuleCondition/
+  // CrossSellingRuleCondition vorgesehen (serverseitig durchgesetzt in
+  // rule-admin.ts::validateDraftRuleSetVersion(), NICHT durch einen
+  // DB-Constraint, da alle vier Condition-Tabellen denselben Enum-Typ
+  // nutzen). attributeKey traegt hier Campaign.key (kein DB-FK, analog
+  // PRODUCT_ATTRIBUTE/SESSION_ATTRIBUTE -- Existenzpruefung erfolgt
+  // anwendungsseitig im Validator).
+  CAMPAIGN_ACTIVE
 }
 
 enum LegalBasis {

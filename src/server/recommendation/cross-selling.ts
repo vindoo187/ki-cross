@@ -18,6 +18,10 @@ export interface CrossSellingEvaluationContext {
    */
   answerIdByQuestionId: ReadonlyMap<string, string>;
   sessionAttributes: ReadonlyMap<string, string>;
+  // Phase 13 AP4: Campaign.key-Werte, die zum Auswertungszeitpunkt fuer
+  // diese Session aktiv sind (fuer CAMPAIGN_ACTIVE-Conditions, siehe
+  // conditions.ts-Modulkommentar).
+  activeCampaignKeys: ReadonlySet<string>;
 }
 
 export function evaluateCrossSellingRules(
@@ -28,12 +32,14 @@ export function evaluateCrossSellingRules(
   const matched = rules.filter((rule) =>
     evaluateConditionGroups(rule.conditions, {
       answersByQuestionId: context.answersByQuestionId,
-      // Cross-Selling-Regeln referenzieren laut Modell nur ANSWER-Conditions;
-      // eine leere Attribute-Map ist daher unschaedlich, falls doch ein
+      // Cross-Selling-Regeln referenzierten bislang nur ANSWER-Conditions,
+      // seit Phase 13 AP4 zusaetzlich CAMPAIGN_ACTIVE; eine leere
+      // Attribute-Map ist weiterhin unschaedlich, falls doch ein
       // PRODUCT_ATTRIBUTE/SESSION_ATTRIBUTE-Fall auftritt, evaluiert er
       // korrekt als "nicht gesetzt" (siehe conditions.ts).
       productAttributes: new Map(),
       sessionAttributes: context.sessionAttributes,
+      activeCampaignKeys: context.activeCampaignKeys,
     }),
   );
 

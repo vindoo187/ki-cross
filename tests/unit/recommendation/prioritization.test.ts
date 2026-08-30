@@ -19,6 +19,7 @@ const emptyContext = {
   answersByQuestionId: new Map<string, AnsweredValue>(),
   productAttributes: new Map<string, string>(),
   sessionAttributes: new Map<string, string>(),
+  activeCampaignKeys: new Set<string>(),
 };
 
 const resolution: CommissionResolution = {
@@ -106,6 +107,39 @@ describe("evaluatePrioritizationRules", () => {
         factorValue: "bonus_eu_roaming",
       },
     ]);
+  });
+
+  it("Phase 13 AP4: CAMPAIGN_ACTIVE-Bedingung matcht ueber activeCampaignKeys", () => {
+    const conditions = [
+      {
+        id: "c1",
+        groupIndex: 0,
+        sourceType: "CAMPAIGN_ACTIVE" as const,
+        attributeKey: "summer-sale",
+        operator: "IS_ANSWERED" as const,
+        comparisonValue: "",
+      },
+    ];
+    const contextWithActiveCampaign = {
+      ...emptyContext,
+      activeCampaignKeys: new Set(["summer-sale"]),
+    };
+    const result = evaluatePrioritizationRules(
+      [rule({ key: "campaign_bonus", weight: 15, conditions })],
+      "prod-1",
+      contextWithActiveCampaign,
+      () => resolution,
+    );
+    expect(result.businessPriorityScore).toBe(15);
+
+    // Dieselbe Regel darf NICHT matchen, wenn die Campaign nicht aktiv ist.
+    const resultInactive = evaluatePrioritizationRules(
+      [rule({ key: "campaign_bonus", weight: 15, conditions })],
+      "prod-1",
+      emptyContext,
+      () => resolution,
+    );
+    expect(resultInactive.businessPriorityScore).toBe(0);
   });
 
   it("mehrere Regeln koennen unterschiedliche commissionModelVersionId in ihren Rationale-Zeilen tragen", () => {

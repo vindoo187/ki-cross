@@ -28,7 +28,14 @@ export type NeedType =
   | "DEVICE_PROTECTION"
   | "OTHER";
 
-export type ConditionSourceType = "ANSWER" | "PRODUCT_ATTRIBUTE" | "SESSION_ATTRIBUTE";
+export type ConditionSourceType =
+  | "ANSWER"
+  | "PRODUCT_ATTRIBUTE"
+  | "SESSION_ATTRIBUTE"
+  // Phase 13 AP4: "ist Campaign X gerade aktiv?" -- ausschliesslich fuer
+  // PrioritizationRuleInput/CrossSellingRuleInput vorgesehen (serverseitig
+  // durchgesetzt in rule-admin.ts, siehe conditions.ts-Modulkommentar).
+  | "CAMPAIGN_ACTIVE";
 
 /**
  * Eine einzelne Condition-Zeile aus eligibility_rule_conditions /

@@ -580,6 +580,163 @@ describe.skipIf(!hasDatabaseUrl)("Phase 9 AP4: Serverseitiger RuleSet-Validator"
     expect(result).toEqual({ valid: true });
   });
 
+  // ---------------------------------------------------------------------
+  // Phase 13 AP4 (Campaign Rule Integration, ChatGPT-GO 2026-08-30, siehe
+  // PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 3 AP4): CAMPAIGN_ACTIVE-
+  // Validierung -- ausschliesslich PrioritizationRule/CrossSellingRule,
+  // attributeKey muss zu einer existierenden Campaign des Mandanten
+  // gehoeren, Operator auf IS_ANSWERED/IS_NOT_ANSWERED beschraenkt.
+  // ---------------------------------------------------------------------
+
+  async function createCampaign(tenantId: string, key: string) {
+    const campaignKey = `${key}-${suffix}`;
+    await rawClient.campaign.create({
+      data: { tenantId, key: campaignKey, name: `Campaign ${key}` },
+    });
+    return campaignKey;
+  }
+
+  it("CAMPAIGN_ACTIVE-Bedingung mit existierender Campaign + IS_ANSWERED -> kein Issue (Happy Path)", async () => {
+    const tenantId = await createTenant("campaign-ok");
+    const actorUserId = await createUser(tenantId, "actor");
+    const campaignKey = await createCampaign(tenantId, "summer-sale");
+    const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
+
+    const result = await runWithTenantContext(
+      { tenantId, userId: actorUserId, roles: [], managementScope: null },
+      async () => {
+        await addPrioritizationRuleToDraft(ruleSetId, versionId, {
+          key: "prio-campaign",
+          description: "Test",
+          weight: 10,
+          commissionRequired: false,
+          isActive: true,
+          conditions: [
+            {
+              groupIndex: 0,
+              sourceType: "CAMPAIGN_ACTIVE",
+              attributeKey: campaignKey,
+              operator: "IS_ANSWERED",
+              comparisonValue: "",
+            },
+          ],
+        });
+        return validateDraftRuleSetVersion(ruleSetId, versionId);
+      },
+    );
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("CAMPAIGN_ACTIVE-Bedingung mit unbekanntem Campaign-Key -> Issue", async () => {
+    const tenantId = await createTenant("campaign-unknown");
+    const actorUserId = await createUser(tenantId, "actor");
+    const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
+
+    await expect(
+      runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        async () => {
+          await addCrossSellingRuleToDraft(ruleSetId, versionId, {
+            key: "css-campaign",
+            description: "Test",
+            needType: "DSL",
+            priority: 1,
+            reasonCode: "R1",
+            isActive: true,
+            conditions: [
+              {
+                groupIndex: 0,
+                sourceType: "CAMPAIGN_ACTIVE",
+                attributeKey: "voellig-unbekannt",
+                operator: "IS_ANSWERED",
+                comparisonValue: "",
+              },
+            ],
+          });
+          return validateDraftRuleSetVersion(ruleSetId, versionId);
+        },
+      ),
+    ).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.stringContaining("zu keiner Campaign dieses Mandanten gehoert"),
+      ]),
+    });
+  });
+
+  it("CAMPAIGN_ACTIVE-Bedingung mit unzulaessigem Operator (EQUALS) -> Issue", async () => {
+    const tenantId = await createTenant("campaign-bad-op");
+    const actorUserId = await createUser(tenantId, "actor");
+    const campaignKey = await createCampaign(tenantId, "winter-sale");
+    const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
+
+    await expect(
+      runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        async () => {
+          await addPrioritizationRuleToDraft(ruleSetId, versionId, {
+            key: "prio-campaign-badop",
+            description: "Test",
+            weight: 10,
+            commissionRequired: false,
+            isActive: true,
+            conditions: [
+              {
+                groupIndex: 0,
+                sourceType: "CAMPAIGN_ACTIVE",
+                attributeKey: campaignKey,
+                operator: "EQUALS",
+                comparisonValue: "true",
+              },
+            ],
+          });
+          return validateDraftRuleSetVersion(ruleSetId, versionId);
+        },
+      ),
+    ).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.stringContaining("ist fuer CAMPAIGN_ACTIVE-Bedingungen nicht zulaessig"),
+      ]),
+    });
+  });
+
+  it("CAMPAIGN_ACTIVE-Bedingung bei EligibilityRule -> Issue (nur Prioritization/CrossSelling zulaessig)", async () => {
+    const tenantId = await createTenant("campaign-wrong-rule");
+    const actorUserId = await createUser(tenantId, "actor");
+    const campaignKey = await createCampaign(tenantId, "wrong-rule-sale");
+    const { ruleSetId, versionId } = await createDraftRuleSetVersionRaw(tenantId, "rs");
+
+    await expect(
+      runWithTenantContext(
+        { tenantId, userId: actorUserId, roles: [], managementScope: null },
+        async () => {
+          await addEligibilityRuleToDraft(ruleSetId, versionId, {
+            key: "elig-campaign",
+            description: "Test",
+            isRequired: false,
+            fitWeight: 0,
+            isActive: true,
+            conditions: [
+              {
+                groupIndex: 0,
+                sourceType: "CAMPAIGN_ACTIVE",
+                attributeKey: campaignKey,
+                operator: "IS_ANSWERED",
+                comparisonValue: "",
+              },
+            ],
+          });
+          return validateDraftRuleSetVersion(ruleSetId, versionId);
+        },
+      ),
+    ).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.stringContaining(
+          "ausschliesslich fuer PrioritizationRule/CrossSellingRule vorgesehen",
+        ),
+      ]),
+    });
+  });
+
   it("validateDraftRuleSetVersion() ist rein lesend -- Regel-Zaehler unveraendert nach Aufruf", async () => {
     const tenantId = await createTenant("read-only");
     const actorUserId = await createUser(tenantId, "actor");

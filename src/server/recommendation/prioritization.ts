@@ -29,6 +29,10 @@ export interface PrioritizationEvaluationContext {
   answersByQuestionId: ReadonlyMap<string, AnsweredValue>;
   productAttributes: ReadonlyMap<string, string>;
   sessionAttributes: ReadonlyMap<string, string>;
+  // Phase 13 AP4: Campaign.key-Werte, die zum Auswertungszeitpunkt fuer
+  // diese Session aktiv sind (fuer CAMPAIGN_ACTIVE-Conditions, siehe
+  // conditions.ts-Modulkommentar).
+  activeCampaignKeys: ReadonlySet<string>;
 }
 
 export function evaluatePrioritizationRules(
