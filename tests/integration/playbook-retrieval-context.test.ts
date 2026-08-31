@@ -273,8 +273,8 @@ describe.skipIf(!hasDatabaseUrl)(
         loadActivePlaybookSectionCandidates(db, storeId, AT_TIME),
       );
       expect(candidates).toHaveLength(1);
-      expect(candidates[0]).not.toHaveProperty("content");
-      expect(candidates[0].contentLength).toBe("Testinhalt.".length);
+      expect(candidates[0]!).not.toHaveProperty("content");
+      expect(candidates[0]!.contentLength).toBe("Testinhalt.".length);
     });
   },
 );
