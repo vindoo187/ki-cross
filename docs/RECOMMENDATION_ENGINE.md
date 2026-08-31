@@ -50,6 +50,20 @@ Die KI-Komponente darf diese strukturierten Fakten in natürliche Sprache übers
 | Sprachliche Formulierung der Begründung                                   | Ja, nur Umformulierung bereits vorhandener Fakten                  |
 | Erkennen/Kategorisieren von Freitext ("weitere individuelle Bedürfnisse") | Ja, als Hinweis, nicht als Entscheidungsgrundlage für Tarifauswahl |
 
+**Sales Playbook (Phase 14) ist bewusst NICHT an dieser Stelle integriert.** Das
+Playbook-Subsystem (`Playbook`/`PlaybookVersion`/`PlaybookSection`, siehe
+[DATA_MODEL.md](DATA_MODEL.md) Abschnitt "Sales Playbook") liefert Argumentations-/
+Einwandbehandlungs-Text für Mitarbeitende, hat aber bis Phase 14 AP8 keinerlei
+Code-Kopplung zu dieser Engine – kein Verzeichnis unter `src/server/recommendation/`
+referenziert das Playbook-Subsystem (statischer Grep-Test, dauerhaft als Regression
+abgesichert in `tests/integration/playbook-security.test.ts`). Tarifauswahl und
+Priorisierung bleiben damit ausschließlich regelbasiert; Playbook-Inhalte können
+diese Entscheidung strukturell nicht beeinflussen. Eine echte Verknüpfung (z. B.
+Playbook-Text als Kontext für einen KI-Provider) ist erst für den späteren
+Phase-12-AP5c-/Prompt-Integrationsschritt vorgesehen und dann explizit als
+Kontext/Daten, nicht als höherpriorisierte Instruktion zu behandeln (siehe
+[DECISION_LOG.md](DECISION_LOG.md), Phase 14 AP5).
+
 ## Umgang mit Ablehnung/Änderung durch den Mitarbeiter
 
 Der Mitarbeiter kann jede Empfehlung:

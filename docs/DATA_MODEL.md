@@ -197,6 +197,29 @@ Seit Phase 13 (AP0–AP8, ChatGPT-Abnahme 2026-08-30) ist das Campaign-Feature v
 
 **Noch nicht implementiert (späterer Ausbau, kein Bestandteil von Phase 2/2B):** `Goal` (Ziel-Objekt) und `KpiSnapshot` (periodisch aggregierte KPI-Snapshots) sind Phase-1-Konzepte aus [ANALYTICS_AND_KPIS.md](ANALYTICS_AND_KPIS.md), aber (noch) keine Modelle in `schema.prisma`. Seit Phase 6 werden die priorisierten Kern-KPIs tatsächlich live direkt aus `AnalyticsEvent`/`ConsultationSession`/`Recommendation`/`Deal` berechnet (`src/server/analytics/kpis.ts`, kein persistierter Snapshot) – siehe [DEAL_CAPTURE.md](DEAL_CAPTURE.md) Abschnitt 5.
 
+## Sales Playbook (Beratungsintelligenz, Phase 14)
+
+```
+Playbook                   -- fachliche Identitaet (key/name je Mandant), KEINE eigene Version --
+                               analog Campaign: eine Version-lose Playbook-Zeile hat noch keine Detailseite
+PlaybookVersion             -- Draft/Publish-versioniert wie Question/RuleSet/CommissionModel/CampaignVersion,
+                               scopeType (TENANT|STORE) + scopeId (polymorph, kein DB-FK, serverseitig geprueft,
+                               identisches Muster wie Campaign/Goal.scopeId), validFrom/validTo (EXCLUDE-Constraint
+                               PRO Playbook, `playbook_versions_no_overlap`, analog CampaignVersion),
+                               createdByUserId (Audit, nullable/SetNull)
+PlaybookSection             -- Delete-All-Then-Recreate je PlaybookVersion-Update (identisches Muster wie
+                               CampaignCondition), sectionType (10 feste Werte: CONVERSATION_GUIDANCE,
+                               ARGUMENTATION, OBJECTION_HANDLING, PRODUCT_ARGUMENT, CUSTOMER_SITUATION, CLOSING,
+                               UPSELL_CROSS_SELL, NO_GO, TONALITY, GENERAL_PRINCIPLE), title/content (content bis
+                               20.000 Zeichen, reiner Text -- niemals als HTML interpretiert), relatedTopics/
+                               relatedProductKeys/relatedSituations/tags (String-Arrays, reine Retrieval-Metadaten,
+                               kein DB-FK), priority (optional, Tie-Breaker), active
+```
+
+Seit Phase 14 (AP0–AP8, ChatGPT-Abnahme 2026-08-31) ist das Sales-Playbook-Subsystem vollstaendig implementiert und gehaertet: Admin-Service/-API (`src/server/admin/playbook-admin.ts`, `/api/admin/playbooks`, Draft→Validate→Publish-Workflow analog Question/RuleSet/CommissionModel/Campaign), Admin-UI (`/admin/playbooks`), eigene RBAC-Permission-Keys (`config.playbooks.view`/`edit`/`publish`, additiv zum bestehenden Katalog), eine reine (DB-freie) Retrieval-/Selektionsfunktion `selectPlaybookSections()` (`src/server/playbook/playbook-retrieval.ts`, Phase 14 AP4) sowie ein separater DB-Ladepfad `loadActivePlaybookSectionCandidates()` (analog `loadActiveCampaignKeys()`). Security/Tenant-Isolation/Trust-Boundary und eine vollstaendige Playwright-E2E-Suite (Desktop+Tablet) sind in Phase 14 AP5/AP8 verifiziert; Audit/Reproduzierbarkeit (inkl. der bewussten "JETZT"-Retrieval-Semantik, siehe [DECISION_LOG.md](DECISION_LOG.md)) in Phase 14 AP7.
+
+**Bewusst kein Bestandteil von Phase 14:** Das Playbook-Subsystem ist strukturell von der Recommendation Engine entkoppelt (kein Code-Verweis unter `src/server/recommendation/`, siehe [RECOMMENDATION_ENGINE.md](RECOMMENDATION_ENGINE.md) Abschnitt "Wo KI zulässig ist – und wo nicht") – es gibt aktuell keinen Prompt-Assembler, keine Provider-Anbindung und keine echte KI-Generierung, die Playbook-Inhalte tatsächlich verwendet. Diese Integration ist explizit dem spaeteren Phase-12-AP5c-Schritt vorbehalten.
+
 ## Audit
 
 ```
@@ -226,6 +249,7 @@ Recommendation 1─n RecommendationItem 1─n RecommendationRationale
 Recommendation 1─n RecommendationCrossSellingSignal 0─1 SalesOpportunity (mutable)
 ConsultationSession 0─1 Deal
 Tenant 1─n Campaign 1─n CampaignVersion 1─n CampaignCondition
+Tenant 1─n Playbook 1─n PlaybookVersion 1─n PlaybookSection
 Tenant 1─n AnalyticsEvent, BaselineMeasurement
 alle Entitäten → AuditLog (bei Änderung)
 ```
