@@ -935,3 +935,45 @@ mit dieser strukturellen Herangehensweise, ausdruecklich OHNE
 Pattern-Blacklist. Wichtigste von ChatGPT formulierte Regel: "AP5 darf
 keine Prompt-Injection-Scheinloesung bauen, solange es noch keinen
 echten Prompt-Assembler gibt."
+
+## Phase 14 AP7: Playbook-Retrieval folgt JETZT-Semantik (wie ruleSetAt/CAMPAIGN_ACTIVE), kein echter historischer Snapshot ueber `atTime`
+
+**Kontext:** Waehrend AP7 (Audit/Reproduzierbarkeit) wurde ein
+Regressionstest geschrieben, der pruefen sollte, dass ein bereits
+aufgeloester `loadActivePlaybookSectionCandidates()`-Aufruf mit einem
+`atTime` innerhalb V1s urspruenglichem Gueltigkeitsfenster auch NACH dem
+Publish einer neuen Version V2 weiterhin V1s Section liefert ("echter"
+Zeitreise-Snapshot). CI #151 widerlegte diese Annahme
+(`AssertionError: expected [] to deeply equal [...]`).
+
+**Root Cause:** `loadActivePlaybookSectionCandidates()` filtert zusaetzlich
+zu `validFrom`/`validTo` nach `status: "ACTIVE"`. Sobald eine Version durch
+den Publish einer neuen Version DESSELBEN Playbooks auf `EXPIRED` gesetzt
+wird, verschwindet sie aus JEDER nachfolgenden Abfrage -- unabhaengig vom
+uebergebenen `atTime`. Ein `atTime` in der Vergangenheit reaktiviert die
+bereits abgeloeste Version also NICHT.
+
+**Bewertung:** Kein Bug, sondern exakt konsistent mit der bereits
+dokumentierten JETZT-Semantik von `ruleSetAt`/`CAMPAIGN_ACTIVE` (siehe
+oben, Phase 13 AP4: "Campaign-Aktivitaet wird zum Auswertungszeitpunkt
+aufgeloest, nicht an den Session-Start gepinnt" -- zwei identische
+Aufrufe koennen unterschiedliche Ergebnisse liefern, wenn sich der Status
+zwischen den Aufrufen aendert, das ist beabsichtigt). `atTime` steuert bei
+`loadActivePlaybookSectionCandidates()` ausschliesslich die
+Gueltigkeitsfenster-Pruefung EINER aktuell noch `ACTIVE`-Version (z. B. um
+einen an `session.startedAt` gepinnten Beratungszeitpunkt konsistent
+gegen ein zwischenzeitlich veroeffentlichtes, aber noch nicht wirksames
+`validFrom` zu pruefen), NICHT um nach einem Statuswechsel eine echte
+Zeitreise in bereits abgeloeste Zustaende zu ermoeglichen.
+
+**Konsequenz:** Der Regressionstest wurde korrigiert (nicht abgeschwaecht
+oder entfernt) -- er beweist jetzt positiv die tatsaechliche, korrekte
+JETZT-Semantik: nach dem Publish von V2 liefert eine Abfrage mit dem alten
+`atTime` GAR KEINEN Kandidaten mehr (weder V1 noch V2), eine Abfrage mit
+"jetzt" liefert ausschliesslich V2. Das verhindert insbesondere, dass ein
+manipulierter oder veralteter `atTime`-Parameter jemals Zugriff auf den
+Inhalt einer bereits abgeloesten Version verschafft (siehe
+`tests/integration/playbook-audit-reproducibility.test.ts`).
+
+**Test:** `tests/integration/playbook-audit-reproducibility.test.ts`
+("Playbook-Retrieval folgt JETZT-Semantik...").

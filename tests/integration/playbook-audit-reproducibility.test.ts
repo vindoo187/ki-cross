@@ -115,10 +115,27 @@ describe.skipIf(!hasDatabaseUrl)(
       };
     }
 
-    it("Retrieval-Snapshot: historischer Zeitpunkt waehrend V1s Gueltigkeit bleibt nach V2-Publish unveraendert bei V1, 'jetzt' liefert V2", async () => {
-      const tenantId = await createTenant("snapshot");
+    // Diese Suite hat urspruenglich angenommen, dass ein `atTime` innerhalb
+    // V1s urspruenglichem Gueltigkeitsfenster NACH einem spaeteren
+    // V2-Publish weiterhin V1s Section liefert ("echtes" Zeitreise-
+    // Snapshot). CI #151 hat das widerlegt: `loadActivePlaybookSectionCandidates()`
+    // filtert zusaetzlich nach `status: "ACTIVE"` -- sobald V1 durch den
+    // Publish von V2 auf EXPIRED gesetzt wird, verschwindet V1 aus JEDER
+    // Abfrage, unabhaengig vom uebergebenen `atTime`. Das ist KEIN Bug,
+    // sondern konsistent mit der bereits dokumentierten JETZT-Semantik von
+    // `ruleSetAt`/`CAMPAIGN_ACTIVE` (siehe docs/DECISION_LOG.md, Phase 13
+    // AP4: "Campaign-Aktivitaet wird zum Auswertungszeitpunkt aufgeloest,
+    // nicht an den Session-Start gepinnt" -- zwei identische Aufrufe koennen
+    // unterschiedliche Ergebnisse liefern, wenn sich der Status zwischen den
+    // Aufrufen aendert, das ist beabsichtigt). `atTime` steuert daher
+    // AUSSCHLIESSLICH die Gueltigkeitsfenster-Pruefung EINER aktuell noch
+    // ACTIVE-Version, nicht eine echte Zeitreise in bereits abgeloeste
+    // Zustaende. Diese Erkenntnis ist jetzt in docs/DECISION_LOG.md
+    // dokumentiert (Phase 14 AP7).
+    it("Playbook-Retrieval folgt JETZT-Semantik (wie ruleSetAt/CAMPAIGN_ACTIVE): ein spaeterer Publish macht die vorige Version bei JEDER Abfrage unsichtbar, auch bei einem atTime aus ihrem urspruenglichen Gueltigkeitsfenster", async () => {
+      const tenantId = await createTenant("jetzt-semantik");
       const userId = await createUser(tenantId, "actor");
-      const storeId = await createCompanyAndStore(tenantId, "snapshot");
+      const storeId = await createCompanyAndStore(tenantId, "jetzt-semantik");
 
       const playbook = await runWithTenantContext(ctx(tenantId, userId), () =>
         createPlaybook({ key: "p", name: "P" }),
@@ -142,10 +159,9 @@ describe.skipIf(!hasDatabaseUrl)(
         loadActivePlaybookSectionCandidates(db, storeId, midTime),
       );
       expect(candidatesAtMidBeforeV2.map((c) => c.sectionType)).toEqual(["ARGUMENTATION"]);
-      const v1SectionId = candidatesAtMidBeforeV2[0]!.id;
 
       // V2 entsteht als Kopie von V1, wird inhaltlich veraendert und
-      // veroeffentlicht -- das expiret V1 (validTo = jetzt).
+      // veroeffentlicht -- das expiret V1 (validTo = jetzt, status = EXPIRED).
       const v2 = await runWithTenantContext(ctx(tenantId, userId), () =>
         createDraftPlaybookVersion(playbook.id, {
           scopeType: "TENANT",
@@ -158,22 +174,24 @@ describe.skipIf(!hasDatabaseUrl)(
         publishPlaybookVersion(playbook.id, v2.id),
       );
 
-      // Retrieval mit dem GLEICHEN historischen Zeitpunkt (midTime) muss
-      // weiterhin V1s Section liefern -- der spaetere V2-Publish darf diesen
-      // bereits aufgeloesten historischen Zustand NICHT rueckwirkend
-      // veraendern.
+      // Abfrage mit DEMSELBEN historischen `midTime` liefert nach dem
+      // V2-Publish KEINEN Kandidaten mehr: V1 ist jetzt EXPIRED (faellt aus
+      // dem `status: "ACTIVE"`-Filter), V2s `validFrom` liegt NACH `midTime`
+      // (faellt aus dem `validFrom <= atTime`-Filter). Es gibt also keine
+      // Moeglichkeit, ueber einen "alten" `atTime` nachtraeglich Zugriff auf
+      // eine bereits abgeloeste Version zu bekommen.
       const candidatesAtMidAfterV2 = await runWithTenantContext(ctx(tenantId, userId), () =>
         loadActivePlaybookSectionCandidates(db, storeId, midTime),
       );
-      expect(candidatesAtMidAfterV2.map((c) => c.id)).toEqual([v1SectionId]);
+      expect(candidatesAtMidAfterV2).toEqual([]);
 
-      // Retrieval mit "jetzt" (nach V2-Publish) muss ausschliesslich V2s
-      // Section liefern, NICHT mehr V1s (V1 ist jetzt EXPIRED).
+      // Retrieval mit "jetzt" (nach V2-Publish) liefert ausschliesslich V2s
+      // Section.
       const candidatesNow = await runWithTenantContext(ctx(tenantId, userId), () =>
         loadActivePlaybookSectionCandidates(db, storeId, new Date()),
       );
-      expect(candidatesNow).toHaveLength(1);
-      expect(candidatesNow[0]!.id).not.toBe(v1SectionId);
+      expect(candidatesNow.map((c) => c.sectionType)).toEqual(["ARGUMENTATION"]);
+      expect(candidatesAtMidBeforeV2.map((c) => c.id)).not.toEqual(candidatesNow.map((c) => c.id));
     });
 
     it("V1s Section-Inhalt bleibt byte-identisch, nachdem eine von V1 kopierte, editierte und veroeffentlichte Folgeversion V2 entsteht", async () => {
