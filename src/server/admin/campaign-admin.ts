@@ -297,7 +297,15 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
           action: "CREATE",
           entityType: "Campaign",
           entityId: created.id,
-          metadata: { key: input.key },
+          // Kein `key` im Audit-Metadata (Fix analog CI #85, siehe
+          // DECISION_LOG.md / Commit f23d063): der generische
+          // Kontaktdaten-Guard (contact-data-guard.ts) erkennt Ziffernfolgen
+          // >= 7 Ziffern als vermeintliche Telefonnummer -- ein zufaellig
+          // rein-numerischer Test-`key`-Suffix (randomUUID().slice(0, 8))
+          // kann dieses Muster false-positive triggern. `key` bleibt ueber
+          // `entityId` jederzeit aus der Campaign-Tabelle nachschlagbar,
+          // kein Informationsverlust.
+          metadata: {},
         },
       });
       return created.id;
