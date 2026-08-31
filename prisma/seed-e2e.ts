@@ -100,6 +100,13 @@ async function seedGlobalCatalog() {
     "config.campaigns.view",
     "config.campaigns.edit",
     "config.campaigns.publish",
+    // Phase 14 AP8 (E2E-Suite fuer /admin/playbooks): analog den anderen
+    // vier Gruppen erhalten config_editor/config_publisher config.playbooks.*
+    // automatisch ueber permissionKeysForSeedRole() (Phase 14 AP1, siehe
+    // dortigen Modulkommentar) -- hier nur der Permission-Katalog-Eintrag.
+    "config.playbooks.view",
+    "config.playbooks.edit",
+    "config.playbooks.publish",
   ];
   const permissions = await Promise.all(
     rulePermissionKeys.map((key) =>
@@ -301,6 +308,40 @@ async function seedTenantA(
       scopeId: tenantId,
       validFrom: VALID_FROM,
       validTo: null,
+    },
+  });
+
+  // Phase 14 AP8: Playbook + eine ACTIVE, TENANT-gescopte PlaybookVersion
+  // mit einer Section fuer die /admin/playbooks-E2E-Suite
+  // (tests/e2e/admin-playbooks.spec.ts) -- analog dem Campaign-Fixture
+  // oben, dient als Ausgangspunkt fuer den "Neuen Entwurf erstellen"-Fluss.
+  const playbook = await prisma.playbook.create({
+    data: { tenantId, key: "e2e-basisverkauf", name: "E2E Basisverkauf" },
+  });
+  const playbookVersion = await prisma.playbookVersion.create({
+    data: {
+      tenantId,
+      playbookId: playbook.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      scopeType: "TENANT",
+      scopeId: tenantId,
+      validFrom: VALID_FROM,
+      validTo: null,
+    },
+  });
+  await prisma.playbookSection.create({
+    data: {
+      tenantId,
+      playbookVersionId: playbookVersion.id,
+      sectionType: "ARGUMENTATION",
+      title: "E2E Einstiegsargument",
+      content: "E2E Testinhalt fuer die Argumentationssektion.",
+      relatedTopics: [],
+      relatedProductKeys: [],
+      relatedSituations: [],
+      tags: [],
+      active: true,
     },
   });
 
@@ -699,6 +740,8 @@ async function seedTenantA(
     commissionModelSecondaryId: commissionModelSecondary.id,
     campaignId: campaign.id,
     campaignVersionId: campaignVersion.id,
+    playbookId: playbook.id,
+    playbookVersionId: playbookVersion.id,
     configEditorAdmin: { email: configEditorEmail, password: E2E_ADMIN_PASSWORD },
     configPublisherAdmin: { email: configPublisherEmail, password: E2E_ADMIN_PASSWORD },
   };
@@ -835,6 +878,25 @@ async function seedTenantB() {
     },
   });
 
+  // Phase 14 AP8: minimales Playbook + PlaybookVersion fuer den negativen
+  // /admin/playbooks-Tenant-Isolationstest (Tenant-A-Admin versucht per
+  // manipulierter URL auf eine PlaybookVersion von Tenant B zuzugreifen).
+  const playbookB = await prisma.playbook.create({
+    data: { tenantId, key: "e2e-b-playbook", name: "E2E B Playbook" },
+  });
+  const playbookVersionB = await prisma.playbookVersion.create({
+    data: {
+      tenantId,
+      playbookId: playbookB.id,
+      versionNumber: 1,
+      status: "ACTIVE",
+      scopeType: "TENANT",
+      scopeId: tenantId,
+      validFrom: VALID_FROM,
+      validTo: null,
+    },
+  });
+
   return {
     ...base,
     consultationSessionId: session.id,
@@ -844,6 +906,8 @@ async function seedTenantB() {
     commissionModelVersionId: commissionModelVersionB.id,
     campaignId: campaignB.id,
     campaignVersionId: campaignVersionB.id,
+    playbookId: playbookB.id,
+    playbookVersionId: playbookVersionB.id,
   };
 }
 
@@ -877,6 +941,8 @@ async function main() {
       commissionModelSecondaryId: tenantA.commissionModelSecondaryId,
       campaignId: tenantA.campaignId,
       campaignVersionId: tenantA.campaignVersionId,
+      playbookId: tenantA.playbookId,
+      playbookVersionId: tenantA.playbookVersionId,
       configEditorAdmin: tenantA.configEditorAdmin,
       configPublisherAdmin: tenantA.configPublisherAdmin,
     },
@@ -890,6 +956,8 @@ async function main() {
       commissionModelVersionId: tenantB.commissionModelVersionId,
       campaignId: tenantB.campaignId,
       campaignVersionId: tenantB.campaignVersionId,
+      playbookId: tenantB.playbookId,
+      playbookVersionId: tenantB.playbookVersionId,
     },
   };
   writeFileSync(SEED_OUTPUT_PATH, JSON.stringify(output, null, 2), "utf-8");

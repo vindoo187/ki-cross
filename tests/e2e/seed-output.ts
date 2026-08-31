@@ -39,9 +39,15 @@ export interface E2eSeedOutput {
      */
     campaignId: string;
     campaignVersionId: string;
-    /** config.rules.view+edit + config.commissions.view+edit + config.campaigns.view+edit, KEIN .publish. */
+    /**
+     * Playbook mit einer ACTIVE, TENANT-gescopten PlaybookVersion + einer
+     * Section (Phase 14 AP8, /admin/playbooks-E2E-Suite).
+     */
+    playbookId: string;
+    playbookVersionId: string;
+    /** config.rules.view+edit + config.commissions.view+edit + config.campaigns.view+edit + config.playbooks.view+edit, KEIN .publish. */
     configEditorAdmin: E2eAdminCredentials;
-    /** config.rules.view+edit+publish + config.commissions.view+edit+publish + config.campaigns.view+edit+publish. */
+    /** config.rules.view+edit+publish + config.commissions.view+edit+publish + config.campaigns.view+edit+publish + config.playbooks.view+edit+publish. */
     configPublisherAdmin: E2eAdminCredentials;
   };
   tenantB: {
@@ -57,6 +63,9 @@ export interface E2eSeedOutput {
     /** Fuer den negativen /admin/campaigns-Tenant-Isolationstest (Phase 13 AP8). */
     campaignId: string;
     campaignVersionId: string;
+    /** Fuer den negativen /admin/playbooks-Tenant-Isolationstest (Phase 14 AP8). */
+    playbookId: string;
+    playbookVersionId: string;
   };
 }
 
