@@ -93,6 +93,16 @@ import {
   CampaignVersionPublishConflictError,
   CopySourceCampaignVersionNotFoundError,
 } from "../admin/campaign-admin-errors";
+import {
+  CopySourcePlaybookVersionNotFoundError,
+  PlaybookKeyAlreadyExistsError,
+  PlaybookNotFoundError,
+  PlaybookScopeInvalidError,
+  PlaybookVersionInvalidError,
+  PlaybookVersionNotDraftError,
+  PlaybookVersionNotFoundError,
+  PlaybookVersionPublishConflictError,
+} from "../admin/playbook-admin-errors";
 
 interface ErrorBody {
   error: string;
@@ -474,6 +484,56 @@ export function mapKnownErrorToResponse(error: unknown): NextResponse<ErrorBody>
   // `issues` enthaelt ALLE gefundenen Verstoesse, analog
   // RuleSetVersionInvalidError/CommissionModelVersionInvalidError.
   if (error instanceof CampaignVersionInvalidError) {
+    return NextResponse.json(
+      { error: error.name, message: error.message, issues: error.issues },
+      { status: 422 },
+    );
+  }
+
+  // Playbook-Management-API (Phase 14 AP2): 404 -- Playbook/Version (inkl.
+  // Kopiervorlage) nicht gefunden (fremde Mandant-ID liefert ueber den
+  // gescopten `db`-Client 0 Treffer -> 404, analog Phase 8-13).
+  if (
+    error instanceof PlaybookNotFoundError ||
+    error instanceof PlaybookVersionNotFoundError ||
+    error instanceof CopySourcePlaybookVersionNotFoundError
+  ) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 404 });
+  }
+
+  // Playbook-Management-API: 409 -- `key` eines neuen Playbook kollidiert
+  // mit einem bereits bestehenden Playbook desselben Mandanten.
+  if (error instanceof PlaybookKeyAlreadyExistsError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Playbook-Management-API: 409 -- Versuch, eine nicht-DRAFT-
+  // PlaybookVersion zu mutieren, analog CampaignVersionNotDraftError.
+  if (error instanceof PlaybookVersionNotDraftError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Playbook-Management-API: 409 -- echter Nebenlaeufigkeitskonflikt beim
+  // PRO-Playbook-Publish, analog CampaignVersionPublishConflictError.
+  if (error instanceof PlaybookVersionPublishConflictError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 409 });
+  }
+
+  // Playbook-Management-API: 422 -- scopeId ist fuer den angegebenen
+  // scopeType nicht gueltig (unbekannt oder gehoert zu einem anderen
+  // Mandanten, IDOR-Schutz, siehe playbook-admin.ts::validateScopeId()).
+  // Keine Mutation/kein Audit-Eintrag bleibt dabei zurueck.
+  if (error instanceof PlaybookScopeInvalidError) {
+    return NextResponse.json({ error: error.name, message: error.message }, { status: 422 });
+  }
+
+  // Playbook-Management-API: 422 -- validatePlaybookVersion() hat
+  // strukturelle Verstoesse in den PlaybookSection-Eintraegen gefunden
+  // (Whitespace-only title/content). `issues` enthaelt ALLE gefundenen
+  // Verstoesse, analog CampaignVersionInvalidError. Bewusst KEINE
+  // Content-Scanning-/Prompt-Injection-Pruefung hier (siehe
+  // playbook-schemas.ts-Modulkommentar).
+  if (error instanceof PlaybookVersionInvalidError) {
     return NextResponse.json(
       { error: error.name, message: error.message, issues: error.issues },
       { status: 422 },
