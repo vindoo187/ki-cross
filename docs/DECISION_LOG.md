@@ -878,3 +878,60 @@ Row-Lock-Muster auf denselben Fehler (`now` vor statt nach dem Lock):
 Alle drei betroffenen Publish-Pfade (Campaign, CommissionModel, RuleSet)
 folgen jetzt demselben korrigierten Muster: Row-Lock zuerst, `now` danach,
 innerhalb derselben Transaktion.
+
+## Phase 14 AP5: Playbook-Content-Trust-Boundary strukturell statt heuristisch abgesichert -- keine Prompt-Injection-Pattern-Blacklist
+
+**Kontext:** Phase 14 baut ein Sales-Playbook-Subsystem, dessen
+`PlaybookSection.content`-Feld spaeter (nach Phase 12 AP5c, echter
+KI-Provider) als Kontext in einen LLM-Prompt einfliessen soll. AP5
+("Security-Grundgeruest") musste klaeren, wie dieser Content bis dahin
+strukturell abgesichert wird.
+
+**Verworfene Option:** regex-/heuristikbasierte "Prompt-Injection-
+Filterung" beim Speichern (z. B. Blacklist von Phrasen wie "ignore
+previous instructions"). ChatGPTs ausdrueckliche Begruendung fuer die
+Ablehnung: solche Filter sind leicht zu umgehen (Umschreibungen,
+Encodings, andere Sprachen) und beschaedigen gleichzeitig legitime
+Inhalte (ein Playbook-Abschnitt zur Einwandbehandlung koennte legitim
+Formulierungen wie "vergessen Sie den Preis" enthalten). Eine
+Schein-Sicherheit, kein echter Schutz.
+
+**Gewaehlte Loesung (strukturelle Trust Boundary, kein Content-
+Scanning):**
+
+- `content` wird durchgaengig als Daten behandelt, niemals als
+  Systeminstruktion -- technisch dadurch erzwungen, dass kein Codepfad
+  in Phase 14 den Content interpretiert/ausfuehrt/eval'iert. Belegt durch
+  `tests/integration/playbook-security.test.ts` (byte-identische
+  Speicherung/Rueckgabe von HTML-/Script-/Prompt-Injection-aehnlichen
+  Testinhalten -- explizit KEIN Escaping, KEIN Filtern).
+- `playbook-retrieval.ts::selectPlaybookSections()` liest niemals
+  `content` selbst, nur dessen Zeichenlaenge (`contentLength`) -- die
+  Selektionslogik kann den Content damit strukturell gar nicht
+  interpretieren.
+- Strukturelle Entkopplung von der Recommendation Engine: kein Modul
+  unter `src/server/recommendation/` referenziert das Playbook-
+  Subsystem in irgendeiner Form (durch einen Test in
+  `playbook-security.test.ts` als Dauer-Regression abgesichert) --
+  Playbook-Content kann eine Rule-/Campaign-Entscheidung damit
+  strukturell nicht beeinflussen, unabhaengig von seinem Inhalt.
+- Eingabehygiene bleibt Zod-basiert (Groessenlimits aus
+  `playbook-schemas.ts`, AP1/AP2) -- reine Speicher-/Kostenkontrolle,
+  ausdruecklich kein Ersatz fuer Injection-Abwehr.
+- `AuditLog`-Eintraege beim Publish enthalten keinerlei Section-Content
+  (nur IDs/Zaehler), um sensible Playbook-Inhalte nicht unnoetig in Logs
+  zu duplizieren.
+
+**Bewusst NICHT Teil von AP5 (verschoben auf ein spaeteres, an Phase 12
+AP5c gekoppeltes AP):** die eigentliche Prompt-Injection-Abwehr beim
+tatsaechlichen Bau eines LLM-Prompts (Trust Hierarchy technisch
+durchsetzen, sobald ein echter Prompt-Assembler existiert). Ohne echten
+Provider gibt es noch keinen Ort, an dem diese Pruefung sinnvoll
+verifiziert werden koennte (identische Begruendung wie die
+Scope-Grenze aus PHASE_14_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 7).
+
+**ChatGPT-Entscheidung (2026-08-31, verbindlich):** GO fuer AP5 exakt
+mit dieser strukturellen Herangehensweise, ausdruecklich OHNE
+Pattern-Blacklist. Wichtigste von ChatGPT formulierte Regel: "AP5 darf
+keine Prompt-Injection-Scheinloesung bauen, solange es noch keinen
+echten Prompt-Assembler gibt."
