@@ -314,6 +314,7 @@ model Tenant {
   products               Product[]
   commissionModels       CommissionModel[]
   campaigns              Campaign[]
+  playbooks              Playbook[]
   questionnaires         Questionnaire[]
   ruleSets               RuleSet[]
   configurableThresholds ConfigurableThreshold[]
@@ -396,6 +397,7 @@ model User {
   configurationChanges   ConfigurationChange[]
   goalVersionsAsCreator  GoalVersion[]
   campaignVersionsAsCreator CampaignVersion[]
+  playbookVersionsAsCreator PlaybookVersion[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, id])
@@ -842,6 +844,128 @@ model CampaignCondition {
   @@unique([tenantId, id])
   @@index([tenantId, campaignVersionId])
   @@map("campaign_conditions")
+}
+
+// ---------------------------------------------------------------------------
+// Sales Playbook (Phase 14 AP1, ChatGPT-GO 2026-08-31, siehe
+// PHASE_14_IMPLEMENTATION_PLAN.md Abschnitt 1/2). Datenmodell strukturell
+// analog Campaign/CampaignVersion/CampaignCondition (Phase 13) -- bewusst
+// dasselbe Draft->Publish-Versionierungsmuster, dieselbe Scope-Struktur
+// (TENANT/STORE, kein EMPLOYEE/COMPANY, ChatGPT-Entscheidung 2026-08-31
+// Punkt 1) und dieselbe EXCLUDE-Constraint-Technik gegen ueberlappende
+// Gueltigkeitszeitraeume. Zentrale Architekturgrenze (siehe
+// PHASE_14_DISCOVERY.md Abschnitt 3/7/8.1 und PHASE_14_IMPLEMENTATION_PLAN.md
+// Abschnitt 1 Punkt 1/10): Playbook-Inhalte bestimmen NIEMALS WAS/OB
+// empfohlen wird (bleibt Rule Engine/Recommendation Engine/Campaign) --
+// ausschliesslich WIE beraten/argumentiert wird. Kein Schreibzugriff auf
+// Recommendation/RecommendationItem/RecommendationRationale, keine
+// Wirkung auf evaluate().
+// ---------------------------------------------------------------------------
+
+// Phase 14 AP1 (ChatGPT-Entscheidung 2026-08-31, Punkt 1): dasselbe
+// Scope-Modell wie CampaignScopeType -- bewusst KEIN EMPLOYEE/COMPANY. Ein
+// Sales Playbook ist organisatorische Verkaufslogik, kein individueller
+// Mitarbeiterstil (ChatGPT woertlich: "Mitarbeiter-spezifische Playbooks
+// wuerden zusaetzliche Priorisierungs-, RBAC- und Konfliktlogik erzeugen,
+// die wir aktuell nicht brauchen").
+enum PlaybookScopeType {
+  TENANT
+  STORE
+}
+
+// Phase 14 AP1 (PHASE_14_DISCOVERY.md Abschnitt 4.2, Beispieltypen aus der
+// Discovery uebernommen, keine geschaeftliche Neuentscheidung dieses AP).
+enum PlaybookSectionType {
+  CONVERSATION_GUIDANCE
+  ARGUMENTATION
+  OBJECTION_HANDLING
+  PRODUCT_ARGUMENT
+  CUSTOMER_SITUATION
+  CLOSING
+  UPSELL_CROSS_SELL
+  NO_GO
+  TONALITY
+  GENERAL_PRINCIPLE
+}
+
+model Playbook {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  key       String
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  versions PlaybookVersion[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("playbooks")
+}
+
+model PlaybookVersion {
+  id            String              @id @default(uuid()) @db.Uuid
+  tenantId      String              @map("tenant_id") @db.Uuid
+  playbookId    String              @map("playbook_id") @db.Uuid
+  versionNumber Int                 @map("version_number")
+  status        VersionStatus       @default(DRAFT)
+  // scopeId ist bewusst KEIN Fremdschluessel (polymorph je nach scopeType:
+  // TENANT -> tenantId, STORE -> Store.id) -- analog Campaign/Goal.scopeId.
+  // Tenant-/Store-Bindung wird serverseitig in AP2 (playbook-admin.ts)
+  // geprueft, nicht per DB-FK.
+  scopeType     PlaybookScopeType   @map("scope_type")
+  scopeId       String              @map("scope_id") @db.Uuid
+  validFrom     DateTime            @map("valid_from") @db.Timestamptz(6)
+  validTo       DateTime?           @map("valid_to") @db.Timestamptz(6)
+  description   String?
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Nullable + onDelete SetNull, analog CampaignVersion.createdByUserId: die
+  // historische PlaybookVersion-Zeile bleibt bestehen, auch wenn der
+  // erstellende User spaeter deaktiviert/geloescht wird.
+  createdByUserId String?           @map("created_by_user_id") @db.Uuid
+
+  playbook  Playbook @relation(fields: [tenantId, playbookId], references: [tenantId, id], onDelete: Restrict)
+  createdBy User?    @relation(fields: [tenantId, createdByUserId], references: [tenantId, id], onDelete: SetNull)
+
+  sections PlaybookSection[]
+
+  @@unique([tenantId, playbookId, versionNumber])
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([playbookId, validFrom, validTo])
+  @@index([tenantId, scopeType, scopeId])
+  @@index([tenantId, createdByUserId])
+  @@map("playbook_versions")
+}
+
+// Phase 14 AP1: der eigentliche Verkaufsinhalt + Retrieval-Metadaten
+// (PHASE_14_DISCOVERY.md Abschnitt 4.3). `content` ist UNTRUSTED
+// (PHASE_14_DISCOVERY.md Abschnitt 9/Abschnitt 1 Punkt 4 des Plans) -- wird
+// technisch durchgaengig als Daten, nie als Systeminstruktion behandelt
+// (AP5, spaeter). An eine konkrete PlaybookVersion gebunden und damit
+// Draft-only editierbar; veroeffentlichte Versionen sind unveraenderlich
+// (AP2, analog CampaignCondition-Unveraenderlichkeit nach Publish).
+model PlaybookSection {
+  id                String              @id @default(uuid()) @db.Uuid
+  tenantId          String              @map("tenant_id") @db.Uuid
+  playbookVersionId String              @map("playbook_version_id") @db.Uuid
+  sectionType       PlaybookSectionType @map("section_type")
+  title             String
+  content           String
+  relatedTopics     String[]            @map("related_topics")
+  relatedProductKeys String[]           @map("related_product_keys")
+  relatedSituations String[]            @map("related_situations")
+  priority          Int?
+  tags              String[]
+  active            Boolean             @default(true)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  playbookVersion PlaybookVersion @relation(fields: [tenantId, playbookVersionId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, playbookVersionId])
+  @@map("playbook_sections")
 }
 
 // ---------------------------------------------------------------------------

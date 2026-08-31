@@ -61,6 +61,16 @@ import { ALL_CONFIG_PERMISSION_KEYS } from "./config-permissions";
  * ueber `ALL_CONFIG_PERMISSION_KEYS`). Dieselbe `sales_employee`-
  * Ausschlussregel gilt fuer `config.campaigns.*` genauso wie fuer die
  * bestehenden Config-Permission-Gruppen.
+ *
+ * Phase 14 AP1 (Sales Playbook, ChatGPT-GO 2026-08-31) erweitert
+ * config_editor/config_publisher additiv um die neuen
+ * `config.playbooks.*`-Keys (keine neuen Rollen, siehe
+ * PHASE_14_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 5):
+ * config_editor -> zusaetzlich config.playbooks.view+edit, config_publisher
+ * -> zusaetzlich config.playbooks.view+edit+publish (wieder automatisch
+ * ueber `ALL_CONFIG_PERMISSION_KEYS`). Dieselbe `sales_employee`-
+ * Ausschlussregel gilt fuer `config.playbooks.*` genauso wie fuer die
+ * bestehenden Config-Permission-Gruppen.
  */
 
 export const SEED_ROLE_KEYS = [
@@ -121,7 +131,9 @@ export function permissionKeysForSeedRole(
           key === "config.goals.view" ||
           key === "config.goals.edit" ||
           key === "config.campaigns.view" ||
-          key === "config.campaigns.edit",
+          key === "config.campaigns.edit" ||
+          key === "config.playbooks.view" ||
+          key === "config.playbooks.edit",
       );
     case "config_publisher":
       return allPermissionKeys.filter((key) =>

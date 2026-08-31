@@ -8,6 +8,7 @@ import {
   CONFIG_CAMPAIGNS_PERMISSION_KEYS,
   CONFIG_COMMISSIONS_PERMISSION_KEYS,
   CONFIG_GOALS_PERMISSION_KEYS,
+  CONFIG_PLAYBOOKS_PERMISSION_KEYS,
   CONFIG_QUESTIONS_PERMISSION_KEYS,
   CONFIG_RULES_PERMISSION_KEYS,
 } from "@/server/authz/config-permissions";
@@ -46,6 +47,12 @@ import {
  * Keys, additiv auf denselben config_editor/config_publisher-Rollen
  * (keine neuen Rollen, siehe PHASE_13_IMPLEMENTATION_PLAN.md Abschnitt 1
  * Punkt 4).
+ *
+ * Weiter erweitert um Phase 14 AP1 (Sales Playbook, ChatGPT-GO
+ * 2026-08-31): dieselbe Absicherung fuer die neuen `config.playbooks.*`-
+ * Keys, additiv auf denselben config_editor/config_publisher-Rollen
+ * (keine neuen Rollen, siehe PHASE_14_IMPLEMENTATION_PLAN.md Abschnitt 1
+ * Punkt 5).
  */
 describe("permissionKeysForSeedRole", () => {
   const allPermissionKeys = [
@@ -75,6 +82,9 @@ describe("permissionKeysForSeedRole", () => {
     "config.campaigns.view",
     "config.campaigns.edit",
     "config.campaigns.publish",
+    "config.playbooks.view",
+    "config.playbooks.edit",
+    "config.playbooks.publish",
   ];
 
   it("sales_employee erhaelt KEINE der drei Management-Analytics-Permissions", () => {
@@ -116,6 +126,13 @@ describe("permissionKeysForSeedRole", () => {
     const granted = permissionKeysForSeedRole("sales_employee", allPermissionKeys);
     for (const campaignsKey of CONFIG_CAMPAIGNS_PERMISSION_KEYS) {
       expect(granted).not.toContain(campaignsKey);
+    }
+  });
+
+  it("sales_employee erhaelt KEINE der drei config.playbooks.*-Permissions (Phase 14 AP1)", () => {
+    const granted = permissionKeysForSeedRole("sales_employee", allPermissionKeys);
+    for (const playbooksKey of CONFIG_PLAYBOOKS_PERMISSION_KEYS) {
+      expect(granted).not.toContain(playbooksKey);
     }
   });
 
@@ -185,6 +202,8 @@ describe("permissionKeysForSeedRole", () => {
         "config.commissions.view",
         "config.goals.edit",
         "config.goals.view",
+        "config.playbooks.edit",
+        "config.playbooks.view",
         "config.questions.edit",
         "config.questions.view",
         "config.rules.edit",
@@ -192,6 +211,14 @@ describe("permissionKeysForSeedRole", () => {
       ].sort(),
     );
     expect(granted).not.toContain("config.campaigns.publish");
+    expect(granted).not.toContain("config.playbooks.publish");
+  });
+
+  it("config_editor erhaelt zusaetzlich genau config.playbooks.view und .edit, NICHT .publish (Phase 14 AP1)", () => {
+    const granted = permissionKeysForSeedRole("config_editor", allPermissionKeys);
+    expect(granted).toContain("config.playbooks.edit");
+    expect(granted).toContain("config.playbooks.view");
+    expect(granted).not.toContain("config.playbooks.publish");
   });
 
   it("config_publisher erhaelt alle drei config.questions.*-Permissions", () => {
@@ -201,7 +228,7 @@ describe("permissionKeysForSeedRole", () => {
     }
   });
 
-  it("config_publisher erhaelt alle fuenfzehn config.questions.*/config.rules.*/config.commissions.*/config.goals.*/config.campaigns.*-Permissions (Phase 13 AP1)", () => {
+  it("config_publisher erhaelt alle achtzehn config.questions.*/config.rules.*/config.commissions.*/config.goals.*/config.campaigns.*/config.playbooks.*-Permissions (Phase 14 AP1)", () => {
     const granted = permissionKeysForSeedRole("config_publisher", allPermissionKeys);
     expect(granted.sort()).toEqual([...ALL_CONFIG_PERMISSION_KEYS].sort());
   });

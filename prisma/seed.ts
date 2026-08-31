@@ -127,6 +127,15 @@ async function seedGlobalCatalog() {
     "config.campaigns.view",
     "config.campaigns.edit",
     "config.campaigns.publish",
+    // Phase 14 AP1 (Sales Playbook, ChatGPT-GO 2026-08-31):
+    // Configuration-RBAC fuer die Playbook-Verwaltung, siehe
+    // src/server/authz/config-permissions.ts
+    // (CONFIG_PLAYBOOKS_PERMISSION_KEYS). Additive Erweiterung derselben
+    // config_editor/config_publisher-Rollen (keine neuen Rollen, siehe
+    // PHASE_14_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 5).
+    "config.playbooks.view",
+    "config.playbooks.edit",
+    "config.playbooks.publish",
     // Phase 12 AP1 (Freitext-KI-Angebotsfeature, ChatGPT-GO 2026-08-23):
     // Laufzeit-Permission (kein config.*-Namespace, siehe
     // src/server/authz/consultation-permissions.ts) fuer die KI-Extraktion

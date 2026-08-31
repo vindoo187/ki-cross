@@ -3,6 +3,7 @@ import {
   ALL_CONFIG_PERMISSION_KEYS,
   CONFIG_COMMISSIONS_PERMISSION_KEYS,
   CONFIG_GOALS_PERMISSION_KEYS,
+  CONFIG_PLAYBOOKS_PERMISSION_KEYS,
   CONFIG_QUESTIONS_PERMISSION_KEYS,
   CONFIG_RULES_PERMISSION_KEYS,
   ConfigAccessDeniedError,
@@ -22,8 +23,9 @@ import {
  * PHASE_11_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 7). Deckt die von
  * ChatGPT verbindlich vorgegebenen Leitplanken ab: ausschliesslich
  * TENANT-Scope (kein "kuenstlicher Store-Scope"), deny-by-default,
- * `publish` entsteht nicht implizit aus `edit` -- fuer ALLE VIER
- * Permission-Gruppen gleichermassen.
+ * `publish` entsteht nicht implizit aus `edit` -- fuer ALLE Permission-
+ * Gruppen gleichermassen (Fragen, Regeln, Provisionsmodelle, Ziele,
+ * Kampagnen und, seit Phase 14 AP1, Playbooks).
  */
 describe("deriveConfigPermissions", () => {
   it("liefert ein leeres Array (deny-by-default), wenn keine Kandidaten vorhanden sind", () => {
@@ -117,7 +119,7 @@ describe("deriveConfigPermissions", () => {
     ]);
   });
 
-  it("liefert alle zwoelf Permissions fuer eine TENANT-Zuweisung mit allen config_publisher-Rechten (Fragen + Regeln + Provisionsmodelle + Ziele)", () => {
+  it("liefert alle Permissions fuer eine TENANT-Zuweisung mit allen config_publisher-Rechten (Fragen + Regeln + Provisionsmodelle + Ziele + Kampagnen + Playbooks)", () => {
     const candidates: ConfigPermissionCandidate[] = [
       { scopeType: "TENANT", permissionKeys: [...ALL_CONFIG_PERMISSION_KEYS] },
     ];
@@ -199,6 +201,36 @@ describe("deriveConfigPermissions", () => {
   it("liefert ein leeres Array fuer eine STORE-Zuweisung mit config.goals.*-Permissions, obwohl Goal.scopeType selbst STORE sein kann (Phase 11 AP1 -- keine Vermischung von Config-Scope und Goal-Scope)", () => {
     const candidates: ConfigPermissionCandidate[] = [
       { scopeType: "STORE", permissionKeys: [...CONFIG_GOALS_PERMISSION_KEYS] },
+    ];
+    expect(deriveConfigPermissions(candidates)).toEqual([]);
+  });
+
+  it("liefert genau view+edit fuer eine TENANT-Zuweisung mit config.playbooks.*-Editor-Permissions (Phase 14 AP1)", () => {
+    const candidates: ConfigPermissionCandidate[] = [
+      {
+        scopeType: "TENANT",
+        permissionKeys: ["config.playbooks.view", "config.playbooks.edit"],
+      },
+    ];
+    expect(deriveConfigPermissions(candidates).sort()).toEqual([
+      "config.playbooks.edit",
+      "config.playbooks.view",
+    ]);
+  });
+
+  it("vereinigt config.campaigns.*- und config.playbooks.*-Permissions unabhaengig voneinander (kein implizites Bundling, Phase 14 AP1)", () => {
+    const candidates: ConfigPermissionCandidate[] = [
+      { scopeType: "TENANT", permissionKeys: ["config.campaigns.view", "config.playbooks.edit"] },
+    ];
+    expect(deriveConfigPermissions(candidates).sort()).toEqual([
+      "config.campaigns.view",
+      "config.playbooks.edit",
+    ]);
+  });
+
+  it("liefert ein leeres Array fuer eine STORE-Zuweisung mit config.playbooks.*-Permissions, obwohl PlaybookVersion.scopeType selbst STORE sein kann (Phase 14 AP1 -- keine Vermischung von Config-Scope und Playbook-Scope)", () => {
+    const candidates: ConfigPermissionCandidate[] = [
+      { scopeType: "STORE", permissionKeys: [...CONFIG_PLAYBOOKS_PERMISSION_KEYS] },
     ];
     expect(deriveConfigPermissions(candidates)).toEqual([]);
   });
@@ -288,6 +320,31 @@ describe("requireConfigPermission", () => {
     ).not.toThrow();
     expect(() =>
       requireConfigPermission(goalsEditorSession as never, "config.goals.publish"),
+    ).toThrow(ConfigAccessDeniedError);
+  });
+
+  it("config.playbooks.*-Fall (Phase 14 AP1): edit erlaubt, publish verweigert, unabhaengig von den uebrigen config.*-Gruppen", () => {
+    const playbooksEditorSession = {
+      configPermissions: [
+        "config.questions.view",
+        "config.questions.edit",
+        "config.rules.view",
+        "config.rules.edit",
+        "config.commissions.view",
+        "config.commissions.edit",
+        "config.goals.view",
+        "config.goals.edit",
+        "config.campaigns.view",
+        "config.campaigns.edit",
+        "config.playbooks.view",
+        "config.playbooks.edit",
+      ],
+    };
+    expect(() =>
+      requireConfigPermission(playbooksEditorSession as never, "config.playbooks.edit"),
+    ).not.toThrow();
+    expect(() =>
+      requireConfigPermission(playbooksEditorSession as never, "config.playbooks.publish"),
     ).toThrow(ConfigAccessDeniedError);
   });
 });

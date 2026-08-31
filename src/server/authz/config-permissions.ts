@@ -17,6 +17,11 @@
  * -- regelt WER Kampagnen pflegen darf; strikt getrennt von der fachlichen
  * Scope-Begrenzung der einzelnen Kampagne (TENANT/STORE, CampaignVersion.
  * scopeType/scopeId), analog der Goal-Trennung oben.
+ * Um `config.playbooks.*` erweitert in Phase 14 AP1 (ChatGPT-GO
+ * 2026-08-31, siehe PHASE_14_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 5)
+ * -- regelt WER Sales-Playbooks pflegen darf; strikt getrennt von der
+ * fachlichen Scope-Begrenzung des einzelnen Playbooks (TENANT/STORE,
+ * PlaybookVersion.scopeType/scopeId), analog der Campaign-Trennung oben.
  * Durchgaengig additive Erweiterung der bestehenden `config_editor`/
  * `config_publisher`-Rollen statt neuer Rollen -- siehe
  * PHASE_9_IMPLEMENTATION_PLAN.md Abschnitt 2.1. Getrennt von der
@@ -76,13 +81,21 @@ export const CONFIG_CAMPAIGNS_PERMISSION_KEYS = [
   "config.campaigns.publish",
 ] as const;
 
-/** Kombinierter Katalog aller Config-Permission-Keys (Fragen + Regeln + Provisionsmodelle + Ziele + Kampagnen). */
+/** Phase 14 AP1 (Sales Playbook, ChatGPT-GO 2026-08-31, PHASE_14_IMPLEMENTATION_PLAN.md Abschnitt 1 Punkt 5): Permission-Keys fuer die Playbook-Verwaltung. */
+export const CONFIG_PLAYBOOKS_PERMISSION_KEYS = [
+  "config.playbooks.view",
+  "config.playbooks.edit",
+  "config.playbooks.publish",
+] as const;
+
+/** Kombinierter Katalog aller Config-Permission-Keys (Fragen + Regeln + Provisionsmodelle + Ziele + Kampagnen + Playbooks). */
 export const ALL_CONFIG_PERMISSION_KEYS = [
   ...CONFIG_QUESTIONS_PERMISSION_KEYS,
   ...CONFIG_RULES_PERMISSION_KEYS,
   ...CONFIG_COMMISSIONS_PERMISSION_KEYS,
   ...CONFIG_GOALS_PERMISSION_KEYS,
   ...CONFIG_CAMPAIGNS_PERMISSION_KEYS,
+  ...CONFIG_PLAYBOOKS_PERMISSION_KEYS,
 ] as const;
 
 export type ConfigPermissionKey = (typeof ALL_CONFIG_PERMISSION_KEYS)[number];
@@ -104,7 +117,8 @@ export interface ConfigPermissionCandidate {
 
 /**
  * Reine Auswahllogik (kein DB-Zugriff, keine Seiteneffekte): vereinigt die
- * `config.questions.*`-, `config.rules.*`- UND `config.commissions.*`-
+ * `config.questions.*`-, `config.rules.*`-, `config.commissions.*`-,
+ * `config.goals.*`-, `config.campaigns.*`- UND `config.playbooks.*`-
  * Permission-Keys aller TENANT-scoped Kandidaten-Zuweisungen. STORE-/
  * COMPANY-Zuweisungen werden ignoriert (siehe
  * Modul-Kommentar). Liefert ein leeres Array bei fehlender Berechtigung
