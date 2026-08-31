@@ -78,6 +78,15 @@ pruefen, nicht einfach ein generisches CRUD-Playbook planen."
    `publishCampaignVersion()`/`publishCommissionModelVersion()`/
    `publishRuleSetVersion()` nach deren Fix.
 
+10. **Retrieval darf keine versteckte Business-Logik werden (ChatGPT,
+    2026-08-31, zusaetzliche Leitplanke).** Die AP4-Selektionsfunktion
+    darf ausschliesslich entscheiden "welche Playbook-Information ist
+    fuer diesen Kontext relevant" — niemals "dieses Produkt sollte
+    deshalb verkauft werden". Letzteres bleibt vollstaendig bei
+    Recommendation Engine/Rule Engine/Campaign (Verstaerkung von
+    Abschnitt 1.1, explizit als eigener Pruefpunkt fuer AP4/AP8
+    festgehalten).
+
 **Explizit ausgeschlossen in Phase 14** (analog dem Scope-Schutz-Muster
 aus Phase 11/13): Aenderung an Phase-12-Provider-Code oder
 `MockExtractionProvider`, Aenderung an Rule Engine/Recommendation Engine/
@@ -222,30 +231,45 @@ echter Provider existiert.
   Treffer, mehrere Treffer, Konflikt, Campaign+Playbook, Recommendation+
   Playbook, Injection-Versuche, Versionswechsel-Reproduzierbarkeit)
   sind hier die Kern-Testsuite.
-- **AP5** — Security-Grundgeruest: strukturelle, redaktionelle
-  Absicherung des Playbook-Contents (kein Klassifikationsmodell, siehe
-  Abschnitt 1 "Explizit ausgeschlossen") — z. B. eine einfache
-  Warnmarkierung/Ablehnung bei offensichtlichen Systemanweisungs-Mustern
-  im `content`-Feld beim Speichern (Defense-in-Depth, analog wie
-  `contact-data-guard.ts` strukturelle Heuristiken statt echter
-  Sprachverarbeitung nutzt), Dokumentation der Trust Hierarchy als
-  verbindliche Implementierungsvorgabe fuer die spaetere KI-Anbindung
-  (AP5c-Nachfolge-AP, nicht Teil von Phase 14 selbst). Exakter Umfang
-  dieses AP haengt von ChatGPTs Antwort auf die in AP0-Abschnitt 17 Punkt
-  4 offen gelassene Frage ab ("reicht redaktionelle Sorgfalt + Trust-
-  Hierarchy, oder wird eine zusaetzliche technische Pruefung verlangt?")
-  — wird vor AP5-Code erneut mit ChatGPT abgestimmt.
+- **AP5** — Security-Grundgeruest (ChatGPT-Entscheidung 2026-08-31,
+  siehe Abschnitt 4): **KEINE** regex-/heuristikbasierte
+  "Prompt-Injection-Filterung" beim Speichern (ausdruecklich verworfen —
+  zu schwach gegen echte Angriffe, zu falsch-positiv-anfaellig gegen
+  legitime Inhalte). Stattdessen strukturelle Absicherung: Trust
+  Boundary technisch sauber abbilden (Playbook-Content wird durchgaengig
+  als Daten, nicht als Systeminstruktion behandelt), strukturierte
+  Felder validieren (Zod-Schema fuer `PlaybookSection`, analog
+  `commission-schemas.ts`/`rule-schemas.ts`), maximale Content-Groesse
+  (Kostenkontrolle, AP0-Abschnitt 15), saubere Trennung von Metadaten
+  (`sectionType`/`relatedTopics`/... ) und `content`-Feld, keine
+  Moeglichkeit fuer den `content`-Wert, System-/Sicherheitsregeln zu
+  veraendern (strukturell durch die Trust Hierarchy erzwungen, nicht
+  durch Content-Scanning), Security-Verhalten explizit getestet (AP8).
+  Die eigentliche Prompt-Injection-Abwehr wird dort verifiziert, wo
+  tatsaechlich ein LLM-Prompt gebaut wird (spaeteres, an AP5c
+  gekoppeltes AP) — Phase 14 liefert die Trust-Boundary-Grundlage, nicht
+  die Content-Filterung.
 - **AP6** — Admin-UI `/admin/playbooks` (Liste, Detail, Draft-Editor mit
   Section-CRUD, Validate/Publish, Versionshistorie/Rollback, Scope-
   Auswahl TENANT/STORE) — strukturell analog Phase 9 (Regel-Editor)/
   Phase 10 (Provisionsmodell-Editor)/Phase 13 (Campaign-Editor).
-- **AP7** — Audit/Reproduzierbarkeit: `PlaybookVersion`-Publish ueber
-  bestehendes `AuditLog` (analog Campaign/RuleSet/CommissionModel, kein
-  neues Audit-Modell), Regressionstest "spaetere Playbook-Aenderung
-  aendert nicht rueckwirkend eine bereits gezogene Retrieval-Auswahl"
-  (analog dem Phase-13-AP8-Reproduzierbarkeitstest, hier aber auf der
-  reinen AP4-Selektionsfunktion, da noch keine echte KI-Interaktion
-  existiert, siehe Abschnitt 1.7).
+- **AP7** — Audit/Reproduzierbarkeit (ChatGPT-Praezisierung 2026-08-31,
+  siehe Abschnitt 4): `PlaybookVersion`-Publish ueber bestehendes
+  `AuditLog` (analog Campaign/RuleSet/CommissionModel, kein neues
+  Audit-Modell); ein stabiles, providerunabhaengiges Ergebnisformat der
+  AP4-Selektionsfunktion ("diese `PlaybookSection`-IDs wurden fuer
+  diesen Beratungskontext ausgewaehlt") als saubere spaetere
+  Integrationsschnittstelle vorbereiten — **ohne** einen Provider zu
+  simulieren oder eine KI-Interaktions-/Attributionstabelle zu bauen
+  (ausdruecklich verworfen, bleibt Abhaengigkeit von AP5c). Echter
+  Integrationstest statt Platzhalter: (1) gleicher Beratungskontext +
+  gleiche `PlaybookVersion` ⇒ identische Auswahl; (2) neue
+  veroeffentlichte `PlaybookVersion` ⇒ neue Auswahl/neuer
+  Kontext-Fingerprint, waehrend die historische Auswahl der alten
+  Version unveraendert reproduzierbar bleibt (analog dem
+  Phase-13-AP8-Reproduzierbarkeitstest, hier auf der reinen
+  AP4-Selektionsfunktion, da noch keine echte KI-Interaktion existiert,
+  siehe Abschnitt 1.7).
 - **AP8** — Security/Regression/E2E (Desktop+Tablet, gleiche Haerte wie
   Phase 8–13): RBAC, Tenant-Isolation/IDOR, Scope-Grenzen (TENANT vs.
   STORE), Playbook-Draft-Editier-/Publish-Workflow, Retrieval-Funktion
@@ -265,39 +289,62 @@ semantisches Retrieval/RAG, automatisierte Prompt-Injection-Erkennung
 per Klassifikationsmodell, Token-/Kostenmessung in Analytics (haengt vom
 gewaehlten Provider aus AP5c ab, AP0-Abschnitt 15).
 
-## 4. Offene Fragen an ChatGPT vor AP1-Freigabe
+## 4. Von ChatGPT geklaerte Detailfragen (2026-08-31)
 
-1. **Scope-Zuschnitt (Abschnitt 1.6):** Bestaetigung, dass Playbooks
-   analog Campaign nur `TENANT`/`STORE` erhalten (kein `EMPLOYEE`, kein
-   `COMPANY`) — oder soll ein Mitarbeiter-Scope zugelassen werden (z. B.
-   fuer individuelle Vertriebsstile), was der AP0-Formulierung
-   "Denk- und Argumentationsweise des Unternehmens/Nutzers" nicht
-   widersprechen wuerde, aber ein staerkeres RBAC-/Datenmodell noetig
-   machen wuerde?
-2. **Phase-14-Scope-Grenze "keine Live-KI-Integration" (Abschnitt 1.7):**
-   Bestaetigung, dass Phase 14 bis einschliesslich der reinen
-   Retrieval-Selektionsfunktion (AP4) reicht und die tatsaechliche
-   Prompt-Einspeisung ein spaeteres, an AP5c gekoppeltes AP wird — oder
-   soll bereits jetzt ein Platzhalter-Integrationspunkt (z. B. ein
-   optionales Feld im `AiExtractionRequest`-Contract, das aktuell leer
-   bleibt) vorbereitet werden?
-3. **AP5-Umfang (Security-Grundgeruest):** Reicht redaktionelle Sorgfalt
-   - dokumentierte Trust Hierarchy, oder wird bereits in Phase 14 eine
-     technische Struktur-Pruefung des `content`-Felds verlangt (z. B.
-     Ablehnung bei erkannten Mustern wie "ignoriere alle vorherigen
-     Anweisungen")? Falls ja: harte Ablehnung beim Speichern oder nur eine
-     Warnung fuer den Fachadmin?
-4. **AP7-Reproduzierbarkeitstest-Tiefe:** Reicht ein Test auf Ebene der
-   reinen AP4-Funktion (gleicher Kontext + gleiche `PlaybookVersion` ⇒
-   gleiches Retrieval-Ergebnis, alte `PlaybookVersion` bleibt bei neuer
-   Draft-Erstellung unveraendert abrufbar), oder soll bereits in Phase 14
-   ein Platzhalter-Mechanismus fuer die spaetere KI-Interaktions-
-   Attribution (Abschnitt 2, "bewusst nicht Teil dieses Schemas")
-   vorbereitet werden?
+Die vier urspruenglich offenen Detailfragen sind mit ChatGPTs
+Entscheidungen vom 2026-08-31 beantwortet und oben (Abschnitt 1 Punkt
+6/7/10, AP5/AP7 in Abschnitt 3) eingearbeitet:
+
+1. **Scope: `TENANT` + `STORE` — GO.** Genau wie bei Campaigns, kein
+   `EMPLOYEE`-/`COMPANY`-Scope. Begruendung (ChatGPT): "Das Playbook ist
+   zunaechst eine organisatorische Verkaufslogik. Mitarbeiter-spezifische
+   Playbooks wuerden zusaetzliche Priorisierungs-, RBAC- und
+   Konfliktlogik erzeugen, die wir aktuell nicht brauchen."
+2. **Keine echte Prompt-Einspeisung in Phase 14 — GO, als wichtige
+   Scope-Grenze bestaetigt.** Phase 14 baut Playbook → Versionierung →
+   Verwaltung → Retrieval → Auswahl des relevanten Kontextes, aber noch
+   nicht Retrieval → LLM-Prompt → Provider → generierte Verkaufssprache.
+   Praezisierung: AP7 bereitet die spaetere Integrationsschnittstelle
+   sauber vor (stabiles, providerunabhaengiges Ergebnis "diese
+   Playbook-Sections wurden fuer diesen Beratungskontext ausgewaehlt"),
+   OHNE einen Provider zu simulieren.
+3. **Security (AP5): KEINE heuristische Ablehnung von Playbook-Content
+   — GO fuer strukturelle Security stattdessen.** ChatGPT verwirft die
+   urspruenglich vorgeschlagene Regex-/Muster-Erkennung ausdruecklich
+   als "sehr schwachen und potenziell stoerenden Schutz: legitime
+   Inhalte koennten solche Formulierungen enthalten, waehrend echte
+   Injection auch voellig anders formuliert werden kann." Stattdessen:
+   Trust Boundary technisch sauber abbilden, Content als Daten statt
+   Systeminstruktion behandeln, strukturierte Feldvalidierung, maximale
+   Content-Groessen, saubere Metadaten-/Content-Trennung, keine
+   Moeglichkeit fuer Content, System-/Sicherheitsregeln zu veraendern,
+   Security-Verhalten explizit testen. Die eigentliche
+   Prompt-Injection-Abwehr wird dort verifiziert, wo tatsaechlich ein
+   LLM-Prompt gebaut wird (spaeteres AP).
+4. **AP7-Reproduzierbarkeit: echter Integrationstest, kein
+   KI-Platzhalter — GO mit Praezisierung.** Kein kuenstlicher
+   KI-Interaktions-/Attributions-Platzhalter. Stattdessen: (1) gleicher
+   Beratungskontext + gleiche `PlaybookVersion` ⇒ identische Auswahl,
+   (2) neue veroeffentlichte `PlaybookVersion` ⇒ neue Auswahl/neuer
+   Kontext-Fingerprint, historische Auswahl der alten Version bleibt
+   unveraendert reproduzierbar. Die Frage "welche Sections wurden
+   tatsaechlich an Provider X geschickt" gehoert in die echte
+   Provider-/LLM-Integrationsphase.
+
+Zusaetzliche Leitplanke (ChatGPT, nicht urspruenglich abgefragt, aber
+verbindlich ergaenzt): "Retrieval darf keine versteckte Business-Logik
+werden" — siehe Abschnitt 1 Punkt 10.
+
+ChatGPT (verbatim, 2026-08-31): "Damit: GO fuer AP1 des Implementation
+Plans. AP1 sollte jetzt Playbook-Datenmodell + Versionierung + Migration
+
+- RBAC umfassen und sich sehr eng an dem bewaehrten Campaign-Muster
+  orientieren — inklusive der in Phase 13 gefundenen Lock-/Zeitstempel-
+  Nebenlaeufigkeitslektion."
 
 ## 5. Naechster Schritt
 
-Dieser Plan geht an ChatGPT zur Pruefung/Freigabe (inkl. der vier offenen
-Fragen in Abschnitt 4). Nach ChatGPTs GO: explizites Nutzer-
-Implementierungs-GO vor AP1-Code einholen (Standardregel dieses
-Projekts, analog allen Vorgaengerphasen).
+ChatGPT hat den Plan mit diesen vier Klarstellungen final freigegeben
+und GO fuer AP1 erteilt. Ausstehend: explizites Nutzer-Implementierungs-
+GO vor AP1-Code (analog dem in allen Vorgaengerphasen etablierten
+Muster).
