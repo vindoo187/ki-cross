@@ -121,6 +121,17 @@ export default async function ConsultationEntryPage() {
           <Link href="/admin/campaigns">Kampagnenverwaltung oeffnen</Link>
         </p>
       )}
+
+      {/* Phase 14 AP6: Einstiegspunkt zur Playbook-Verwaltung -- nur sichtbar,
+          wenn die Session ueberhaupt config.playbooks.view traegt (reine
+          UI-Bequemlichkeit, KEINE Sicherheitsgrenze: der eigentliche Zugriff
+          wird ausschliesslich serverseitig ueber requireConfigPermission()
+          durchgesetzt, siehe /admin/playbooks/page.tsx). */}
+      {session.configPermissions.includes("config.playbooks.view") && (
+        <p className="consultation-entry__analytics-link">
+          <Link href="/admin/playbooks">Playbook-Verwaltung oeffnen</Link>
+        </p>
+      )}
     </main>
   );
 }

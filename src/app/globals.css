@@ -1753,3 +1753,74 @@ code {
   background: #f2f4f6;
   color: #3a4552;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Phase 14 AP6 (Sales Playbook Admin-UI): admin-playbooks__* -- nutzt die
+   .admin-questions class family above (badges, forms, history, actions)
+   1:1, analog Kampagnen/Provisionsmodellen. Der Veroeffentlichen-Hinweis
+   ist -- wie bei Kampagnen -- PRO Playbook gescoped, keine mandantenweite
+   Warnung (siehe PlaybookVersionActionsBar.tsx Modulkommentar), daher
+   dieselbe ruhige Farbgebung wie .admin-campaigns__publish-note. Fuer das
+   "Neues Playbook anlegen"-Toggle-Formular (CreatePlaybookButton.tsx)
+   werden bewusst die bestehenden .admin-goals__* Klassen wiederverwendet
+   (identisches Toggle-Formular-Muster wie CreateCampaignButton.tsx).
+   .admin-playbooks__section-block/__section-row/__tag-field/__content-label/
+   __char-counter sind NEU -- es gibt kein bestehendes Analogon fuer eine
+   Section-Liste mit Freitext-Content + Zeichenzaehler in Campaign/
+   Commission/Goal, daher ein eigener, kleiner Klassensatz nur fuer die
+   Section-Editor-Struktur des PlaybookDraftEditor. */
+/* ---------------------------------------------------------------------- */
+
+.admin-playbooks__publish-note {
+  padding: 8px 12px;
+  border: 1px solid #9aa5b1;
+  border-radius: 6px;
+  background: #f2f4f6;
+  color: #3a4552;
+}
+
+.admin-playbooks__section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1px solid #d3d9e0;
+  border-radius: 6px;
+  background: #fafbfc;
+}
+
+.admin-playbooks__section-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-playbooks__tag-field {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 200px;
+  font-size: 0.85rem;
+}
+
+.admin-playbooks__content-label {
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-playbooks__content-label textarea {
+  font-family: inherit;
+  resize: vertical;
+}
+
+.admin-playbooks__char-counter {
+  align-self: flex-end;
+  font-size: 0.8rem;
+  color: #5a6673;
+}
+
+.admin-playbooks__char-counter--over {
+  color: #b3261e;
+  font-weight: 600;
+}
