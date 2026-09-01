@@ -77,7 +77,12 @@ async function runOneCase(
 ): Promise<CaseRunResult> {
   const base: Omit<
     CaseRunResult,
-    "status" | "acceptedQuestionIds" | "rejectedCount" | "usage" | "latencyMs"
+    | "status"
+    | "acceptedQuestionIds"
+    | "acceptedCandidates"
+    | "rejectedCount"
+    | "usage"
+    | "latencyMs"
   > = {
     caseId: testCase.id + labelSuffix,
     description: testCase.description,
