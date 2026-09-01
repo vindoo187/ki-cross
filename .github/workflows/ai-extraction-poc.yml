@@ -1,0 +1,47 @@
+name: AP5c AI-Extraction PoC (Anthropic)
+
+# WICHTIG (ChatGPT-Vorgabe, 2026-09-01, siehe project_ki_cross_ap5c_klaerung.md):
+# Dieser Workflow ist BEWUSST von der normalen Push-/PR-CI (ci.yml)
+# getrennt und laeuft AUSSCHLIESSLICH manuell (workflow_dispatch). Er
+# fuehrt echte, kostenpflichtige Anthropic-API-Calls aus
+# (AnthropicExtractionProvider, Claude Haiku 4.5, siehe
+# src/server/ai-extraction/providers/anthropic-provider.ts). Ein
+# automatischer Trigger (push/pull_request/schedule/workflow_run) darf
+# hier NIEMALS ergaenzt werden -- sonst entsteht unkontrollierter,
+# dauerhafter API-Spend bei jedem kuenftigen Push in jeder kuenftigen
+# Phase dieses Projekts. Kein Datenbankzugriff noetig (die PoC-Testfaelle
+# sind vollstaendig synthetische, handgeschriebene Fixtures, siehe
+# scripts/ai-extraction-poc/test-cases.ts) -- daher kein Postgres-Service
+# in diesem Workflow.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  ai-extraction-poc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Abhaengigkeiten installieren
+        run: npm ci
+
+      - name: AP5c-PoC ausfuehren (echte Anthropic-API-Calls, synthetische Testdaten)
+        run: npm run test:ai-poc
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: PoC-Report hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-extraction-poc-report
+          path: ai-extraction-poc-report.md
+          retention-days: 30

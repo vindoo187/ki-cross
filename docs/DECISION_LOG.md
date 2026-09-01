@@ -977,3 +977,67 @@ Inhalt einer bereits abgeloesten Version verschafft (siehe
 
 **Test:** `tests/integration/playbook-audit-reproducibility.test.ts`
 ("Playbook-Retrieval folgt JETZT-Semantik...").
+
+## Phase 12 AP5c: Anthropic-Provider-PoC isoliert von der Produktions-Route und von der normalen Push-/PR-CI getrennt
+
+**Kontext:** Nach Phase 12 AP1-AP4 (Extraction Contract, Mock-Provider,
+Validator, Analytics/Audit) war ein echter externer KI-Provider explizit
+als eigenes AP mit separatem GO vorgesehen ("AP5c: Provider-PoC"). Nutzer
+hat Anfang September 2026 aktiv das Setup aufgegriffen (nach Postponement
+Ende August).
+
+**Entscheidung 1 -- Provider/Modell:** Anthropic statt urspruenglich
+empfohlenem OpenAI, weil der Nutzer bereits einen Anthropic-Account
+besitzt (geringere Setup-Huerde, kein fachlicher Vorbehalt: Anthropic
+unterstuetzt Structured Outputs mit JSON-Schema `output_config.format`
+seit Anfang 2026 GA). Baseline-Modell: Claude Haiku 4.5
+(`claude-haiku-4-5-20251001`) -- guenstigste/schnellste Option mit
+Structured-Outputs-Unterstuetzung, passend zur Latenzanforderung waehrend
+einer laufenden Beratung; die Aufgabe (Extraktion gegen einen sichtbaren
+Fragenkatalog) ist kein Reasoning-Heavy-Use-Case. Sonnet 5 ist als
+dokumentiertes Vergleichsmodell vorgesehen, wird aber nicht parallel
+implementiert, solange Haiku keinen konkreten Qualitaets-/
+Robustheitsmangel zeigt.
+
+**Entscheidung 2 -- Architektur:** `AnthropicExtractionProvider`
+implementiert `AiExtractionProvider` (Phase 12 AP1 Contract) 1:1, wird
+aber NICHT in `service.ts`/`requestAiExtraction()` verdrahtet.
+`MockExtractionProvider` bleibt der einzige tatsaechlich in der
+Produktions-Route verwendete Provider. AP5c ist ein isolierter PoC, keine
+Produktions-Umschaltung.
+
+**Entscheidung 3 -- CI-Kostenisolation (ChatGPT verbatim, 2026-09-01):**
+"Kostenpflichtige externe KI-Calls duerfen niemals Bestandteil der
+normalen Push-/PR-CI sein." Die bestehende `ci.yml` fuehrt
+`test:integration` bei JEDEM Push/PR automatisch aus -- ein echter,
+kostenpflichtiger API-Call dort wuerde ab sofort JEDEN kuenftigen Push in
+JEDER kuenftigen Phase Geld kosten, fuer ein Feature, das nicht einmal
+produktiv ist. Loesung: neues, von `test:integration` unabhaengiges
+npm-Script `test:ai-poc` (`scripts/ai-extraction-poc/run.ts`) plus ein
+separater Workflow `.github/workflows/ai-extraction-poc.yml`
+AUSSCHLIESSLICH mit `workflow_dispatch`-Trigger (niemals push/pull_request/
+schedule/workflow_run). Der Provider-Code selbst (`anthropic-provider.ts`)
+wird trotzdem ganz normal von der Haupt-CI typecheck-/lint-/prettier-/
+unit-test-geprueft (gemockter `fetch`, kein echter Netzwerkzugriff in
+`tests/unit/ai-extraction/anthropic-provider.test.ts`).
+
+**Zusaetzliche Sicherheitsgelaender im PoC-Runner (ChatGPT-Vorgabe):**
+ausschliesslich synthetische Testdaten, kein Datenbankzugriff (Testfaelle
+sind handgeschriebene `AiExtractionVisibleQuestion[]`-Fixtures statt
+`buildVisibleQuestionContext()`), klar begrenzte Anzahl API-Requests
+(`MAX_ALLOWED_POC_CASES`-Obergrenze), keine automatischen Retries, Timeout
+pro Request (20s), Kosten-/Tokenverbrauch je Testlauf erfasst und im
+Report ausgegeben, sauberer Abbruch bei fehlendem `ANTHROPIC_API_KEY`
+(kein automatischer Wechsel auf einen anderen Provider).
+
+**Sicherheitsgrenze gegen Prompt-Injection ist strukturell, nicht nur
+promptbasiert** (analog Phase 14 AP5): `questionId`/`answerType` sind per
+Schema-Enum auf den sichtbaren Katalog beschraenkt, `extraction-validator.ts`
+(Defense-in-Depth, unveraendert seit Phase 12 AP1) verwirft jeden
+Kandidaten, der trotzdem nicht passt -- unabhaengig davon, ob das Modell
+einer im Freitext eingebetteten Anweisung folgt.
+
+**Test:** `tests/unit/ai-extraction/anthropic-provider.test.ts` (Schema-
+Aufbau + Fehlerpfade, gemockter fetch). Echte End-to-End-Ergebnisse siehe
+`ai-extraction-poc-report.md`-Artefakt des manuell ausgeloesten
+`ai-extraction-poc.yml`-Workflow-Laufs.

@@ -21,6 +21,7 @@
     "test:integration": "vitest run tests/integration",
     "test:component": "vitest run --config vitest.config.component.ts",
     "test:e2e": "playwright test",
+    "test:ai-poc": "tsx scripts/ai-extraction-poc/run.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
