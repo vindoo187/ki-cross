@@ -1041,3 +1041,32 @@ einer im Freitext eingebetteten Anweisung folgt.
 Aufbau + Fehlerpfade, gemockter fetch). Echte End-to-End-Ergebnisse siehe
 `ai-extraction-poc-report.md`-Artefakt des manuell ausgeloesten
 `ai-extraction-poc.yml`-Workflow-Laufs.
+
+**AP5c ABGESCHLOSSEN (2026-09-01, ChatGPT-Abnahme "STATUS: ABGENOMMEN /
+CLOSED"):** Drei echte `workflow_dispatch`-Laeufe gegen die Anthropic-API
+durchgefuehrt. Lauf 1 (Commit 47c9104) brach sauber ab -- Repository-
+Secret hiess `VINDOO_187` statt `ANTHROPIC_API_KEY` (Nutzer-Setup-Tippfehler,
+kein Code-Defekt, keine Kosten). Workflow angepasst (`secrets.VINDOO_187`
+-> Laufzeit-Env `ANTHROPIC_API_KEY`, Commit 4cba866). Lauf 2 (10 Faelle):
+8/8 harte Kriterien bestanden. ChatGPT forderte einen zusaetzlichen harten
+Testfall fuer explizite Negation (`negation-boolean` war bis dahin nur
+beobachtend, pruefte nicht den tatsaechlichen `booleanValue`). Neuer Fall
+`negation-boolean-explicit-false` ("Ich nutze kein Roaming.") ergaenzt,
+`run.ts` um Boolean-Wertepruefung (`expectedBooleanValues`) und
+Kandidatenwerte-Ausgabe im Report erweitert (Commit 1bff3b3, Folgefix
+3f64ef4 fuer einen tsc-Fehler im `Omit`-Typ -- kein API-Call, keine
+Kosten). Lauf 3 (11 Faelle, Commit 3f64ef4): **9/9 harte Kriterien
+bestanden, 0 fehlgeschlagen**, inkl. `q_roaming(booleanValue=false)`
+explizit bestaetigt. Gesamt-Tokenverbrauch 11783 Input/572 Output,
+geschaetzte Kosten $0.014643, Gesamtlatenz 12887ms. Prompt-Injection-Fall
+weiterhin abgewehrt (Modell folgte der eingebetteten Anweisung nicht,
+zusaetzlich waere `extraction-validator.ts` als strukturelle
+Sicherheitsgrenze bereitgestanden). Ambiguitaets-Fall weiterhin korrekt
+ohne Kandidat. Determinismus-Wiederholung weiterhin konsistent (keine
+Garantie, nur Beobachtung).
+
+**Ausdruecklich NICHT Bestandteil dieser Abnahme (ChatGPT-Warnung):** ein
+erfolgreicher Extraktions-PoC bedeutet NICHT automatisch, dass Claude
+Haiku 4.5 auch fuer die spaetere Sales-Playbook-Textgenerierung
+freigegeben ist -- das bleibt ein separater, spaeterer
+Entscheidungsschritt mit eigenem GO.
