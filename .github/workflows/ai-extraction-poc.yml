@@ -36,7 +36,12 @@ jobs:
       - name: AP5c-PoC ausfuehren (echte Anthropic-API-Calls, synthetische Testdaten)
         run: npm run test:ai-poc
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Repository-Secret heisst "VINDOO_187" (historisch beim Setup so
+          # benannt, Nutzerentscheidung 2026-09-01: Workflow anpassen statt
+          # Secret neu anlegen) -- Wert ist der Anthropic-API-Key. Der
+          # Laufzeit-Env-Var-Name bleibt ANTHROPIC_API_KEY, damit
+          # anthropic-provider.ts unveraendert bleibt.
+          ANTHROPIC_API_KEY: ${{ secrets.VINDOO_187 }}
 
       - name: PoC-Report hochladen
         if: always()
