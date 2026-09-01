@@ -7,11 +7,17 @@
  * `TenantContext` aufgerufen werden.
  */
 
-import type { NeedType, OpportunityStatus, RecommendationOutcomeType } from "@prisma/client";
+import type {
+  GoalMetricKey,
+  NeedType,
+  OpportunityStatus,
+  RecommendationOutcomeType,
+} from "@prisma/client";
 import { db } from "../db/client";
 import { getLatestRecommendation, type RecommendationResult } from "../recommendation/service";
 import { loadQuestionnaireState } from "../questionnaire/service";
 import type { QuestionnaireRunStatus } from "../questionnaire/types";
+import { buildGoalProgressForEmployee } from "../analytics/goal-visibility";
 import { translateRationale } from "./rationale-translation";
 import { formatAnswerValue } from "./answer-formatting";
 
@@ -636,5 +642,75 @@ export async function buildConsultationSessionSummaryView(
     recommendation: recommendationView,
     deal,
     dealClosureCandidates,
+  };
+}
+// ---------------------------------------------------------------------------
+// Phase 15 AP1 -- Sidebar-Read-Model (siehe PHASE_15_DISCOVERY.md Abschnitt
+// 4/5/7 sowie project_ki_cross_phase15_ap1_bestandspruefung.md)
+// ---------------------------------------------------------------------------
+
+export interface ConsultationSidebarGoalSummary {
+  metricKey: GoalMetricKey;
+  scopeLabel: string;
+  currency: string | null;
+  target: number;
+  actual: number;
+  achievementRate: number | null;
+}
+
+export interface ConsultationSidebarData {
+  consultationSessionId: string;
+  sessionStatus: "IN_PROGRESS" | "COMPLETED" | "ABANDONED" | null;
+  /**
+   * Eigene, aktuell periodenaktive Ziele des Mitarbeiters (Phase 15 AP0,
+   * MVP-Scope Ebene 1). Bewusst ALLE aktiven EMPLOYEE-Ziele (nicht nur das
+   * erste) -- `buildGoalProgressForEmployee()` kann laut Phase-11-
+   * Regressionstest (AP9-1) mehrere gleichzeitig aktive Ziele mit
+   * unterschiedlichen Metriken liefern, eine willkuerliche Auswahl waere
+   * irrefuehrend. Leeres Array bedeutet "kein aktives eigenes Ziel" (kein
+   * Fehlerzustand, siehe `listVisibleGoalsForEmployee()`-Modulkommentar).
+   */
+  activeGoals: ConsultationSidebarGoalSummary[];
+}
+
+/**
+ * Dediziertes, bewusst schlankes Read-Model fuer die Sidebar (Phase 15 AP1,
+ * ChatGPT-GO 2026-09-01, "Weg 1"). Buendelt ausschliesslich bereits
+ * bestehende, freigegebene Lesefunktionen (`loadConsultationSessionStatus()`,
+ * `buildGoalProgressForEmployee()`) -- keine neue Fachlogik, keine
+ * Provisions-/Margendaten, kein `businessPriorityScore` (siehe
+ * Modulkommentar oben/`DealSummary`).
+ *
+ * WICHTIG (verbindliche ChatGPT-Vorgabe, siehe
+ * project_ki_cross_phase15_ap1_bestandspruefung.md): diese Funktion darf
+ * NICHT aus `layout.tsx` heraus aufgerufen werden -- Next.js haelt geteilte
+ * Layout-Segmente bei Client-seitiger Navigation nicht zwingend frisch
+ * (anders als Page-Segmente, die standardmaessig staleTime=0 haben). Jede
+ * der drei `page.tsx`-Dateien unter `/consultation/[sessionId]` ruft diese
+ * Funktion daher selbst, innerhalb ihres eigenen
+ * `withServerSessionTenantContext()`-Blocks, auf ("Freshness und Security
+ * haben Vorrang vor DRY" -- ChatGPT, 2026-09-01). Die dreifache
+ * Call-Site-Duplikation ist ausdruecklich gewollt, nicht versehentlich.
+ */
+export async function getConsultationSidebarData(
+  consultationSessionId: string,
+  now: Date = new Date(),
+): Promise<ConsultationSidebarData> {
+  const [sessionStatus, goalProgress] = await Promise.all([
+    loadConsultationSessionStatus(consultationSessionId),
+    buildGoalProgressForEmployee(now),
+  ]);
+
+  return {
+    consultationSessionId,
+    sessionStatus,
+    activeGoals: goalProgress.map((goal) => ({
+      metricKey: goal.metricKey,
+      scopeLabel: goal.scopeLabel,
+      currency: goal.currency,
+      target: goal.target,
+      actual: goal.actual,
+      achievementRate: goal.achievementRate,
+    })),
   };
 }

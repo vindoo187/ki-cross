@@ -107,6 +107,114 @@ code {
   padding: 24px 20px 64px;
 }
 
+/* Phase 15 AP1 -- ConsultationWorkspace-Navigation + Sidebar (siehe
+   PHASE_15_DISCOVERY.md Abschnitt 4, project_ki_cross_phase15_ap1_bestandspruefung.md).
+   `.consultation-workspace` ist ab jetzt der gemeinsame Rahmen aus
+   `layout.tsx` (Navigation + `children`), etwas breiter als
+   `.consultation-entry`, um Platz fuer die Sidebar ab Desktop zu haben. */
+.consultation-workspace {
+  max-width: 1180px;
+}
+
+.consultation-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.consultation-nav a {
+  padding: 8px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid #d9dbe0;
+  background: #fff;
+  font-size: 14px;
+}
+
+.consultation-nav a:hover {
+  border-color: #9aa0ac;
+}
+
+.consultation-workspace__body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.consultation-workspace__main {
+  min-width: 0;
+}
+
+.consultation-sidebar {
+  border: 1px solid #d9dbe0;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.consultation-sidebar h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #555;
+}
+
+.consultation-sidebar__empty {
+  color: #777;
+  font-size: 13px;
+  margin: 0;
+}
+
+.consultation-sidebar__goal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.consultation-sidebar__goal-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.consultation-sidebar__goal-metric {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.consultation-sidebar__goal-value {
+  font-size: 13px;
+  color: #333;
+}
+
+/* Desktop >=1024px (siehe Kommentar oben, Zeile ~100): Hauptinhalt und
+   Sidebar nebeneinander -- unterhalb bleibt es einspaltig (Sidebar folgt
+   nach dem Hauptinhalt), analog dem etablierten Muster bei
+   `.question-flow__body`. */
+@media (min-width: 1024px) {
+  .consultation-workspace__body {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .consultation-workspace__main {
+    flex: 1 1 auto;
+  }
+
+  .consultation-sidebar {
+    flex: 0 0 280px;
+  }
+}
+
 .consultation-entry__hint {
   color: #555;
   font-size: 14px;

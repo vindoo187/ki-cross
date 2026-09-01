@@ -354,6 +354,35 @@ async function seedTenantA(
     },
   });
 
+  // Phase 15 AP1: ein EMPLOYEE-Goal fuer base.employeeId -- dient der
+  // Sidebar-E2E-Suite (tests/e2e/consultation-sidebar.spec.ts) zum Nachweis,
+  // dass das eigene aktive Ziel in der Sidebar angezeigt wird. Periode
+  // YEAR/VALID_FROM (2026-01-01), damit das Ziel unabhaengig vom genauen
+  // Testlaufzeitpunkt innerhalb des 2026er Testzeitraums aktiv bleibt --
+  // analog der Wahl von VALID_FROM fuer alle anderen ACTIVE-Fixtures oben.
+  const goal = await prisma.goal.create({
+    data: {
+      tenantId,
+      scopeType: "EMPLOYEE",
+      scopeId: base.employeeId,
+      metricKey: "DEALS_CLOSED",
+      periodType: "YEAR",
+      periodStart: VALID_FROM,
+      currency: null,
+    },
+  });
+  await prisma.goalVersion.create({
+    data: {
+      tenantId,
+      goalId: goal.id,
+      versionNumber: 1,
+      targetAmountMinor: null,
+      targetCount: 25,
+      targetPercentageBasisPoints: null,
+      createdByUserId: base.userId,
+    },
+  });
+
   // --- Fragebogen mit zwei unabhaengigen Sichtbarkeits-Bedingungen (siehe
   // Modulkommentar oben fuer die drei daraus resultierenden Pfade). ---
   const questionnaire = await prisma.questionnaire.create({

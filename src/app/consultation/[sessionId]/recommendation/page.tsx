@@ -33,6 +33,7 @@ import {
 import { getLatestRecommendation } from "@/server/recommendation/service";
 import {
   buildConsultationRecommendationView,
+  getConsultationSidebarData,
   loadConsultationSessionStatus,
   type ConsultationRecommendationView,
 } from "@/server/consultation-ui/view-models";
@@ -41,6 +42,7 @@ import { RecommendationList } from "@/components/consultation/RecommendationList
 import { CrossSellingBanner } from "@/components/consultation/CrossSellingBanner";
 import { EvaluateRecommendationButton } from "@/components/consultation/EvaluateRecommendationButton";
 import { AbandonConsultationButton } from "@/components/consultation/AbandonConsultationButton";
+import { ConsultationSidebar } from "@/components/consultation/ConsultationSidebar";
 
 export const dynamic = "force-dynamic";
 
@@ -60,15 +62,16 @@ export default async function ConsultationRecommendationPage({ params }: PagePar
   // (AsyncLocalStorage), buildConsultationRecommendationView() und
   // loadConsultationSessionStatus() greifen beide selbst wieder auf den
   // mandantengescopten `db`-Client zu.
-  const { view, sessionStatus } = await withServerSessionTenantContext(async () => {
-    const [recommendation, status] = await Promise.all([
+  const { view, sessionStatus, sidebarData } = await withServerSessionTenantContext(async () => {
+    const [recommendation, status, sidebar] = await Promise.all([
       getLatestRecommendation(sessionId),
       loadConsultationSessionStatus(sessionId),
+      getConsultationSidebarData(sessionId),
     ]);
     const builtView: ConsultationRecommendationView | null = recommendation
       ? await buildConsultationRecommendationView(recommendation)
       : null;
-    return { view: builtView, sessionStatus: status };
+    return { view: builtView, sessionStatus: status, sidebarData: sidebar };
   });
 
   // "Angaben aendern" fuehrt zurueck in den Fragenfluss dieser Session -- nur
@@ -78,26 +81,29 @@ export default async function ConsultationRecommendationPage({ params }: PagePar
   const canChangeAnswers = sessionStatus === "IN_PROGRESS";
 
   return (
-    <main className="consultation-workspace">
-      <ErrorBoundary>
-        <h2>Empfehlung</h2>
-        {canChangeAnswers && (
-          <p>
-            <Link href={`/consultation/${sessionId}`}>Angaben aendern</Link>
-          </p>
-        )}
-        {view ? (
-          <>
-            <RecommendationList items={view.items} rejectionReasons={view.rejectionReasons} />
-            <CrossSellingBanner signals={view.crossSellingSignals} />
-          </>
-        ) : (
-          <EvaluateRecommendationButton sessionId={sessionId} />
-        )}
-        {sessionStatus === "IN_PROGRESS" && (
-          <AbandonConsultationButton consultationSessionId={sessionId} />
-        )}
-      </ErrorBoundary>
-    </main>
+    <div className="consultation-workspace__body">
+      <main className="consultation-workspace__main">
+        <ErrorBoundary>
+          <h2>Empfehlung</h2>
+          {canChangeAnswers && (
+            <p>
+              <Link href={`/consultation/${sessionId}`}>Angaben aendern</Link>
+            </p>
+          )}
+          {view ? (
+            <>
+              <RecommendationList items={view.items} rejectionReasons={view.rejectionReasons} />
+              <CrossSellingBanner signals={view.crossSellingSignals} />
+            </>
+          ) : (
+            <EvaluateRecommendationButton sessionId={sessionId} />
+          )}
+          {sessionStatus === "IN_PROGRESS" && (
+            <AbandonConsultationButton consultationSessionId={sessionId} />
+          )}
+        </ErrorBoundary>
+      </main>
+      <ConsultationSidebar data={sidebarData} />
+    </div>
   );
 }

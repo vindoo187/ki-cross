@@ -32,11 +32,15 @@ import {
   getOptionalServerSession,
   withServerSessionTenantContext,
 } from "@/server/auth/server-context";
-import { buildConsultationSessionSummaryView } from "@/server/consultation-ui/view-models";
+import {
+  buildConsultationSessionSummaryView,
+  getConsultationSidebarData,
+} from "@/server/consultation-ui/view-models";
 import { ErrorBoundary } from "@/components/consultation/ErrorBoundary";
 import { SessionSummaryView } from "@/components/consultation/SessionSummaryView";
 import { CompleteConsultationButton } from "@/components/consultation/CompleteConsultationButton";
 import { AbandonConsultationButton } from "@/components/consultation/AbandonConsultationButton";
+import { ConsultationSidebar } from "@/components/consultation/ConsultationSidebar";
 
 export const dynamic = "force-dynamic";
 
@@ -51,20 +55,27 @@ export default async function ConsultationSummaryPage({ params }: PageParams) {
   }
 
   const { sessionId } = await params;
-  const summary = await withServerSessionTenantContext(() =>
-    buildConsultationSessionSummaryView(sessionId),
-  );
+  const { summary, sidebarData } = await withServerSessionTenantContext(async () => {
+    const [summaryView, sidebar] = await Promise.all([
+      buildConsultationSessionSummaryView(sessionId),
+      getConsultationSidebarData(sessionId),
+    ]);
+    return { summary: summaryView, sidebarData: sidebar };
+  });
 
   return (
-    <main className="consultation-workspace">
-      <ErrorBoundary>
-        <h2>Zusammenfassung</h2>
-        <SessionSummaryView summary={summary} />
-        <CompleteConsultationButton consultationSessionId={sessionId} />
-        {summary.status === "IN_PROGRESS" && (
-          <AbandonConsultationButton consultationSessionId={sessionId} />
-        )}
-      </ErrorBoundary>
-    </main>
+    <div className="consultation-workspace__body">
+      <main className="consultation-workspace__main">
+        <ErrorBoundary>
+          <h2>Zusammenfassung</h2>
+          <SessionSummaryView summary={summary} />
+          <CompleteConsultationButton consultationSessionId={sessionId} />
+          {summary.status === "IN_PROGRESS" && (
+            <AbandonConsultationButton consultationSessionId={sessionId} />
+          )}
+        </ErrorBoundary>
+      </main>
+      <ConsultationSidebar data={sidebarData} />
+    </div>
   );
 }

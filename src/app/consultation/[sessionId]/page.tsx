@@ -32,9 +32,11 @@ import {
 } from "@/server/auth/server-context";
 import { loadQuestionnaireState } from "@/server/questionnaire/service";
 import { isAiExtractionAvailableForCurrentTenant } from "@/server/ai-extraction/service";
+import { getConsultationSidebarData } from "@/server/consultation-ui/view-models";
 import { ErrorBoundary } from "@/components/consultation/ErrorBoundary";
 import { QuestionFlow } from "@/components/consultation/QuestionFlow";
 import { AbandonConsultationButton } from "@/components/consultation/AbandonConsultationButton";
+import { ConsultationSidebar } from "@/components/consultation/ConsultationSidebar";
 
 export const dynamic = "force-dynamic";
 
@@ -49,22 +51,34 @@ export default async function ConsultationSessionPage({ params }: PageParams) {
   }
 
   const { sessionId } = await params;
-  const { state, aiExtractionAvailable } = await withServerSessionTenantContext(async (s) => {
-    const questionnaireState = await loadQuestionnaireState(sessionId);
-    const available = await isAiExtractionAvailableForCurrentTenant(
-      s.consultationPermissions.includes("consultation.ai_extraction.use"),
-    );
-    return { state: questionnaireState, aiExtractionAvailable: available };
-  });
+  const { state, aiExtractionAvailable, sidebarData } = await withServerSessionTenantContext(
+    async (s) => {
+      const [questionnaireState, sidebar] = await Promise.all([
+        loadQuestionnaireState(sessionId),
+        getConsultationSidebarData(sessionId),
+      ]);
+      const available = await isAiExtractionAvailableForCurrentTenant(
+        s.consultationPermissions.includes("consultation.ai_extraction.use"),
+      );
+      return {
+        state: questionnaireState,
+        aiExtractionAvailable: available,
+        sidebarData: sidebar,
+      };
+    },
+  );
 
   return (
-    <main className="consultation-workspace">
-      <ErrorBoundary>
-        <QuestionFlow initialState={state} aiExtractionAvailable={aiExtractionAvailable} />
-        {state.status === "IN_PROGRESS" && (
-          <AbandonConsultationButton consultationSessionId={sessionId} />
-        )}
-      </ErrorBoundary>
-    </main>
+    <div className="consultation-workspace__body">
+      <main className="consultation-workspace__main">
+        <ErrorBoundary>
+          <QuestionFlow initialState={state} aiExtractionAvailable={aiExtractionAvailable} />
+          {state.status === "IN_PROGRESS" && (
+            <AbandonConsultationButton consultationSessionId={sessionId} />
+          )}
+        </ErrorBoundary>
+      </main>
+      <ConsultationSidebar data={sidebarData} />
+    </div>
   );
 }
