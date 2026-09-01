@@ -42,6 +42,7 @@ import {
   ANTHROPIC_PROVIDER_VERSION,
 } from "../../src/server/ai-extraction/providers/anthropic-provider";
 import { validateExtractionCandidates } from "../../src/server/ai-extraction/extraction-validator";
+import type { AiExtractionCandidate } from "../../src/server/ai-extraction/types";
 import { AI_EXTRACTION_POC_CASES, MAX_ALLOWED_POC_CASES } from "./test-cases";
 import type { AiExtractionPocCase } from "./test-cases";
 
@@ -57,6 +58,7 @@ interface CaseRunResult {
   observationalOnly: boolean;
   status: "pass" | "fail" | "error" | "observed";
   acceptedQuestionIds: string[];
+  acceptedCandidates: AiExtractionCandidate[];
   rejectedCount: number;
   errorMessage?: string;
   usage: { inputTokens: number; outputTokens: number };
@@ -99,6 +101,7 @@ async function runOneCase(
         ...base,
         status: "observed",
         acceptedQuestionIds,
+        acceptedCandidates: accepted,
         rejectedCount: rejected.length,
         usage: result.usage,
         latencyMs: result.latencyMs,
@@ -112,31 +115,64 @@ async function runOneCase(
     const unexpectedPresent = testCase.expectedAbsent.filter((id) =>
       acceptedQuestionIds.includes(id),
     );
-    const passed = missingExpected.length === 0 && unexpectedPresent.length === 0;
+    const booleanMismatches = (testCase.expectedBooleanValues ?? []).filter((expected) => {
+      const candidate = accepted.find((c) => c.questionId === expected.questionId);
+      return candidate?.booleanValue !== expected.value;
+    });
+    const passed =
+      missingExpected.length === 0 &&
+      unexpectedPresent.length === 0 &&
+      booleanMismatches.length === 0;
+
+    const messageParts: string[] = [];
+    if (missingExpected.length > 0) {
+      messageParts.push(`Fehlend erwartet: [${missingExpected.join(", ")}]`);
+    }
+    if (unexpectedPresent.length > 0) {
+      messageParts.push(`Unerwartet vorhanden: [${unexpectedPresent.join(", ")}]`);
+    }
+    if (booleanMismatches.length > 0) {
+      const details = booleanMismatches
+        .map((m) => {
+          const candidate = accepted.find((c) => c.questionId === m.questionId);
+          return `${m.questionId}: erwartet=${m.value}, erhalten=${candidate?.booleanValue ?? "(kein Kandidat)"}`;
+        })
+        .join("; ");
+      messageParts.push(`Boolean-Wertabweichung: ${details}`);
+    }
 
     return {
       ...base,
       status: passed ? "pass" : "fail",
       acceptedQuestionIds,
+      acceptedCandidates: accepted,
       rejectedCount: rejected.length,
       usage: result.usage,
       latencyMs: result.latencyMs,
       stopReason: result.stopReason,
-      errorMessage: passed
-        ? undefined
-        : `Fehlend erwartet: [${missingExpected.join(", ")}] | Unerwartet vorhanden: [${unexpectedPresent.join(", ")}]`,
+      errorMessage: passed ? undefined : messageParts.join(" | "),
     };
   } catch (error) {
     return {
       ...base,
       status: "error",
       acceptedQuestionIds: [],
+      acceptedCandidates: [],
       rejectedCount: 0,
       usage: { inputTokens: 0, outputTokens: 0 },
       latencyMs: 0,
       errorMessage: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
     };
   }
+}
+
+function formatCandidateValue(c: AiExtractionCandidate): string {
+  if (c.booleanValue !== undefined) return `booleanValue=${c.booleanValue}`;
+  if (c.integerValue !== undefined) return `integerValue=${c.integerValue}`;
+  if (c.decimalValue !== undefined) return `decimalValue=${c.decimalValue}`;
+  if (c.dateValue !== undefined) return `dateValue=${c.dateValue}`;
+  if (c.choiceValues !== undefined) return `choiceValues=[${c.choiceValues.join(", ")}]`;
+  return "(kein Wertfeld gesetzt)";
 }
 
 function formatReport(results: CaseRunResult[]): string {
@@ -181,6 +217,12 @@ function formatReport(results: CaseRunResult[]): string {
     lines.push(`- Freitext (synthetisch): "${r.freeText}"`);
     lines.push(`- Akzeptierte questionIds: [${r.acceptedQuestionIds.join(", ") || "-"}]`);
     lines.push(`- Verworfene Kandidaten (extraction-validator.ts): ${r.rejectedCount}`);
+    if (r.acceptedCandidates.length > 0) {
+      const values = r.acceptedCandidates
+        .map((c) => `${c.questionId}(${formatCandidateValue(c)})`)
+        .join(", ");
+      lines.push(`- Kandidatenwerte: ${values}`);
+    }
     lines.push(
       `- stop_reason: ${r.stopReason ?? "-"} | Latenz: ${r.latencyMs}ms | Tokens: ${r.usage.inputTokens} in / ${r.usage.outputTokens} out`,
     );

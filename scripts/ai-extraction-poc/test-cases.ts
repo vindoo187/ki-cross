@@ -33,6 +33,14 @@ export interface AiExtractionPocCase {
   expectedAbsent: string[];
   /** Wenn true: nur beobachtend, fliesst NICHT in die Pass/Fail-Gesamtbewertung ein. */
   observationalOnly?: boolean;
+  /**
+   * Harte Wertepruefung fuer BOOLEAN-Kandidaten (zusaetzlich zur reinen
+   * questionId-Praesenzpruefung oben) -- ChatGPT-Vorgabe 2026-09-01: eine
+   * explizite Verneinung ("kein Roaming") muss nicht nur EINEN Kandidaten
+   * liefern, sondern konkret booleanValue=false, nicht nur "kein
+   * Kandidat" oder faelschlich true.
+   */
+  expectedBooleanValues?: Array<{ questionId: string; value: boolean }>;
 }
 
 const roamingQuestion: AiExtractionVisibleQuestion = {
@@ -153,6 +161,16 @@ export const AI_EXTRACTION_POC_CASES: AiExtractionPocCase[] = [
     expectedPresent: [],
     expectedAbsent: [],
     observationalOnly: true,
+  },
+  {
+    id: "negation-boolean-explicit-false",
+    description:
+      "Hartes Kriterium (ChatGPT-Nachforderung 2026-09-01): explizite Verneinung muss konkret booleanValue=false liefern, nicht nur 'kein Kandidat' oder faelschlich true.",
+    visibleQuestions: [roamingQuestion],
+    freeText: "Ich nutze kein Roaming.",
+    expectedPresent: ["q_roaming"],
+    expectedAbsent: [],
+    expectedBooleanValues: [{ questionId: "q_roaming", value: false }],
   },
   {
     id: "ambiguous-single-choice",
