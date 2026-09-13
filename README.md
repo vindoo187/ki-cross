@@ -40,6 +40,12 @@ Ausführliche Anleitung: [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)
 
 ## Wichtige Dokumente
 
+Neue Übergabe zur Abstimmung mit dem Repository-Owner (13.09.2026):
+[Produktentscheidungen und offene Fragen](docs/PRODUKTENTSCHEIDUNGEN_2026-09-13.md)
+und [Refactor-Plan mit Zeilenrichtwerten](docs/REFACTOR_PLAN_2026-09-13.md).
+Diese Dokumente beschreiben Anforderungen und Planung, keinen zusätzlichen
+Implementierungsstand.
+
 | Dokument                                                           | Inhalt                                                                              |
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
 | [docs/ABSCHLUSSBERICHT_PHASE2.md](docs/ABSCHLUSSBERICHT_PHASE2.md) | Abschlussbericht dieser Implementierungsphase (13 Punkte)                           |
